@@ -19,8 +19,8 @@ import { ExpedientesManager } from './components/ExpedientesManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 
-const Logo = ({ className, short = false, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
-  const defaultLogo = "/logo_dunor.jpg";
+const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
+  const defaultLogo = "/logo.svg";
   const [imgSrc, setImgSrc] = useState(logoUrl || defaultLogo);
 
   useEffect(() => {
@@ -30,10 +30,10 @@ const Logo = ({ className, short = false, appName = 'DASHBOARD DUNOR', logoUrl }
   const handleError = () => {
     if (imgSrc !== defaultLogo) {
       setImgSrc(defaultLogo);
+    } else if (imgSrc !== "/logo_dunor.svg") {
+      setImgSrc("/logo_dunor.svg");
     } else if (imgSrc !== "/logo_dunor.png") {
       setImgSrc("/logo_dunor.png");
-    } else {
-      setImgSrc("/logo.svg");
     }
   };
 
@@ -42,7 +42,7 @@ const Logo = ({ className, short = false, appName = 'DASHBOARD DUNOR', logoUrl }
       src={imgSrc}
       alt={appName || 'DASHBOARD DUNOR'}
       onError={handleError}
-      className={cn("object-contain max-h-full", className)}
+      className={cn("object-contain max-h-full max-w-full", className)}
     />
   );
 };
@@ -192,9 +192,10 @@ class ErrorBoundary extends (Component as any) {
 
 // --- Components ---
 
-const PrintPreview = ({ incident, systemSettings, onClose }: { incident: Incident, systemSettings?: SystemSettings, onClose: () => void }) => {
-  const logoSrc = systemSettings?.appLogoUrl || "/logo_dunor.jpg";
+const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident: Incident, systemSettings?: SystemSettings, profile?: UserProfile, onClose: () => void }) => {
+  const logoSrc = systemSettings?.appLogoUrl || "/logo.svg";
   const logoAppName = systemSettings?.appName || "DASHBOARD DUNOR";
+  const isDirective = profile?.role === 'DIRECTIVE' || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email);
 
   const handlePrint = () => {
     const printContent = document.getElementById('printable-report');
@@ -338,6 +339,40 @@ const PrintPreview = ({ incident, systemSettings, onClose }: { incident: Inciden
               object-fit: cover;
               border-radius: 8px;
               border: 1px solid #e2e8f0;
+            }
+            .signatures-section {
+              margin-top: 35px;
+              page-break-inside: avoid;
+            }
+            .signatures-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 35px 25px;
+              margin-top: 25px;
+            }
+            .signature-box {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              text-align: center;
+            }
+            .signature-line {
+              width: 85%;
+              border-bottom: 1.5px solid #334155;
+              margin-bottom: 6px;
+              height: 45px;
+            }
+            .signature-title {
+              font-size: 11px;
+              font-weight: 800;
+              color: #1e293b;
+              text-transform: uppercase;
+              letter-spacing: 0.03em;
+            }
+            .signature-sub {
+              font-size: 9px;
+              color: #64748b;
+              font-weight: 600;
             }
             .footer {
               margin-top: 40px;
@@ -501,6 +536,40 @@ const PrintPreview = ({ incident, systemSettings, onClose }: { incident: Inciden
           border-radius: 8px;
           border: 1px solid #e2e8f0;
         }
+        .preview-container .signatures-section {
+          margin-top: 35px;
+          page-break-inside: avoid;
+        }
+        .preview-container .signatures-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 35px 25px;
+          margin-top: 25px;
+        }
+        .preview-container .signature-box {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          text-align: center;
+        }
+        .preview-container .signature-line {
+          width: 85%;
+          border-bottom: 1.5px solid #334155;
+          margin-bottom: 6px;
+          height: 45px;
+        }
+        .preview-container .signature-title {
+          font-size: 11px;
+          font-weight: 800;
+          color: #1e293b;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+        .preview-container .signature-sub {
+          font-size: 9px;
+          color: #64748b;
+          font-weight: 600;
+        }
         .preview-container .footer {
           margin-top: 40px;
           padding-top: 15px;
@@ -651,6 +720,34 @@ const PrintPreview = ({ incident, systemSettings, onClose }: { incident: Inciden
                   {incident.images.map((img, i) => (
                     <img key={i} src={img} />
                   ))}
+                </div>
+              </div>
+            )}
+
+            {isDirective && (
+              <div className="section signatures-section">
+                <h3 className="section-title">Firmas de Conformidad y Seguimiento</h3>
+                <div className="signatures-grid">
+                  <div className="signature-box">
+                    <div className="signature-line"></div>
+                    <span className="signature-title">Directivo</span>
+                    <span className="signature-sub">Nombre y Firma</span>
+                  </div>
+                  <div className="signature-box">
+                    <div className="signature-line"></div>
+                    <span className="signature-title">Coordinador</span>
+                    <span className="signature-sub">Nombre y Firma</span>
+                  </div>
+                  <div className="signature-box">
+                    <div className="signature-line"></div>
+                    <span className="signature-title">Docente</span>
+                    <span className="signature-sub">Nombre y Firma</span>
+                  </div>
+                  <div className="signature-box">
+                    <div className="signature-line"></div>
+                    <span className="signature-title">Padre o Tutor</span>
+                    <span className="signature-sub">Nombre y Firma</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -1030,30 +1127,13 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         return;
       }
 
-      // Allow user to proceed to login
-      const fallbackProfile: UserProfile = {
-        uid: emailId,
-        name: emailId.split('@')[0],
-        email: emailId,
-        role: "TEACHER",
-        isRegistered: true
-      };
-      setPreProfile(fallbackProfile);
-      setStep('login');
+      // Strictly deny access if user is not registered in the database
+      setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos. Póngase en contacto con un administrador para registrar su cuenta.");
       setLoading(false);
       return;
     } catch (err: any) {
       console.error("checkEmail error:", err);
-      // Fallback on error: let user proceed to login
-      const fallbackProfile: UserProfile = {
-        uid: emailId,
-        name: emailId.split('@')[0],
-        email: emailId,
-        role: "TEACHER",
-        isRegistered: true
-      };
-      setPreProfile(fallbackProfile);
-      setStep('login');
+      setError("Error al verificar el correo electrónico: " + (err?.message || "inténtalo de nuevo"));
     } finally {
       setLoading(false);
     }
@@ -1066,6 +1146,16 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const cleanEmail = email.toLowerCase().trim();
     localStorage.setItem('last_user_email', cleanEmail);
 
+    const isSuper = isSuperAdminEmail(cleanEmail);
+    const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
+    const uData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
+
+    if (!isSuper && !uData) {
+      setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos. Póngase en contacto con un administrador.");
+      setLoading(false);
+      return;
+    }
+
     // 1. Try standard Firebase Auth
     try {
       await signInWithEmailAndPassword(auth, cleanEmail, password);
@@ -1077,10 +1167,6 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
     // 2. Direct authentication fallback via Firestore
     try {
-      const isSuper = isSuperAdminEmail(cleanEmail);
-      const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
-      const uData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
-
       if (isSuper) {
         const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : cleanEmail === 'incidencias.dunor@gmail.com' ? "Administrador Dunor" : "Administrador Inicial";
         const adminProfile: UserProfile = {
@@ -1125,22 +1211,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         return;
       }
 
-      // If user does not exist in DB yet, auto-create their account in Firestore so access is granted
-      const newProfile: UserProfile = {
-        uid: cleanEmail,
-        name: cleanEmail.split('@')[0],
-        email: cleanEmail,
-        role: "TEACHER",
-        isRegistered: true,
-        password: password,
-        updatedAt: Date.now()
-      };
-      await setDoc(doc(db, 'users', cleanEmail), newProfile, { merge: true }).catch(() => {});
-      onCustomLogin({
-        uid: newProfile.uid,
-        email: cleanEmail,
-        displayName: newProfile.name
-      });
+      setError("Acceso denegado: No tienes un registro activo en la base de datos.");
       setLoading(false);
       return;
     } catch (fallbackErr: any) {
@@ -1192,6 +1263,16 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     setLoading(true);
     setError(null);
     const cleanEmail = email.toLowerCase().trim();
+    const isSuper = isSuperAdminEmail(cleanEmail);
+
+    const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
+    const existingData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
+
+    if (!isSuper && !existingData && !preProfile) {
+      setError("Acceso denegado: Tu correo electrónico no está dado de alta en la base de datos.");
+      setLoading(false);
+      return;
+    }
 
     let authUid = cleanEmail;
     try {
@@ -1203,11 +1284,11 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
     try {
       const newProfile: UserProfile = {
-        ...(preProfile || {}),
+        ...(existingData || preProfile || {}),
         uid: authUid,
         email: cleanEmail,
-        name: preProfile?.name || (isSuperAdminEmail(cleanEmail) ? "Administrador Dunor" : cleanEmail.split('@')[0]),
-        role: preProfile?.role || (isSuperAdminEmail(cleanEmail) ? "ADMIN" : "TEACHER"),
+        name: existingData?.name || preProfile?.name || (isSuper ? "Administrador Dunor" : cleanEmail.split('@')[0]),
+        role: existingData?.role || preProfile?.role || (isSuper ? "ADMIN" : "TEACHER"),
         isRegistered: true,
         password: password,
         updatedAt: Date.now()
@@ -1300,9 +1381,9 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8"
       >
-        <div className="text-center mb-8">
-          <div className="w-auto h-24 mx-auto mb-6 flex items-center justify-center rounded-2xl bg-white shadow-sm border border-slate-100 px-6 py-2 text-blue-700">
-            <Logo className="h-full" short={!systemSettings?.appLogoUrl} appName={systemSettings?.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings?.appLogoUrl} />
+        <div className="text-center mb-8 flex flex-col items-center">
+          <div className="w-28 h-28 mb-4 p-2 bg-white rounded-2xl shadow-sm border border-slate-200/80 flex items-center justify-center">
+            <Logo className="w-full h-full object-contain" appName={systemSettings?.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings?.appLogoUrl || "/logo.svg"} />
           </div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">{systemSettings?.appName || 'DASHBOARD DUNOR'}</h1>
         </div>
@@ -1638,12 +1719,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [isImportingDb, setIsImportingDb] = useState(false);
   const [firestoreRolePermissions, setFirestoreRolePermissions] = useState<Partial<RolePermissionsMap>>({});
 
-  const cachedLogo = typeof window !== 'undefined' ? localStorage.getItem('app_logo_url') || '' : '';
   const cachedName = typeof window !== 'undefined' ? localStorage.getItem('app_name') || 'DASHBOARD DUNOR' : 'DASHBOARD DUNOR';
 
   const DEFAULT_SETTINGS: SystemSettings = {
     appName: cachedName,
-    appLogoUrl: cachedLogo,
+    appLogoUrl: '/logo.svg',
     emailNotificationsEnabled: true,
     forwardingEnabled: false,
     coordinatorAdminMapping: {},
@@ -1835,7 +1915,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const appName = systemSettings.appName || 'DASHBOARD DUNOR';
     document.title = appName;
 
-    const iconUrl = systemSettings.appLogoUrl || "/logo_dunor.jpg";
+    const iconUrl = systemSettings.appLogoUrl || "/logo.svg";
 
     let iconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
     if (!iconLink) {
@@ -1867,7 +1947,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   }, [isSuperAdmin]);
 
-  const sendNotification = async (userIdOrIds: string | string[], title: string, message: string, incidentId: string = '', skipAdmins: boolean = false, extraData: Record<string, any> = {}) => {
+  const sendNotification = async (
+    userIdOrIds: string | string[],
+    title: string,
+    message: string,
+    incidentId: string = '',
+    skipAdmins: boolean = false,
+    extraData: Record<string, any> = {}
+  ) => {
     const notificationData = {
       title,
       message,
@@ -1877,35 +1964,56 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       ...extraData
     };
 
-    const recipientIds = new Set<string>();
-    if (Array.isArray(userIdOrIds)) {
-      userIdOrIds.forEach(id => id && recipientIds.add(id));
-    } else if (userIdOrIds) {
-      recipientIds.add(userIdOrIds);
-    }
+    const allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
+    const finalTargetUserIds = new Set<string>();
 
-    // Requirement 2: Send to all directive users for full visibility of records
-    directives.forEach(d => {
-      if (d.uid) recipientIds.add(d.uid);
-      if (d.email) recipientIds.add(d.email.toLowerCase());
-    });
+    const rawTargets: string[] = Array.isArray(userIdOrIds) ? userIdOrIds : [userIdOrIds];
 
-    if (!skipAdmins) {
-      // Requirement: Send to all admins AND super admin
-      admins.forEach(a => {
-        if (a.uid) recipientIds.add(a.uid);
-        if (a.email) recipientIds.add(a.email.toLowerCase());
-      });
-      
-      const allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
-      const superAdmin = allUsers.find(u => isSuperAdminEmail(u.email));
-      if (superAdmin) {
-        if (superAdmin.uid) recipientIds.add(superAdmin.uid);
-        if (superAdmin.email) recipientIds.add(superAdmin.email.toLowerCase());
+    // Helper to resolve a target string (UID or Email) to canonical user identifier (prefer UID, fallback to lowercased Email)
+    const resolveUserTarget = (str: string): string => {
+      if (!str || typeof str !== 'string' || !str.trim()) return '';
+      const clean = str.trim();
+      const cleanLower = clean.toLowerCase();
+      const matched = allUsers.find(u =>
+        u.uid === clean ||
+        (u.email && u.email.toLowerCase() === cleanLower)
+      );
+      if (matched) {
+        return matched.uid || matched.email.toLowerCase();
+      }
+      return cleanLower;
+    };
+
+    // 1. Explicit target recipients
+    for (const raw of rawTargets) {
+      if (raw && typeof raw === 'string' && raw.trim()) {
+        const resolved = resolveUserTarget(raw);
+        if (resolved) finalTargetUserIds.add(resolved);
       }
     }
 
-    for (const userId of recipientIds) {
+    // 2. Directives (always receive all notifications generated across the school)
+    directives.forEach(d => {
+      const resolved = d.uid || (d.email ? d.email.toLowerCase() : '');
+      if (resolved) finalTargetUserIds.add(resolved);
+    });
+
+    // 3. Admins & SuperAdmin (unless skipAdmins is true)
+    if (!skipAdmins) {
+      admins.forEach(a => {
+        const resolved = a.uid || (a.email ? a.email.toLowerCase() : '');
+        if (resolved) finalTargetUserIds.add(resolved);
+      });
+      const superAdmin = allUsers.find(u => isSuperAdminEmail(u.email));
+      if (superAdmin) {
+        const resolved = superAdmin.uid || (superAdmin.email ? superAdmin.email.toLowerCase() : '');
+        if (resolved) finalTargetUserIds.add(resolved);
+      }
+    }
+
+    // 4. Create single notification document per unique target user
+    for (const userId of finalTargetUserIds) {
+      if (!userId) continue;
       try {
         await addDoc(collection(db, 'notifications'), {
           ...notificationData,
@@ -2303,45 +2411,47 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             return profileWithUid;
           });
         } else {
-          // Document does not exist in Firestore (e.g. database switch or new empty DB)
-          // Automatically create the user profile document so access is granted immediately
+          // Document does not exist in Firestore
           const isSuper = isSuperAdminEmail(emailId);
-          const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : emailId === 'incidencias.dunor@gmail.com' ? "Administrador Dunor" : "Administrador Inicial";
-          const autoProfile: UserProfile = {
-            uid: activeUser.uid,
-            name: isSuper ? adminName : (activeUser.displayName || emailId.split('@')[0]),
-            email: emailId,
-            role: isSuper ? "ADMIN" : "TEACHER",
-            isRegistered: true,
-            updatedAt: Date.now()
-          };
-          try {
-            await setDoc(doc(db, 'users', emailId), autoProfile, { merge: true });
-          } catch (createErr) {
-            console.error("Auto-creation of user document failed:", createErr);
-            handleFirestoreError(createErr, OperationType.WRITE, `users/${emailId}`);
+          if (isSuper) {
+            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : emailId === 'incidencias.dunor@gmail.com' ? "Administrador Dunor" : "Administrador Inicial";
+            const autoProfile: UserProfile = {
+              uid: activeUser.uid,
+              name: adminName,
+              email: emailId,
+              role: "ADMIN",
+              isRegistered: true,
+              updatedAt: Date.now()
+            };
             try {
               await setDoc(doc(db, 'users', emailId), autoProfile, { merge: true });
-            } catch (retryErr) {
-              console.error("Retry auto-creation of user document failed:", retryErr);
+            } catch (createErr) {
+              console.error("Auto-creation of super admin user document failed:", createErr);
             }
+            setProfile(autoProfile);
+          } else {
+            // Strictly deny access if user is not in database
+            console.warn(`User ${emailId} is not registered in the database. Access denied.`);
+            setProfile(null);
           }
-          setProfile(autoProfile);
         }
         setIsProfileLoading(false);
         setHasCheckedProfile(true);
       }, (error) => {
         handleFirestoreError(error, OperationType.GET, `users/${emailId}`);
-        // Fallback profile if Firestore permission or network error occurs so access is not blocked
         const isSuper = isSuperAdminEmail(emailId);
-        const fallbackProfile: UserProfile = {
-          uid: activeUser.uid,
-          name: isSuper ? "Administrador" : (activeUser.displayName || emailId.split('@')[0]),
-          email: emailId,
-          role: isSuper ? "ADMIN" : "TEACHER",
-          isRegistered: true
-        };
-        setProfile(fallbackProfile);
+        if (isSuper) {
+          const fallbackProfile: UserProfile = {
+            uid: activeUser.uid,
+            name: "Administrador",
+            email: emailId,
+            role: "ADMIN",
+            isRegistered: true
+          };
+          setProfile(fallbackProfile);
+        } else {
+          setProfile(null);
+        }
         setIsProfileLoading(false);
         setHasCheckedProfile(true);
       });
@@ -3291,12 +3401,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       <div className="md:hidden bg-white border-b border-slate-200 p-4 flex items-center justify-between sticky top-0 z-50">
         <button 
           onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
-          className="flex flex-col items-center gap-1 hover:opacity-80 transition-opacity"
+          className="flex flex-col items-center gap-1.5 hover:opacity-80 transition-opacity"
         >
-          <div className="w-auto h-8 flex items-center justify-center rounded-lg bg-white shadow-sm border border-slate-100 px-2 text-blue-700">
-            <Logo className="h-full" short={!systemSettings.appLogoUrl} appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl} />
+          <div className="w-10 h-10 p-1 bg-white rounded-xl shadow-sm border border-slate-200/80 flex items-center justify-center">
+            <Logo className="w-full h-full object-contain" appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl || "/logo.svg"} />
           </div>
-          <span className="text-[10px] leading-none font-bold text-slate-900">{systemSettings.appName || 'DASHBOARD DUNOR'}</span>
+          <span className="text-xs font-bold text-slate-900">{systemSettings.appName || 'DASHBOARD DUNOR'}</span>
         </button>
         <div className="flex items-center gap-2">
           {/* Notifications or other mobile header actions could go here */}
@@ -3330,10 +3440,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               <div 
                 className="p-6 flex flex-col h-full overflow-y-auto scrollbar-hide [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
               >
-                <div className="flex items-center justify-center mb-10">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="w-auto h-12 flex items-center justify-center rounded-lg bg-white shadow-sm border border-slate-100 px-4 py-1 text-blue-700">
-                      <Logo className="h-full" appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl} />
+                <div className="flex items-center justify-center mb-8">
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <div className="w-20 h-20 p-2 bg-white rounded-2xl shadow-sm border border-slate-200/80 flex items-center justify-center">
+                      <Logo className="w-full h-full object-contain" appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl || "/logo.svg"} />
                     </div>
                     <span className="text-lg font-bold text-slate-900 tracking-widest">{systemSettings.appName || 'DASHBOARD DUNOR'}</span>
                   </div>
@@ -4397,8 +4507,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               exit={{ y: 100, opacity: 0 }}
               className="bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 flex items-center gap-4"
             >
-              <div className="w-auto h-12 px-4 bg-white rounded-xl flex items-center justify-center text-blue-700 shadow-md shadow-indigo-100 flex-shrink-0 border border-slate-100">
-                <Logo className="h-8" short={!systemSettings.appLogoUrl} appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl} />
+              <div className="w-12 h-12 p-1.5 bg-white rounded-xl flex items-center justify-center text-blue-700 shadow-md shadow-indigo-100 flex-shrink-0 border border-slate-100">
+                <Logo className="w-full h-full object-contain" appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl || "/logo.svg"} />
               </div>
               <div className="flex-1">
                 <h4 className="font-bold text-slate-900 text-sm">Instalar {systemSettings.appName || 'DASHBOARD DUNOR'}</h4>
@@ -4480,6 +4590,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         <PrintPreview 
           incident={printIncident} 
           systemSettings={effectiveSystemSettings}
+          profile={profile}
           onClose={() => setPrintIncident(null)} 
         />
       )}
@@ -7070,7 +7181,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={setUserToEditPermissions}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
 
@@ -7084,7 +7195,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={setUserToEditPermissions}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7098,7 +7209,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={setUserToEditPermissions}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7112,7 +7223,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={setUserToEditPermissions}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7131,7 +7242,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             profile={profile}
             canManageUsers={canManageUsers}
             canAssignPsychologist={canAssignPsychologist}
-            onEditPermissions={setUserToEditPermissions}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
 
@@ -7368,7 +7479,7 @@ const UserList = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <h4 className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">{u.name}</h4>
-                      {hasCustomPerms && (
+                      {hasCustomPerms && isSuperAdminEmail(profile?.email) && (
                         <span className="text-[10px] font-bold bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-200 flex items-center gap-1">
                           <ShieldCheck className="w-3 h-3 text-amber-600" />
                           Permisos Personalizados
@@ -7470,7 +7581,7 @@ const UserList = ({
 
                   {!readOnly && (
                     <div className="flex items-center gap-2 ml-auto">
-                      {onEditPermissions && canManageUsers && (
+                      {onEditPermissions && canManageUsers && isSuperAdminEmail(profile?.email) && (
                         <button
                           type="button"
                           onClick={() => onEditPermissions(u)}

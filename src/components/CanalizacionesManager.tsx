@@ -210,28 +210,25 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       await addLog('Nueva Canalización', `Se canalizó al alumno ${newRef.studentName} (${newRef.gradeGroup}) a Psicología.`);
 
       // Send in-app notifications
-      const recipientUids = new Set<string>();
-      if (selectedCoord?.uid) recipientUids.add(selectedCoord.uid);
-      if (selectedPsych?.uid) recipientUids.add(selectedPsych.uid);
-      formData.additionalRecipients.forEach(r => {
-        if (r.uid) recipientUids.add(r.uid);
-      });
+      if (sendNotification) {
+        const targetRecipients: string[] = [];
+        if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
+        if (selectedCoord?.email) targetRecipients.push(selectedCoord.email.toLowerCase());
+        if (selectedPsych?.uid) targetRecipients.push(selectedPsych.uid);
+        if (selectedPsych?.email) targetRecipients.push(selectedPsych.email.toLowerCase());
+        formData.additionalRecipients.forEach(r => {
+          if (r.uid) targetRecipients.push(r.uid);
+          if (r.email) targetRecipients.push(r.email.toLowerCase());
+        });
 
-      for (const targetUid of recipientUids) {
-        try {
-          await addDoc(collection(db, 'notifications'), {
-            title: 'Nueva Canalización Psicopedagógica',
-            message: `Se ha registrado una canalización para el estudiante "${newRef.studentName}" (${newRef.gradeGroup}) por ${profile.name}.`,
-            date: new Date().toLocaleDateString('es-MX'),
-            read: false,
-            createdAt: Date.now(),
-            userId: targetUid,
-            referralId: id,
-            type: 'referral'
-          });
-        } catch (e) {
-          console.error("Error creating notification:", e);
-        }
+        await sendNotification(
+          targetRecipients,
+          'Nueva Canalización Psicopedagógica',
+          `Se ha registrado una canalización para el estudiante "${newRef.studentName}" (${newRef.gradeGroup}) por ${profile.name}.`,
+          '',
+          false,
+          { referralId: id, type: 'referral' }
+        );
       }
 
       // Send email notifications

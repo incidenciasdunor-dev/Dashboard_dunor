@@ -1,9 +1,11 @@
-const CACHE_NAME = 'dunor-v1';
+const CACHE_NAME = 'dunor-v3';
 const ASSETS = [
   '/',
   '/index.html',
-  '/logo.svg',
-  '/manifest.json'
+  '/manifest.json',
+  '/logo_dunor.png',
+  '/favicon.png',
+  '/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {
