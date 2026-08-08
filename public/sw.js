@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dunor-v3';
+const CACHE_NAME = 'dunor-v4';
 const ASSETS = [
   '/',
   '/index.html',
@@ -10,7 +10,7 @@ const ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).catch(() => {})
   );
   self.skipWaiting();
 });
@@ -27,20 +27,27 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Network First strategy for all requests
+  // Only handle GET requests from our own origin
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.origin || url.pathname.startsWith('/api') || url.pathname.startsWith('/__')) {
+    return;
+  }
+
+  // Stale-While-Revalidate strategy for static assets
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        // If successful, clone it and put it in the cache
-        const responseClone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseClone);
-        });
-        return response;
-      })
-      .catch(() => {
-        // If network fails, try the cache
-        return caches.match(event.request);
-      })
+    caches.match(event.request).then((cachedResponse) => {
+      const fetchPromise = fetch(event.request).then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          }).catch(() => {});
+        }
+        return networkResponse;
+      }).catch(() => cachedResponse);
+
+      return cachedResponse || fetchPromise;
+    })
   );
 });

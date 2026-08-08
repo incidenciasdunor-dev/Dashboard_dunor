@@ -112,6 +112,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   // Share / Redaction Modal State (Requirement 4)
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [hiddenSections, setHiddenSections] = useState<string[]>([]);
+  const [redactionMode, setRedactionMode] = useState<'editor' | 'words'>('editor');
+  const textareaRefs = React.useRef<Record<string, HTMLTextAreaElement | null>>({});
   const [sharedCopyData, setSharedCopyData] = useState({
     reasonAndBackground: '',
     teacherStrategies: '',
@@ -232,12 +234,47 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     );
   };
 
-  // Blackout text for a specific section
+  // Blackout text using black highlighter for selected words
   const applyBlackoutToSection = (sectionKey: keyof typeof sharedCopyData) => {
-    const originalText = sharedCopyData[sectionKey] || formData[sectionKey] || '';
-    if (!originalText.trim()) return;
-    const redactedText = originalText.replace(/[^\s\n]/g, '█');
-    setSharedCopyData(prev => ({ ...prev, [sectionKey]: redactedText }));
+    const textarea = textareaRefs.current[sectionKey];
+    const currentText = sharedCopyData[sectionKey] || formData[sectionKey] || '';
+    if (!currentText.trim()) return;
+
+    if (textarea && textarea.selectionStart !== undefined && textarea.selectionEnd !== undefined && textarea.selectionStart !== textarea.selectionEnd) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const selectedText = currentText.substring(start, end);
+      const redactedSelection = selectedText.replace(/[^\s\n]/g, '█');
+      const newText = currentText.substring(0, start) + redactedSelection + currentText.substring(end);
+      setSharedCopyData(prev => ({ ...prev, [sectionKey]: newText }));
+    } else {
+      alert("🖍️ Marcatextos Negro: Por favor selecciona con el cursor o ratón las palabras específicas que deseas censurar en negro, o utiliza el modo '🖍️ Marcatextos (Un Toque)' para marcar palabras directamente.");
+    }
+  };
+
+  // Toggle word blackout on touch/click
+  const toggleWordRedaction = (sectionKey: keyof typeof sharedCopyData, tokenIdx: number) => {
+    const origText = formData[sectionKey] || '';
+    const currentText = sharedCopyData[sectionKey] || origText;
+
+    const origTokens = origText.match(/(\S+|\s+)/g) || [];
+    const currTokens = currentText.match(/(\S+|\s+)/g) || [];
+
+    if (tokenIdx < 0 || tokenIdx >= currTokens.length) return;
+
+    const currToken = currTokens[tokenIdx];
+    const origToken = origTokens[tokenIdx] || currToken;
+
+    const isRedacted = /^█+$/.test(currToken.trim());
+
+    if (isRedacted) {
+      currTokens[tokenIdx] = origToken;
+    } else {
+      currTokens[tokenIdx] = origToken.replace(/[^\s\n]/g, '█');
+    }
+
+    const updatedText = currTokens.join('');
+    setSharedCopyData(prev => ({ ...prev, [sectionKey]: updatedText }));
   };
 
   // Restore section to original
@@ -919,8 +956,32 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
             </div>
 
             {/* Explanation Notice */}
-            <div className="px-6 py-3 bg-slate-100 border-b border-slate-200 text-xs text-slate-600">
-              💡 <strong>Nota Importante:</strong> Toda modificación, censura o sección ocultada en esta ventana afectará <u>únicamente</u> a la copia enviada a los coordinadores y directivos. El expediente original completo permanecerá guardado e intacto.
+            <div className="px-6 py-3 bg-slate-100 border-b border-slate-200 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                💡 <strong>Nota Importante:</strong> Toda modificación, censura o sección ocultada en esta ventana afectará <u>únicamente</u> a la copia enviada.
+              </div>
+              <div className="flex items-center gap-1 bg-slate-200/80 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setRedactionMode('words')}
+                  className={cn(
+                    "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border",
+                    redactionMode === 'words' ? "bg-slate-900 text-white border-slate-900 shadow-xs" : "text-slate-600 border-transparent hover:text-slate-900"
+                  )}
+                >
+                  <span>🖍️ Marcatextos Negro (Un Toque)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRedactionMode('editor')}
+                  className={cn(
+                    "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border",
+                    redactionMode === 'editor' ? "bg-white text-indigo-900 border-slate-300 shadow-xs" : "text-slate-600 border-transparent hover:text-slate-900"
+                  )}
+                >
+                  <span>✏️ Editor y Selección Libre</span>
+                </button>
+              </div>
             </div>
 
             {/* Modal Body: Interactive Section Editors */}
@@ -967,9 +1028,9 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                               type="button"
                               onClick={() => applyBlackoutToSection(sec.key)}
                               className="px-3 py-1 bg-slate-900 hover:bg-black text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-sm"
-                              title="Reemplaza los caracteres con bloques negros de censura"
+                              title="Marca en negro únicamente el texto o palabras seleccionadas con el cursor"
                             >
-                              <span>⬛ Marcar en Negro</span>
+                              <span>🖍️ Marcatextos Negro (Censurar Selección)</span>
                             </button>
 
                             {/* Restore Original */}
@@ -990,17 +1051,52 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                       <div className="p-3 bg-slate-200/80 rounded-xl text-xs font-bold text-slate-600 text-center italic border border-slate-300">
                         🙈 Esta sección estará completamente oculta para los destinatarios de la copia compartida.
                       </div>
+                    ) : redactionMode === 'words' ? (
+                      <div className="space-y-2">
+                        <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs leading-relaxed flex flex-wrap items-center gap-1.5 select-none min-h-[80px]">
+                          {(currentVal.match(/(\S+|\s+)/g) || []).map((token, tokenIdx) => {
+                            const isWhitespace = /^\s+$/.test(token);
+                            if (isWhitespace) {
+                              return <span key={tokenIdx} className="whitespace-pre">{token}</span>;
+                            }
+                            const isRedacted = /^█+$/.test(token.trim());
+                            return (
+                              <button
+                                key={tokenIdx}
+                                type="button"
+                                onClick={() => toggleWordRedaction(sec.key, tokenIdx)}
+                                className={cn(
+                                  "px-1.5 py-0.5 rounded transition-all cursor-pointer font-mono font-bold text-xs border shadow-2xs",
+                                  isRedacted
+                                    ? "bg-slate-950 text-slate-950 border-black shadow-inner"
+                                    : "bg-white text-slate-900 border-slate-300 hover:bg-amber-100 hover:border-amber-400"
+                                )}
+                                title={isRedacted ? "Toca para revelar palabra" : "Toca para marcar palabra en negro"}
+                              >
+                                {token}
+                              </button>
+                            );
+                          })}
+                          {(!currentVal || !currentVal.trim()) && (
+                            <span className="text-slate-400 italic font-sans text-xs">Sin texto registrado en esta sección.</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          🖍️ <strong>Marcatextos de Color Negro:</strong> Haz clic o toca directamente cualquier palabra para ocultarla en negro (█) o revertirla al instante.
+                        </p>
+                      </div>
                     ) : (
                       <div className="space-y-1">
                         <textarea
+                          ref={(el) => { textareaRefs.current[sec.key] = el; }}
                           rows={3}
                           value={currentVal}
                           onChange={(e) => setSharedCopyData({ ...sharedCopyData, [sec.key]: e.target.value })}
                           placeholder="Edita o redacta el contenido para la copia compartida..."
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none leading-relaxed font-mono"
                         />
-                        <p className="text-[10px] text-slate-400">
-                          Puedes editar libremente el texto de arriba para redactar, resumir o censurar detalles sensibles.
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          💡 Selecciona con el cursor las palabras exactas que deseas ocultar y presiona <strong>"🖍️ Marcatextos Negro"</strong> arriba para censurarlas.
                         </p>
                       </div>
                     )}

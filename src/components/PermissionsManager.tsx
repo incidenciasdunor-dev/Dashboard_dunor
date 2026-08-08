@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Shield, ShieldCheck, Check, X, Search, RotateCcw, Save, AlertCircle, 
   Eye, Plus, Edit2, Trash2, Users, FileText, Bell, Settings, History, 
-  GraduationCap, ClipboardList, Send, Brain, Key, Lock, CheckSquare, Square, RefreshCw
+  GraduationCap, ClipboardList, Send, Brain, Key, Lock, CheckSquare, Square, RefreshCw, BarChart2
 } from 'lucide-react';
 import { UserRole, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, normalizeUserRole } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -70,6 +70,7 @@ export const PERMISSION_GROUPS: {
       { key: 'canViewIncidents', label: 'Apartado Incidencias', description: 'Acceso a la vista y consulta de incidencias escolares.', icon: <ClipboardList className="w-4 h-4 text-indigo-600" /> },
       { key: 'canViewReferrals', label: 'Apartado Canalizaciones', description: 'Acceso a la sección de canalizaciones psicopedagógicas.', icon: <Brain className="w-4 h-4 text-teal-600" /> },
       { key: 'canViewExpedientes', label: 'Apartado Expedientes de Alumnos', description: 'Acceso al registro y archivo de expedientes de alumnos.', icon: <GraduationCap className="w-4 h-4 text-emerald-600" /> },
+      { key: 'canViewInformes', label: 'Apartado Informe Psicopedagógico', description: 'Acceso al módulo de informes automáticos de canalizaciones y copia censurada.', icon: <BarChart2 className="w-4 h-4 text-amber-600" /> },
       { key: 'canViewTasks', label: 'Apartado Tareas y Pendientes', description: 'Acceso al módulo de asignación y seguimiento de tareas.', icon: <CheckSquare className="w-4 h-4 text-purple-600" /> },
       { key: 'canViewUsers', label: 'Apartado Gestión de Usuarios', description: 'Acceso al directorio y administración de usuarios.', icon: <Users className="w-4 h-4 text-amber-600" /> },
       { key: 'canViewLogs', label: 'Apartado Historial de Bitácora', description: 'Acceso al registro de eventos y auditoría del sistema.', icon: <History className="w-4 h-4 text-slate-600" /> },

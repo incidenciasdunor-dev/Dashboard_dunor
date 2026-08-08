@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -16,8 +16,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { generateAppStructurePdf } from './lib/generateAppStructurePdf';
 import { CanalizacionesManager } from './components/CanalizacionesManager';
 import { ExpedientesManager } from './components/ExpedientesManager';
+import { InformeManager } from './components/InformeManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
+import confetti from 'canvas-confetti';
 
 const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
   const defaultLogo = "/logo.svg";
@@ -1698,13 +1700,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     message: '',
     onConfirm: () => {},
   });
-  const [activeTab, setActiveTab] = useState<'notifications' | 'tasks' | 'incidents' | 'users' | 'add-incident' | 'settings' | 'logs' | 'referrals' | 'expedientes'>('notifications');
+  const [activeTab, setActiveTab] = useState<'notifications' | 'tasks' | 'incidents' | 'users' | 'add-incident' | 'settings' | 'logs' | 'referrals' | 'expedientes' | 'informes'>('notifications');
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [expedientes, setExpedientes] = useState<Expediente[]>([]);
   const [preselectedReferralForExpediente, setPreselectedReferralForExpediente] = useState<Referral | null>(null);
   const [highlightedReferralId, setHighlightedReferralId] = useState<string | null>(null);
+  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
   const [coordinators, setCoordinators] = useState<UserProfile[]>([]);
   const [teachers, setTeachers] = useState<UserProfile[]>([]);
   const [psychologists, setPsychologists] = useState<UserProfile[]>([]);
@@ -1747,6 +1750,133 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [selectedNotifications, setSelectedNotifications] = useState<string[]>([]);
   const [isNotifSelectionMode, setIsNotifSelectionMode] = useState(false);
   const [expandedIncidentId, setExpandedIncidentId] = useState<string | null>(null);
+  const [celebrationData, setCelebrationData] = useState<{
+    notif: any;
+    title: string;
+    message: string;
+  } | null>(null);
+
+  const triggerConfetti = () => {
+    try {
+      confetti({
+        particleCount: 120,
+        spread: 80,
+        origin: { y: 0.6 }
+      });
+      setTimeout(() => {
+        confetti({
+          particleCount: 70,
+          angle: 60,
+          spread: 60,
+          origin: { x: 0.05, y: 0.6 }
+        });
+        confetti({
+          particleCount: 70,
+          angle: 120,
+          spread: 60,
+          origin: { x: 0.95, y: 0.6 }
+        });
+      }, 220);
+      setTimeout(() => {
+        confetti({
+          particleCount: 90,
+          spread: 100,
+          origin: { y: 0.5 }
+        });
+      }, 450);
+    } catch (err) {
+      console.error("Confetti error:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!celebrationData) return;
+
+    const timer = setTimeout(async () => {
+      if (celebrationData) {
+        const notifToProcess = celebrationData.notif;
+        setCelebrationData(null);
+        await processNotificationClickAndDelete(notifToProcess);
+      }
+    }, 3500);
+
+    return () => clearTimeout(timer);
+  }, [celebrationData]);
+
+  const processNotificationClickAndDelete = async (notif: any) => {
+    if (notif && notif.id) {
+      setNotifications(prev => prev.filter(n => n.id !== notif.id));
+      try {
+        await deleteDoc(doc(db, 'notifications', notif.id));
+      } catch (err) {
+        console.error("Error deleting clicked notification:", err);
+      }
+    }
+
+    const titleLower = (notif?.title || '').toLowerCase();
+    const msgLower = (notif?.message || '').toLowerCase();
+
+    const isReferralNotif = 
+      notif?.type === 'referral' ||
+      notif?.type === 'referral_suggestion' ||
+      !!notif?.referralId ||
+      titleLower.includes('canalizac') ||
+      msgLower.includes('canalizac');
+
+    if (isReferralNotif) {
+      let targetRefId = notif?.referralId;
+      if (!targetRefId && notif?.incidentId) {
+        const foundRef = referrals.find(r => r.incidentId === notif.incidentId || r.id === `ref_inc_${notif.incidentId}`);
+        targetRefId = foundRef ? foundRef.id : `ref_inc_${notif.incidentId}`;
+      }
+      setHighlightedReferralId(targetRefId || null);
+      setActiveTab('referrals');
+    } else if (notif?.type === 'felicitacion' || notif?.taskId || titleLower.includes('tarea') || titleLower.includes('felicitac')) {
+      if (notif?.taskId) {
+        setHighlightedTaskId(notif.taskId);
+      }
+      setActiveTab('tasks');
+    } else if (notif?.expedienteId || notif?.type === 'expediente' || titleLower.includes('expediente')) {
+      setActiveTab('expedientes');
+    } else if (notif?.incidentId) {
+      setExpandedIncidentId(notif.incidentId);
+      setActiveTab('incidents');
+    } else {
+      setActiveTab('incidents');
+    }
+  };
+
+  const handleNotificationClick = async (notif: any) => {
+    if (isNotifSelectionMode) {
+      setSelectedNotifications(prev => 
+        prev.includes(notif.id) ? prev.filter(id => id !== notif.id) : [...prev, notif.id]
+      );
+      return;
+    }
+
+    const titleLower = (notif.title || '').toLowerCase();
+    const msgLower = (notif.message || '').toLowerCase();
+
+    const isFelicitacion = 
+      notif.type === 'felicitacion' ||
+      notif.title?.includes('🎉') ||
+      titleLower.includes('felicitac') ||
+      titleLower.includes('reconocimiento') ||
+      msgLower.includes('felicitac') ||
+      msgLower.includes('reconocimiento');
+
+    if (isFelicitacion) {
+      setCelebrationData({
+        notif,
+        title: notif.title || '¡Felicitaciones y Reconocimiento!',
+        message: notif.message || ''
+      });
+      triggerConfetti();
+      return;
+    }
+
+    await processNotificationClickAndDelete(notif);
+  };
   const [newCategory, setNewCategory] = useState('');
   const [appNameInput, setAppNameInput] = useState(systemSettings.appName || 'DASHBOARD DUNOR');
   const [appLogoInput, setAppLogoInput] = useState(systemSettings.appLogoUrl || '');
@@ -1810,6 +1940,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     'tasks': 'canViewTasks',
     'referrals': 'canViewReferrals',
     'expedientes': 'canViewExpedientes',
+    'informes': 'canViewInformes',
     'users': 'canViewUsers',
     'settings': 'canViewSettings',
     'logs': 'canViewLogs',
@@ -1821,6 +1952,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     { id: 'tasks', key: 'canViewTasks' },
     { id: 'referrals', key: 'canViewReferrals' },
     { id: 'expedientes', key: 'canViewExpedientes' },
+    { id: 'informes', key: 'canViewInformes' },
     { id: 'add-incident', key: 'canCreateIncident' },
     { id: 'users', key: 'canViewUsers' },
     { id: 'settings', key: 'canViewSettings' },
@@ -1994,19 +2126,19 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     // 2. Directives (always receive all notifications generated across the school)
     directives.forEach(d => {
-      const resolved = d.uid || (d.email ? d.email.toLowerCase() : '');
+      const resolved = resolveUserTarget(d.uid || d.email);
       if (resolved) finalTargetUserIds.add(resolved);
     });
 
     // 3. Admins & SuperAdmin (unless skipAdmins is true)
     if (!skipAdmins) {
       admins.forEach(a => {
-        const resolved = a.uid || (a.email ? a.email.toLowerCase() : '');
+        const resolved = resolveUserTarget(a.uid || a.email);
         if (resolved) finalTargetUserIds.add(resolved);
       });
       const superAdmin = allUsers.find(u => isSuperAdminEmail(u.email));
       if (superAdmin) {
-        const resolved = superAdmin.uid || (superAdmin.email ? superAdmin.email.toLowerCase() : '');
+        const resolved = resolveUserTarget(superAdmin.uid || superAdmin.email);
         if (resolved) finalTargetUserIds.add(resolved);
       }
     }
@@ -2253,19 +2385,39 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     if (!user || !profile) return;
 
-    // Listen for notifications
+    // Listen for notifications specifically targeted to current user (by UID or email)
     let isInitialLoad = true;
+    const userUid = profile.uid;
+    const userEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+
     const q = query(
       collection(db, 'notifications'),
       or(
-        where('userId', '==', profile.uid),
-        where('userId', '==', profile.email.toLowerCase())
+        where('userId', '==', userUid),
+        where('userId', '==', userEmail)
       ),
       orderBy('createdAt', 'desc')
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const rawDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+      // In-memory deduplication by ID and content key to guarantee single notification item per event
+      const uniqueMap = new Map<string, any>();
+      const seenContentKeys = new Set<string>();
+
+      for (const d of rawDocs) {
+        if (!d.id) continue;
+        const timeBlock = Math.floor((d.createdAt || 0) / 10000); // 10-second window
+        const contentKey = `${d.userId || ''}_${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${d.referralId || ''}_${d.taskId || ''}_${timeBlock}`;
+        if (seenContentKeys.has(contentKey)) {
+          continue;
+        }
+        seenContentKeys.add(contentKey);
+        uniqueMap.set(d.id, d);
+      }
+
+      const finalDocs = Array.from(uniqueMap.values());
 
       // Trigger standard browser notification for new unread messages
       if ('Notification' in window && Notification.permission === 'granted') {
@@ -2286,13 +2438,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       isInitialLoad = false;
-      setNotifications(docs);
+      setNotifications(finalDocs);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'notifications');
+      console.warn("Notifications listener notice:", error);
     });
 
     return () => unsubscribe();
-  }, [user, profile]);
+  }, [user, profile, isSuperAdmin]);
 
   useEffect(() => {
     if (!user || !profile) return;
@@ -2387,7 +2539,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       setIsProfileLoading(true);
       setHasCheckedProfile(false);
       const emailId = userEmail.toLowerCase().trim();
+      let isMounted = true;
+
       const unsubscribe = onSnapshot(doc(db, 'users', emailId), async (snapshot) => {
+        if (!isMounted) return;
         if (snapshot.exists()) {
           const data = snapshot.data() as UserProfile;
           // Ensure UID matches Auth UID if it was bootstrapped with email or has a mismatch
@@ -2428,17 +2583,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             } catch (createErr) {
               console.error("Auto-creation of super admin user document failed:", createErr);
             }
-            setProfile(autoProfile);
+            if (isMounted) setProfile(autoProfile);
           } else {
             // Strictly deny access if user is not in database
             console.warn(`User ${emailId} is not registered in the database. Access denied.`);
-            setProfile(null);
+            if (isMounted) setProfile(null);
           }
         }
-        setIsProfileLoading(false);
-        setHasCheckedProfile(true);
+        if (isMounted) {
+          setIsProfileLoading(false);
+          setHasCheckedProfile(true);
+        }
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, `users/${emailId}`);
+        if (!isMounted) return;
+        console.warn(`Error loading profile for ${emailId}:`, error);
         const isSuper = isSuperAdminEmail(emailId);
         if (isSuper) {
           const fallbackProfile: UserProfile = {
@@ -2455,7 +2613,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         setIsProfileLoading(false);
         setHasCheckedProfile(true);
       });
-      return () => unsubscribe();
+      return () => {
+        isMounted = false;
+        unsubscribe();
+      };
     } else {
       setProfile(null);
       setIsProfileLoading(false);
@@ -2652,11 +2813,28 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     </ErrorBoundary>
   );
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem('app_custom_user');
     localStorage.removeItem('last_user_email');
     setCustomUser(null);
-    signOut(auth).catch(() => {});
+    setProfile(null);
+    setIsProfileLoading(false);
+    setHasCheckedProfile(false);
+    setIncidents([]);
+    setTasks([]);
+    setReferrals([]);
+    setExpedientes([]);
+    setNotifications([]);
+    setAdmins([]);
+    setCoordinators([]);
+    setTeachers([]);
+    setPsychologists([]);
+    setDirectives([]);
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error("Logout error:", e);
+    }
   };
 
   const markAsReceived = async (incidentId: string) => {
@@ -3514,6 +3692,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                     onClick={() => { setActiveTab('expedientes'); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
                   />
                 )}
+                {can('canViewInformes') && (
+                  <SidebarItem
+                    icon={<BarChart2 className="w-5 h-5" />}
+                    label="Informe"
+                    active={activeTab === 'informes'}
+                    onClick={() => { setActiveTab('informes'); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+                  />
+                )}
                 {can('canViewUsers') && (
                   <SidebarItem
                     icon={<Users className="w-5 h-5" />}
@@ -3874,39 +4060,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   notifications.map((notif) => (
                     <div 
                       key={notif.id}
-                      onClick={() => {
-                        if (isNotifSelectionMode) {
-                          setSelectedNotifications(prev => 
-                            prev.includes(notif.id) ? prev.filter(id => id !== notif.id) : [...prev, notif.id]
-                          );
-                        } else {
-                          markNotificationAsRead(notif.id);
-
-                          const titleLower = (notif.title || '').toLowerCase();
-                          const msgLower = (notif.message || '').toLowerCase();
-                          const isReferralNotif = 
-                            notif.type === 'referral' ||
-                            notif.type === 'referral_suggestion' ||
-                            !!notif.referralId ||
-                            titleLower.includes('canalizac') ||
-                            msgLower.includes('canalizac');
-
-                          if (isReferralNotif) {
-                            let targetRefId = notif.referralId;
-                            if (!targetRefId && notif.incidentId) {
-                              const foundRef = referrals.find(r => r.incidentId === notif.incidentId || r.id === `ref_inc_${notif.incidentId}`);
-                              targetRefId = foundRef ? foundRef.id : `ref_inc_${notif.incidentId}`;
-                            }
-                            setHighlightedReferralId(targetRefId || null);
-                            setActiveTab('referrals');
-                          } else if (notif.incidentId) {
-                            setExpandedIncidentId(notif.incidentId);
-                            setActiveTab('incidents');
-                          } else {
-                            setActiveTab('incidents');
-                          }
-                        }
-                      }}
+                      onClick={() => handleNotificationClick(notif)}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         setIsNotifSelectionMode(true);
@@ -3994,6 +4148,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 sendNotification={sendNotification}
                 canCreateTask={can('canCreateTask')}
                 canSendCongratulations={can('canSendCongratulations')}
+                highlightedTaskId={highlightedTaskId}
+                onClearHighlightedTask={() => setHighlightedTaskId(null)}
               />
             </motion.div>
           )}
@@ -4529,6 +4685,98 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   className="text-[10px] text-slate-400 font-bold hover:text-slate-600"
                 >
                   Más tarde
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Celebration / Congratulation Modal */}
+      <AnimatePresence>
+        {celebrationData && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
+              onClick={async () => {
+                const notifToProcess = celebrationData.notif;
+                setCelebrationData(null);
+                await processNotificationClickAndDelete(notifToProcess);
+              }}
+            />
+            <motion.div
+              initial={{ scale: 0.6, opacity: 0, y: 50 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.8, opacity: 0, y: 30 }}
+              transition={{ type: "spring", stiffness: 300, damping: 22 }}
+              className="relative w-full max-w-lg bg-gradient-to-b from-amber-50 via-white to-amber-50/80 rounded-3xl shadow-2xl border-2 border-amber-300 p-8 text-center overflow-hidden z-10"
+            >
+              <div className="absolute -top-20 -left-20 w-44 h-44 bg-amber-400/20 rounded-full blur-3xl pointer-events-none" />
+              <div className="absolute -bottom-20 -right-20 w-44 h-44 bg-yellow-400/20 rounded-full blur-3xl pointer-events-none" />
+
+              <div className="mx-auto w-20 h-20 bg-gradient-to-tr from-amber-400 via-yellow-400 to-amber-300 rounded-2xl flex items-center justify-center shadow-xl shadow-amber-200/80 mb-5 border-4 border-white animate-bounce">
+                <Award className="w-10 h-10 text-amber-950" />
+              </div>
+
+              <motion.h2 
+                initial={{ scale: 0.8 }}
+                animate={{ scale: [1, 1.08, 1] }}
+                transition={{ repeat: Infinity, duration: 1.8 }}
+                className="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-amber-600 via-yellow-600 to-amber-700 tracking-wider mb-2 uppercase drop-shadow-sm"
+              >
+                🎉 CONGRATULATIONS 🎉
+              </motion.h2>
+
+              <p className="text-xs font-bold tracking-widest text-amber-800 uppercase mb-6 bg-amber-100/90 inline-block px-4 py-1.5 rounded-full border border-amber-200 shadow-sm">
+                ¡FELICITACIONES Y RECONOCIMIENTO!
+              </p>
+
+              <div className="bg-white/95 border border-amber-200/80 rounded-2xl p-5 mb-4 shadow-sm text-left space-y-2">
+                <h3 className="font-bold text-amber-950 text-base flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                  {celebrationData.title.replace(/^🎉\s*/, '')}
+                </h3>
+                <p className="text-slate-700 text-sm whitespace-pre-line leading-relaxed pl-7">
+                  {celebrationData.message}
+                </p>
+              </div>
+
+              {/* Countdown / Auto-redirect Progress Bar */}
+              <div className="space-y-1.5 mb-5">
+                <div className="w-full bg-amber-100/80 h-2 rounded-full overflow-hidden border border-amber-200">
+                  <motion.div
+                    initial={{ width: "100%" }}
+                    animate={{ width: "0%" }}
+                    transition={{ duration: 3.5, ease: "linear" }}
+                    className="bg-gradient-to-r from-amber-500 to-yellow-500 h-full"
+                  />
+                </div>
+                <p className="text-[11px] font-semibold text-amber-800 flex items-center justify-center gap-1">
+                  <Clock className="w-3 h-3 text-amber-600" />
+                  <span>Redirigiendo automáticamente al registro en unos segundos...</span>
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => triggerConfetti()}
+                  className="px-4 py-3 bg-amber-100/90 hover:bg-amber-200 text-amber-950 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 border border-amber-200 cursor-pointer"
+                >
+                  ✨ Más Confeti
+                </button>
+                <button
+                  onClick={async () => {
+                    const notifToProcess = celebrationData.notif;
+                    setCelebrationData(null);
+                    await processNotificationClickAndDelete(notifToProcess);
+                  }}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-sm rounded-xl shadow-lg shadow-amber-200 transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Ver Registro</span>
+                  <ChevronRight className="w-5 h-5" />
                 </button>
               </div>
             </motion.div>
@@ -6002,6 +6250,8 @@ const TaskManager = ({
   sendNotification,
   canCreateTask = true,
   canSendCongratulations = true,
+  highlightedTaskId,
+  onClearHighlightedTask,
 }: {
   profile: UserProfile;
   tasks: Task[];
@@ -6012,9 +6262,11 @@ const TaskManager = ({
   admins: UserProfile[];
   addLog: (action: string, details?: string) => Promise<void>;
   systemSettings: SystemSettings;
-  sendNotification: (recipientEmail: string, title: string, message: string, incidentId?: string) => Promise<void>;
+  sendNotification: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>;
   canCreateTask?: boolean;
   canSendCongratulations?: boolean;
+  highlightedTaskId?: string | null;
+  onClearHighlightedTask?: () => void;
 }) => {
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
@@ -6027,9 +6279,22 @@ const TaskManager = ({
   const isTaskOverdue = (task: Task) => {
     if (task.status === 'COMPLETADA') return false;
     if (!task.dueDate) return false;
+    if (task.title.includes('🎉') || task.title.toLowerCase().includes('felicitac') || task.title.toLowerCase().includes('reconocimiento')) return false;
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     return todayStr > task.dueDate;
   };
+
+  useEffect(() => {
+    if (highlightedTaskId && tasks && tasks.length > 0) {
+      const targetTask = tasks.find(t => t.id === highlightedTaskId);
+      if (targetTask) {
+        handleOpenTask(targetTask);
+        if (onClearHighlightedTask) {
+          onClearHighlightedTask();
+        }
+      }
+    }
+  }, [highlightedTaskId, tasks]);
 
   useEffect(() => {
     if (!profile || !tasks || tasks.length === 0) return;
@@ -6217,7 +6482,7 @@ const TaskManager = ({
         const congratTaskDoc: Omit<Task, 'id'> = {
           title: `🎉 ${congratFormData.title}`,
           description: `Reconocimiento enviado por ${profile.name} (${profile.role}):\n${congratFormData.message}`,
-          dueDate: format(new Date(), 'yyyy-MM-dd'),
+          dueDate: '',
           assignedToEmail: rec.email.toLowerCase(),
           assignedToName: rec.name,
           assignedToRole: rec.role,
@@ -6228,12 +6493,15 @@ const TaskManager = ({
           status: 'COMPLETADA',
         };
 
-        await addDoc(collection(db, 'tasks'), congratTaskDoc);
+        const newTaskRef = await addDoc(collection(db, 'tasks'), congratTaskDoc);
 
         await sendNotification(
           rec.email,
           `🎉 ${congratFormData.title}`,
-          `${congratFormData.message}\n\n- Mensaje enviado por ${profile.name} (${profile.role})`
+          `${congratFormData.message}\n\n- Mensaje enviado por ${profile.name} (${profile.role})`,
+          '',
+          false,
+          { type: 'felicitacion', taskId: newTaskRef.id }
         );
 
         if (systemSettings.emailNotificationsEnabled && rec.email) {
@@ -6464,9 +6732,15 @@ const TaskManager = ({
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-500 font-medium">
                       <span>Para: <strong>{t.assignedToName}</strong> ({t.assignedToRole})</span>
                       <span>De: <strong>{t.createdByName}</strong> ({t.createdByRole})</span>
-                      <span className={cn("font-bold px-1.5 py-0.5 rounded", overdue ? "bg-red-100 text-red-700" : "text-red-600")}>
-                        Límite: {t.dueDate}
-                      </span>
+                      {t.dueDate ? (
+                        <span className={cn("font-bold px-1.5 py-0.5 rounded", overdue ? "bg-red-100 text-red-700" : "text-red-600")}>
+                          Límite: {t.dueDate}
+                        </span>
+                      ) : (
+                        <span className="font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs flex items-center gap-1">
+                          🎉 Reconocimiento
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div>{getStatusBadge(t)}</div>
@@ -6768,7 +7042,11 @@ const TaskManager = ({
                 </div>
 
                 <div className="flex items-center gap-6 text-xs text-slate-500 bg-slate-50 p-3 rounded-xl">
-                  <span>Fecha Límite: <strong className="text-red-600 font-bold">{selectedTask.dueDate}</strong></span>
+                  {selectedTask.dueDate ? (
+                    <span>Fecha Límite: <strong className="text-red-600 font-bold">{selectedTask.dueDate}</strong></span>
+                  ) : (
+                    <span>Tipo: <strong className="text-emerald-700 font-bold">🎉 Reconocimiento / Felicitación (Sin Límite)</strong></span>
+                  )}
                   {selectedTask.readAt && <span>Visto: {format(selectedTask.readAt, 'dd/MM HH:mm')}</span>}
                 </div>
 

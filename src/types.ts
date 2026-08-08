@@ -42,6 +42,7 @@ export interface RolePermissions {
   canCreateReferral: boolean;
   canViewExpedientes: boolean;
   canManageExpedientes: boolean;
+  canViewInformes?: boolean;
 
   // Acciones y Funciones Específicas
   canEditIncidents: boolean;
@@ -71,6 +72,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canCreateReferral: true,
     canViewExpedientes: true,
     canManageExpedientes: true,
+    canViewInformes: true,
 
     canEditIncidents: true,
     canDeleteIncidents: true,
@@ -95,6 +97,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canCreateReferral: false,
     canViewExpedientes: true,
     canManageExpedientes: false,
+    canViewInformes: true,
 
     canEditIncidents: false,
     canDeleteIncidents: false,
@@ -119,6 +122,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canCreateReferral: false,
     canViewExpedientes: true,
     canManageExpedientes: false,
+    canViewInformes: true,
 
     canEditIncidents: true,
     canDeleteIncidents: true,
@@ -143,6 +147,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canCreateReferral: true,
     canViewExpedientes: false,
     canManageExpedientes: false,
+    canViewInformes: false,
 
     canEditIncidents: false,
     canDeleteIncidents: false,
@@ -167,6 +172,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canCreateReferral: false,
     canViewExpedientes: true,
     canManageExpedientes: true,
+    canViewInformes: true,
 
     canEditIncidents: false,
     canDeleteIncidents: false,
