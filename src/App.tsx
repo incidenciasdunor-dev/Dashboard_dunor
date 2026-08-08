@@ -20,8 +20,29 @@ import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 
 const Logo = ({ className, short = false, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
-  const src = logoUrl || "/logo_dunor.png";
-  return <img src={src} alt={appName || 'DASHBOARD DUNOR'} className={cn("object-contain max-h-full", className)} />;
+  const initialSrc = logoUrl || "/logo_dunor.jpg";
+  const [imgSrc, setImgSrc] = useState(initialSrc);
+
+  useEffect(() => {
+    setImgSrc(logoUrl || "/logo_dunor.jpg");
+  }, [logoUrl]);
+
+  const handleError = () => {
+    if (imgSrc !== "/logo_dunor.png") {
+      setImgSrc("/logo_dunor.png");
+    } else {
+      setImgSrc("/logo.svg");
+    }
+  };
+
+  return (
+    <img
+      src={imgSrc}
+      alt={appName || 'DASHBOARD DUNOR'}
+      onError={handleError}
+      className={cn("object-contain max-h-full", className)}
+    />
+  );
 };
 
 enum OperationType {
@@ -170,7 +191,7 @@ class ErrorBoundary extends (Component as any) {
 // --- Components ---
 
 const PrintPreview = ({ incident, systemSettings, onClose }: { incident: Incident, systemSettings?: SystemSettings, onClose: () => void }) => {
-  const logoSrc = systemSettings?.appLogoUrl || "https://firebasestorage.googleapis.com/v0/b/ais-dev-24idlihunsqqvm5f765oqg.appspot.com/o/attachments%2Flogo_dunor.png?alt=media";
+  const logoSrc = systemSettings?.appLogoUrl || "/logo_dunor.jpg";
   const logoAppName = systemSettings?.appName || "Dashboard DUNOR";
 
   const handlePrint = () => {
@@ -1812,23 +1833,23 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const appName = systemSettings.appName || 'Dashboard DUNOR';
     document.title = appName;
 
-    if (systemSettings.appLogoUrl) {
-      let iconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
-      if (!iconLink) {
-        iconLink = document.createElement('link');
-        iconLink.rel = 'icon';
-        document.getElementsByTagName('head')[0].appendChild(iconLink);
-      }
-      iconLink.href = systemSettings.appLogoUrl;
+    const iconUrl = systemSettings.appLogoUrl || "/logo_dunor.jpg";
 
-      let appleIconLink = document.querySelector("link[rel~='apple-touch-icon']") as HTMLLinkElement | null;
-      if (!appleIconLink) {
-        appleIconLink = document.createElement('link');
-        appleIconLink.rel = 'apple-touch-icon';
-        document.getElementsByTagName('head')[0].appendChild(appleIconLink);
-      }
-      appleIconLink.href = systemSettings.appLogoUrl;
+    let iconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
+    if (!iconLink) {
+      iconLink = document.createElement('link');
+      iconLink.rel = 'icon';
+      document.getElementsByTagName('head')[0].appendChild(iconLink);
     }
+    iconLink.href = iconUrl;
+
+    let appleIconLink = document.querySelector("link[rel~='apple-touch-icon']") as HTMLLinkElement | null;
+    if (!appleIconLink) {
+      appleIconLink = document.createElement('link');
+      appleIconLink.rel = 'apple-touch-icon';
+      document.getElementsByTagName('head')[0].appendChild(appleIconLink);
+    }
+    appleIconLink.href = iconUrl;
   }, [systemSettings.appName, systemSettings.appLogoUrl]);
 
   useEffect(() => {
