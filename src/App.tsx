@@ -20,15 +20,17 @@ import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 
 const Logo = ({ className, short = false, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
-  const initialSrc = logoUrl || "/logo_dunor.jpg";
-  const [imgSrc, setImgSrc] = useState(initialSrc);
+  const defaultLogo = "/logo_dunor.jpg";
+  const [imgSrc, setImgSrc] = useState(logoUrl || defaultLogo);
 
   useEffect(() => {
-    setImgSrc(logoUrl || "/logo_dunor.jpg");
+    setImgSrc(logoUrl || defaultLogo);
   }, [logoUrl]);
 
   const handleError = () => {
-    if (imgSrc !== "/logo_dunor.png") {
+    if (imgSrc !== defaultLogo) {
+      setImgSrc(defaultLogo);
+    } else if (imgSrc !== "/logo_dunor.png") {
       setImgSrc("/logo_dunor.png");
     } else {
       setImgSrc("/logo.svg");
