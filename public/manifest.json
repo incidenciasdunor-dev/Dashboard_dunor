@@ -1,6 +1,6 @@
 {
-  "name": "Dashboard DUNOR",
-  "short_name": "Dashboard DUNOR",
+  "name": "DASHBOARD DUNOR",
+  "short_name": "DASHBOARD DUNOR",
   "description": "Sistema de reporte y gestión de incidencias escolares DUNOR.",
   "start_url": "/",
   "display": "standalone",

@@ -192,7 +192,7 @@ class ErrorBoundary extends (Component as any) {
 
 const PrintPreview = ({ incident, systemSettings, onClose }: { incident: Incident, systemSettings?: SystemSettings, onClose: () => void }) => {
   const logoSrc = systemSettings?.appLogoUrl || "/logo_dunor.jpg";
-  const logoAppName = systemSettings?.appName || "Dashboard DUNOR";
+  const logoAppName = systemSettings?.appName || "DASHBOARD DUNOR";
 
   const handlePrint = () => {
     const printContent = document.getElementById('printable-report');
@@ -1300,9 +1300,9 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       >
         <div className="text-center mb-8">
           <div className="w-auto h-24 mx-auto mb-6 flex items-center justify-center rounded-2xl bg-white shadow-sm border border-slate-100 px-6 py-2 text-blue-700">
-            <Logo className="h-full" short={!systemSettings?.appLogoUrl} appName={systemSettings?.appName || 'Dashboard DUNOR'} logoUrl={systemSettings?.appLogoUrl} />
+            <Logo className="h-full" short={!systemSettings?.appLogoUrl} appName={systemSettings?.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings?.appLogoUrl} />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">{systemSettings?.appName || 'Dashboard DUNOR'}</h1>
+          <h1 className="text-3xl font-bold text-slate-900 mb-2">{systemSettings?.appName || 'DASHBOARD DUNOR'}</h1>
         </div>
 
         {error && (
@@ -1522,7 +1522,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
         {/* Hidden Firebase Secrets button per request */}
       </motion.div>
-      <p className="mt-8 text-xs text-slate-400 font-medium">Developed By JV v 1.0</p>
+      <p className="mt-8 text-xs text-slate-400 font-medium">D By JV v 2.0</p>
       
       <FirebaseSecretsModal isOpen={showSecretsModal} onClose={() => setShowSecretsModal(false)} />
     </div>
@@ -1637,7 +1637,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [firestoreRolePermissions, setFirestoreRolePermissions] = useState<Partial<RolePermissionsMap>>({});
 
   const cachedLogo = typeof window !== 'undefined' ? localStorage.getItem('app_logo_url') || '' : '';
-  const cachedName = typeof window !== 'undefined' ? localStorage.getItem('app_name') || 'Dashboard DUNOR' : 'Dashboard DUNOR';
+  const cachedName = typeof window !== 'undefined' ? localStorage.getItem('app_name') || 'DASHBOARD DUNOR' : 'DASHBOARD DUNOR';
 
   const DEFAULT_SETTINGS: SystemSettings = {
     appName: cachedName,
@@ -1666,7 +1666,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [isNotifSelectionMode, setIsNotifSelectionMode] = useState(false);
   const [expandedIncidentId, setExpandedIncidentId] = useState<string | null>(null);
   const [newCategory, setNewCategory] = useState('');
-  const [appNameInput, setAppNameInput] = useState(systemSettings.appName || 'Dashboard DUNOR');
+  const [appNameInput, setAppNameInput] = useState(systemSettings.appName || 'DASHBOARD DUNOR');
   const [appLogoInput, setAppLogoInput] = useState(systemSettings.appLogoUrl || '');
 
   const [testSubject, setTestSubject] = useState('Mensaje de Prueba - Sistema DUNOR');
@@ -1830,7 +1830,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, []);
 
   useEffect(() => {
-    const appName = systemSettings.appName || 'Dashboard DUNOR';
+    const appName = systemSettings.appName || 'DASHBOARD DUNOR';
     document.title = appName;
 
     const iconUrl = systemSettings.appLogoUrl || "/logo_dunor.jpg";
@@ -2017,7 +2017,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
       // 3. Send Email
       if (sendEmailNotifCheck) {
-        const appTitle = systemSettings.appName || 'Dashboard DUNOR';
+        const appTitle = systemSettings.appName || 'DASHBOARD DUNOR';
         const logoHeader = systemSettings.appLogoUrl ? `<img src="${systemSettings.appLogoUrl}" style="max-height: 50px; margin-bottom: 12px; object-fit: contain;" alt="Logo" />` : '';
         const htmlTemplate = `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff;">
@@ -2089,7 +2089,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
       const bcc = emails.join(',');
       const subject = encodeURIComponent(`[PRUEBA] ${testSubject}`);
-      const body = encodeURIComponent(`${testBody}\n\n---\nMensaje de prueba enviado desde ${systemSettings.appName || 'Dashboard DUNOR'}`);
+      const body = encodeURIComponent(`${testBody}\n\n---\nMensaje de prueba enviado desde ${systemSettings.appName || 'DASHBOARD DUNOR'}`);
       
       window.open(`mailto:?bcc=${bcc}&subject=${subject}&body=${body}`, '_blank');
     } catch (e) {
@@ -3292,9 +3292,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           className="flex flex-col items-center gap-1 hover:opacity-80 transition-opacity"
         >
           <div className="w-auto h-8 flex items-center justify-center rounded-lg bg-white shadow-sm border border-slate-100 px-2 text-blue-700">
-            <Logo className="h-full" short={!systemSettings.appLogoUrl} appName={systemSettings.appName || 'Dashboard DUNOR'} logoUrl={systemSettings.appLogoUrl} />
+            <Logo className="h-full" short={!systemSettings.appLogoUrl} appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl} />
           </div>
-          <span className="text-[10px] leading-none font-bold text-slate-900">{systemSettings.appName || 'Dashboard DUNOR'}</span>
+          <span className="text-[10px] leading-none font-bold text-slate-900">{systemSettings.appName || 'DASHBOARD DUNOR'}</span>
         </button>
         <div className="flex items-center gap-2">
           {/* Notifications or other mobile header actions could go here */}
@@ -3448,7 +3448,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   <LogOut className="w-5 h-5" />
                   <span className="font-bold">Cerrar sesión</span>
                 </button>
-                <p className="text-[10px] text-slate-400 text-center pb-2">v 1.0</p>
+                <p className="text-[10px] text-slate-400 text-center pb-2">D By JV v 2.0</p>
               </div>
             </div>
           </motion.aside>
@@ -4396,10 +4396,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               className="bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 flex items-center gap-4"
             >
               <div className="w-auto h-12 px-4 bg-white rounded-xl flex items-center justify-center text-blue-700 shadow-md shadow-indigo-100 flex-shrink-0 border border-slate-100">
-                <Logo className="h-8" short={!systemSettings.appLogoUrl} appName={systemSettings.appName || 'Dashboard DUNOR'} logoUrl={systemSettings.appLogoUrl} />
+                <Logo className="h-8" short={!systemSettings.appLogoUrl} appName={systemSettings.appName || 'DASHBOARD DUNOR'} logoUrl={systemSettings.appLogoUrl} />
               </div>
               <div className="flex-1">
-                <h4 className="font-bold text-slate-900 text-sm">Instalar {systemSettings.appName || 'Dashboard DUNOR'}</h4>
+                <h4 className="font-bold text-slate-900 text-sm">Instalar {systemSettings.appName || 'DASHBOARD DUNOR'}</h4>
                 <p className="text-xs text-slate-500">Añade la app a tu pantalla de inicio para un acceso rápido y mejor experiencia.</p>
               </div>
               <div className="flex flex-col gap-2">
