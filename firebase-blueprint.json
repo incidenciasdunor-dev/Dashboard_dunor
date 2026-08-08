@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a user in the school incident system.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Full name of the user" },
+        "email": { "type": "string", "format": "email", "description": "Email address of the user" },
+        "phone": { "type": "string", "description": "Phone number of the user" },
+        "role": { "type": "string", "enum": ["ADMIN", "COORDINATOR", "TEACHER"], "description": "Role of the user" },
+        "assignedCoordinatorId": { "type": "string", "description": "ID of the coordinator assigned to this teacher (if applicable)" },
+        "uid": { "type": "string", "description": "User ID" },
+        "isRegistered": { "type": "boolean", "description": "Whether the user has completed registration" }
+      },
+      "required": ["name", "email", "role", "uid"]
+    },
+    "Incident": {
+      "title": "Incident",
+      "description": "Represents a school incident report.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date-time", "description": "Date and time of the incident" },
+        "place": { "type": "string", "description": "Location where the incident occurred" },
+        "students": { "type": "string", "description": "Students involved in the incident" },
+        "description": { "type": "string", "description": "Detailed description of the facts" },
+        "disciplinaryMeasures": { "type": "string", "description": "Disciplinary measures taken" },
+        "followUp": { "type": "string", "description": "Follow-up actions" },
+        "followUpHistory": { "type": "array", "items": { "$ref": "FollowUpComment" }, "description": "History of follow-up comments" },
+        "reporterName": { "type": "string", "description": "Name of the teacher who reported the incident" },
+        "reporterId": { "type": "string", "description": "ID of the teacher who reported the incident" },
+        "reporterEmail": { "type": "string", "format": "email", "description": "Email of the reporter" },
+        "coordinatorId": { "type": "string", "description": "ID of the coordinator assigned to the incident" },
+        "school": { "type": "string", "description": "Name of the school (default: DUNOR)" },
+        "isReceived": { "type": "boolean", "description": "Whether the coordinator has opened the incident" },
+        "status": { "type": "string", "enum": ["PENDIENTE", "RECIBIDO", "EN_SEGUIMIENTO", "CERRADO"], "description": "Current status of the incident" },
+        "readAt": { "type": "number", "description": "Timestamp when the incident was first read" },
+        "receivedByName": { "type": "string", "description": "Name of the person who received the incident" },
+        "images": { "type": "array", "items": { "type": "string" }, "description": "List of image URLs" },
+        "forwardedTo": { "type": "array", "items": { "type": "string" }, "description": "List of admin IDs the incident was forwarded to" },
+        "createdAt": { "type": "number", "description": "Timestamp of creation" }
+      },
+      "required": ["date", "place", "students", "description", "reporterName", "reporterId", "coordinatorId", "school", "isReceived", "createdAt"]
+    },
+    "FollowUpComment": {
+      "title": "FollowUpComment",
+      "description": "A comment in the follow-up history.",
+      "type": "object",
+      "properties": {
+        "comment": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "authorName": { "type": "string" }
+      },
+      "required": ["comment", "timestamp", "authorName"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Global system settings.",
+      "type": "object",
+      "properties": {
+        "emailNotificationsEnabled": { "type": "boolean" },
+        "forwardingEnabled": { "type": "boolean" },
+        "coordinatorAdminMapping": { "type": "object", "description": "Mapping of coordinator UIDs to arrays of admin UIDs" },
+        "categories": { "type": "array", "items": { "type": "string" }, "description": "List of incident categories" }
+      },
+      "required": ["emailNotificationsEnabled", "forwardingEnabled", "coordinatorAdminMapping"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Represents an in-app notification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID of the user who receives the notification" },
+        "title": { "type": "string", "description": "Title of the notification" },
+        "message": { "type": "string", "description": "Message content" },
+        "incidentId": { "type": "string", "description": "ID of the related incident" },
+        "read": { "type": "boolean", "description": "Whether the notification has been read" },
+        "createdAt": { "type": "number", "description": "Timestamp of creation" }
+      },
+      "required": ["userId", "title", "message", "incidentId", "read", "createdAt"]
+    },
+    "Log": {
+      "title": "Log",
+      "description": "Represents a system activity log.",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "description": "Description of the action performed" },
+        "userEmail": { "type": "string", "description": "Email of the user who performed the action" },
+        "userName": { "type": "string", "description": "Name of the user who performed the action" },
+        "timestamp": { "type": "number", "description": "Timestamp of the action" },
+        "details": { "type": "string", "description": "Optional additional details" }
+      },
+      "required": ["action", "userEmail", "userName", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles"
+    },
+    "/incidents/{incidentId}": {
+      "schema": "Incident",
+      "description": "School incident reports"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "In-app notifications for users"
+    },
+    "/settings/{settingId}": {
+      "schema": "SystemSettings",
+      "description": "Global system settings"
+    },
+    "/logs/{logId}": {
+      "schema": "Log",
+      "description": "System activity logs"
+    }
+  }
+}

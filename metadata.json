@@ -1,0 +1,8 @@
+{
+  "name": "Dashboard DUNOR",
+  "description": "Sistema de reporte y gestión de incidencias escolares DUNOR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
