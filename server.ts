@@ -131,33 +131,40 @@ async function startServer() {
   app.post("/api/send-email", async (req, res) => {
     const { to, subject, html } = req.body;
 
-    const user = process.env.GMAIL_USER;
-    const pass = process.env.GMAIL_APP_PASSWORD;
+    const user = process.env.GMAIL_USER || process.env.SMTP_USER;
+    const pass = process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS;
 
     if (!user || !pass) {
-      console.error("Missing GMAIL_USER or GMAIL_APP_PASSWORD");
-      return res.status(500).json({ error: "Configuración de correo incompleta en el servidor." });
+      console.error("[EMAIL-ERROR] Missing GMAIL_USER or GMAIL_APP_PASSWORD environment variables");
+      return res.status(500).json({ error: "Configuración de correo incompleta en el servidor (faltan credenciales GMAIL_USER / GMAIL_APP_PASSWORD)." });
     }
 
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: user,
-        pass: pass,
-      },
-    });
-
     try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || "smtp.gmail.com",
+        port: Number(process.env.SMTP_PORT) || 465,
+        secure: process.env.SMTP_SECURE !== "false", // default true for 465
+        auth: {
+          user: user,
+          pass: pass,
+        },
+        tls: {
+          rejectUnauthorized: false
+        }
+      });
+
       await transporter.sendMail({
-        from: `"DUNOR Sistema de Incidencias" <${user}>`,
+        from: `"${process.env.APP_NAME || 'DUNOR Sistema de Incidencias'}" <${user}>`,
         to,
         subject,
         html,
       });
+
+      console.log(`[EMAIL-SUCCESS] Sent email to ${to} with subject "${subject}"`);
       res.json({ success: true });
-    } catch (error) {
-      console.error("Error sending email:", error);
-      res.status(500).json({ error: "Error al enviar el correo." });
+    } catch (error: any) {
+      console.error("[EMAIL-ERROR] Failed to send email via SMTP:", error);
+      res.status(500).json({ error: error?.message || "Error al enviar el correo." });
     }
   });
 
