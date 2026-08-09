@@ -2236,6 +2236,125 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   };
 
+  const notifyIncidentInvolvedUsers = async ({
+    incident,
+    title,
+    message,
+    emailSubject,
+    emailHeaderTitle = 'Actualización de Incidencia',
+    actionDetails,
+    excludeUserId,
+    extraData = {}
+  }: {
+    incident: Incident;
+    title: string;
+    message: string;
+    emailSubject: string;
+    emailHeaderTitle?: string;
+    actionDetails?: string;
+    excludeUserId?: string;
+    extraData?: Record<string, any>;
+  }) => {
+    const allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
+    const targetUserIds = new Set<string>();
+    const targetEmails = new Set<string>();
+
+    const excludeClean = excludeUserId ? excludeUserId.toLowerCase().trim() : '';
+
+    const addTarget = (uidOrEmail?: string) => {
+      if (!uidOrEmail) return;
+      const clean = uidOrEmail.trim();
+      if (!clean) return;
+      if (clean.toLowerCase() === excludeClean) return;
+
+      const matched = allUsers.find(u =>
+        u.uid === clean ||
+        (u.email && u.email.toLowerCase() === clean.toLowerCase())
+      );
+
+      if (matched) {
+        if (matched.uid && matched.uid.toLowerCase() !== excludeClean) {
+          targetUserIds.add(matched.uid);
+        }
+        if (matched.email && matched.email.toLowerCase() !== excludeClean) {
+          targetEmails.add(matched.email.toLowerCase());
+        }
+      } else {
+        if (clean.includes('@')) {
+          targetEmails.add(clean.toLowerCase());
+          targetUserIds.add(clean.toLowerCase());
+        } else {
+          targetUserIds.add(clean);
+        }
+      }
+    };
+
+    // 1. Reporter (Docente que levanta el reporte)
+    addTarget(incident.reporterId);
+    addTarget(incident.reporterEmail);
+
+    // 2. Coordinators (Coordinadores asignados/seleccionados)
+    if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds)) {
+      incident.coordinatorIds.forEach(id => addTarget(id));
+    }
+    if (incident.coordinatorId) {
+      addTarget(incident.coordinatorId);
+    }
+
+    // 3. Notified Teacher (Docente notificado si aplica)
+    if (incident.notifiedTeacherId) {
+      addTarget(incident.notifiedTeacherId);
+    }
+
+    const finalTargetIds = Array.from(targetUserIds);
+
+    // Send in-app notification in real-time
+    if (finalTargetIds.length > 0) {
+      await sendNotification(finalTargetIds, title, message, incident.id, true, extraData);
+    }
+
+    // Send email notification to all involved users
+    if (systemSettings.emailNotificationsEnabled && targetEmails.size > 0) {
+      const appTitle = systemSettings.appName || 'DASHBOARD DUNOR';
+      const statusLabel = incident.status === 'RECIBIDO' ? 'Recibido' :
+                          incident.status === 'EN_SEGUIMIENTO' ? 'En Seguimiento' :
+                          incident.status === 'CERRADO' ? 'Cerrado' : 'Pendiente';
+
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 28px 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">${emailHeaderTitle}</h1>
+            <p style="color: #c7d2fe; margin: 6px 0 0 0; font-size: 13px; font-weight: 600; text-transform: uppercase;">${appTitle}</p>
+          </div>
+          <div style="padding: 28px 24px; background-color: #ffffff;">
+            <p style="font-size: 15px; margin-top: 0; margin-bottom: 16px; color: #334155; line-height: 1.5;">${message}</p>
+            
+            <div style="background-color: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Lugar / Espacio:</strong> ${incident.place || 'N/A'}</p>
+              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Alumno(s):</strong> ${incident.students || 'N/A'}</p>
+              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || 'Docente'}</p>
+              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Estatus del Reporte:</strong> <span style="background-color: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">${statusLabel}</span></p>
+              ${actionDetails ? `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #475569;">${actionDetails}</div>` : ''}
+            </div>
+
+            <p style="font-size: 13px; color: #64748b; text-align: center; margin: 20px 0 0 0;">Ingresa a la plataforma para consultar el historial de seguimiento y detalles completos.</p>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8; font-weight: 500;">Mensaje automático del Sistema de Incidencias ${appTitle}.</p>
+          </div>
+        </div>
+      `;
+
+      for (const email of targetEmails) {
+        try {
+          await sendEmail(email, emailSubject, emailHtml);
+        } catch (e) {
+          console.error("Error sending email notification to:", email, e);
+        }
+      }
+    }
+  };
+
   const handleSendTestBroadcast = async () => {
     if (!testSubject.trim() || !testBody.trim()) {
       alert('Por favor escribe un asunto y un mensaje para la prueba.');
@@ -2438,14 +2557,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const userUid = profile.uid;
     const userEmail = profile.email ? profile.email.toLowerCase().trim() : '';
 
-    const q = query(
-      collection(db, 'notifications'),
-      or(
-        where('userId', '==', userUid),
-        where('userId', '==', userEmail)
-      ),
-      orderBy('createdAt', 'desc')
-    );
+    const targetIds = Array.from(new Set([userUid, userEmail].filter(Boolean)));
+    if (targetIds.length === 0) return;
+
+    let q;
+    if (targetIds.length === 1) {
+      q = query(collection(db, 'notifications'), where('userId', '==', targetIds[0]));
+    } else {
+      q = query(collection(db, 'notifications'), where('userId', 'in', targetIds));
+    }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rawDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
@@ -2466,6 +2586,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       const finalDocs = Array.from(uniqueMap.values());
+      finalDocs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
       // Trigger standard browser notification for new unread messages
       if ('Notification' in window && Notification.permission === 'granted') {
@@ -2885,16 +3006,18 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   };
 
   const markAsReceived = async (incidentId: string) => {
-    if (profile.role !== 'COORDINATOR' || isSuperAdmin) return;
+    if (profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
     try {
       const incident = incidents.find(i => i.id === incidentId);
       if (!incident) return;
 
       const updates: any = { isReceived: true };
+      let updatedStatus = incident.status;
       
       // Only set status to RECIBIDO if it's currently PENDIENTE
       if (incident.status === 'PENDIENTE' || !incident.status) {
         updates.status = 'RECIBIDO';
+        updatedStatus = 'RECIBIDO';
       }
       
       // Only set readAt and receivedByName if not already set
@@ -2904,57 +3027,46 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       await updateDoc(doc(db, 'incidents', incidentId), updates);
+
+      if (updatedStatus === 'RECIBIDO' && incident.status !== 'RECIBIDO') {
+        await notifyIncidentInvolvedUsers({
+          incident: { ...incident, status: 'RECIBIDO' },
+          title: 'Reporte Recibido por Coordinación',
+          message: `El reporte en "${incident.place}" ha sido recibido y tomado en conocimiento por ${profile.name}.`,
+          emailSubject: `Reporte Recibido - ${incident.place}`,
+          emailHeaderTitle: 'Reporte de Incidencia Recibido',
+          actionDetails: `Confirmado por <strong>${profile.name}</strong> (Coordinación)`,
+          excludeUserId: profile.uid
+        });
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incidentId}`);
     }
   };
 
   const updateIncidentStatus = async (incident: Incident, status: IncidentStatus) => {
-    if (profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
+    if (!can('canChangeStatus') && profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
     try {
       await updateDoc(doc(db, 'incidents', incident.id), { status });
+      await addLog('Actualizó estatus de incidencia', `Estatus: ${status}, Incidencia: ${incident.place}`);
 
-      // Add in-app notification for the teacher
-      if (incident.reporterId) {
-        await sendNotification(
-          incident.reporterId,
-          'Actualización de Estatus',
-          `El estatus de tu reporte en "${incident.place}" ha cambiado a ${status}.`,
-          incident.id
-        );
-      }
+      const statusLabels: Record<IncidentStatus, string> = {
+        PENDIENTE: 'Pendiente',
+        RECIBIDO: 'Recibido',
+        EN_SEGUIMIENTO: 'En Seguimiento',
+        CERRADO: 'Cerrado'
+      };
+      const label = statusLabels[status] || status;
 
-      // Send email notification to the reporter (teacher) if status is EN_SEGUIMIENTO or CERRADO
-      if (systemSettings.emailNotificationsEnabled && (status === 'EN_SEGUIMIENTO' || status === 'CERRADO') && incident.reporterEmail) {
-        try {
-          await fetch('/api/send-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: incident.reporterEmail,
-              subject: `Actualización de Incidencia: ${status === 'EN_SEGUIMIENTO' ? 'En Seguimiento' : 'Cerrada'}`,
-              html: `
-                <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                  <div style="background-color: ${status === 'EN_SEGUIMIENTO' ? '#4f46e5' : '#475569'}; padding: 24px; text-align: center;">
-                    <h1 style="color: white; margin: 0; font-size: 24px;">Estatus Actualizado</h1>
-                  </div>
-                  <div style="padding: 24px;">
-                    <p style="font-size: 16px; margin-bottom: 20px;">El estatus de tu reporte de incidencia ha sido actualizado.</p>
-                    <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                      <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${incident.place}</p>
-                      <p style="margin: 0 0 8px 0;"><strong>Nuevo Estatus:</strong> <span style="color: ${status === 'EN_SEGUIMIENTO' ? '#4f46e5' : '#475569'}; font-weight: bold;">${status === 'EN_SEGUIMIENTO' ? 'En Seguimiento' : 'Cerrado'}</span></p>
-                      <p style="margin: 0;"><strong>Actualizado por:</strong> ${profile.name}</p>
-                    </div>
-                    <p style="font-size: 14px; color: #64748b;">Puedes ingresar al sistema para ver más detalles o el historial de seguimiento.</p>
-                  </div>
-                </div>
-              `
-            })
-          });
-        } catch (emailError) {
-          console.error("Error sending status update email:", emailError);
-        }
-      }
+      await notifyIncidentInvolvedUsers({
+        incident: { ...incident, status },
+        title: `Estatus Actualizado: ${label}`,
+        message: `${profile.name} ha cambiado el estatus del reporte en "${incident.place}" a "${label}".`,
+        emailSubject: `Actualización de Estatus (${label}) - ${incident.place}`,
+        emailHeaderTitle: 'Cambio de Estatus de Incidencia',
+        actionDetails: `Nuevo Estatus: <strong>${label}</strong> | Modificado por <strong>${profile.name}</strong> (${profile.role === 'COORDINATOR' ? 'Coordinación' : 'Administrador'})`,
+        excludeUserId: profile.uid
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incident.id}`);
     }
@@ -3077,54 +3189,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         isReceived: false // Mark as unread so coordinator sees it as "Pendiente"
       });
 
-      // Notify the other party
-      const recipientId = profile.role === 'TEACHER' ? incident.coordinatorId : incident.reporterId;
-      if (recipientId) {
-        await sendNotification(
-          recipientId,
-          'Nuevo Comentario de Seguimiento',
-          `${profile.name} ha comentado en "${incident.place}": ${newCommentText.substring(0, 50)}${newCommentText.length > 50 ? '...' : ''}`,
-          incident.id
-        );
-      }
-
-      // Send email notification to the other party
-      if (systemSettings.emailNotificationsEnabled) {
-        const recipientEmail = profile.role === 'TEACHER' 
-          ? coordinators.find(c => c.uid === incident.coordinatorId)?.email 
-          : incident.reporterEmail;
-        if (recipientEmail) {
-          try {
-            await fetch('/api/send-email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                to: recipientEmail,
-                subject: `Nuevo Comentario de Seguimiento: ${incident.place}`,
-                html: `
-                  <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                    <div style="background-color: #4f46e5; padding: 24px; text-align: center;">
-                      <h1 style="color: white; margin: 0; font-size: 24px;">Nuevo Seguimiento</h1>
-                    </div>
-                    <div style="padding: 24px;">
-                      <p style="font-size: 16px; margin-bottom: 20px;">Se ha agregado un nuevo comentario de seguimiento a una incidencia.</p>
-                      <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                        <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${incident.place}</p>
-                        <p style="margin: 0 0 8px 0;"><strong>Docente:</strong> ${profile.name}</p>
-                        <p style="margin: 0 0 8px 0;"><strong>Nuevo Comentario:</strong></p>
-                        <p style="margin: 0; padding: 12px; background-color: white; border: 1px solid #e2e8f0; border-radius: 6px; color: #475569;">${newCommentText}</p>
-                      </div>
-                      <p style="font-size: 14px; color: #64748b;">Por favor, ingresa al sistema para revisar el reporte completo.</p>
-                    </div>
-                  </div>
-                `
-              })
-            });
-          } catch (emailError) {
-            console.error("Error sending follow-up notification email:", emailError);
-          }
-        }
-      }
+      await notifyIncidentInvolvedUsers({
+        incident,
+        title: 'Nuevo Comentario de Seguimiento',
+        message: `${profile.name} ha agregado un seguimiento en "${incident.place}": ${newCommentText.substring(0, 50)}${newCommentText.length > 50 ? '...' : ''}`,
+        emailSubject: `Nuevo Comentario de Seguimiento: ${incident.place}`,
+        emailHeaderTitle: 'Seguimiento de Incidencia',
+        actionDetails: `Comentario de <strong>${profile.name}</strong>: "<span style="font-style: italic;">${newCommentText}</span>"`,
+        excludeUserId: profile.uid
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incident.id}`);
     }
@@ -5864,6 +5937,48 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
             } catch (emailError) {
               console.error("Error sending teacher notification email:", emailError);
             }
+          }
+        }
+      }
+
+      // Notification and confirmation email for the reporting teacher
+      if (profile.uid) {
+        await sendNotification(
+          profile.uid,
+          'Reporte Registrado Exitosamente',
+          `Has creado y enviado el reporte de incidencia en "${formData.place}".`,
+          docRef.id,
+          true
+        );
+
+        if (systemSettings.emailNotificationsEnabled && profile.email) {
+          try {
+            await fetch('/api/send-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: profile.email,
+                subject: `Confirmación de Reporte Registrado: ${formData.place}`,
+                html: `
+                  <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+                    <div style="background-color: #059669; padding: 24px; text-align: center;">
+                      <h1 style="color: white; margin: 0; font-size: 24px;">Reporte Registrado</h1>
+                    </div>
+                    <div style="padding: 24px;">
+                      <p style="font-size: 16px; margin-bottom: 20px;">Tu reporte de incidencia ha sido registrado correctamente en el sistema.</p>
+                      <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+                        <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${formData.place}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Alumnos:</strong> ${formData.students}</p>
+                        <p style="margin: 0;"><strong>Descripción:</strong> ${formData.description}</p>
+                      </div>
+                      <p style="font-size: 14px; color: #64748b;">Recibirás notificaciones en tiempo real y por correo cada vez que la coordinación actualice el estatus de este reporte.</p>
+                    </div>
+                  </div>
+                `
+              })
+            });
+          } catch (emailError) {
+            console.error("Error sending reporter confirmation email:", emailError);
           }
         }
       }
