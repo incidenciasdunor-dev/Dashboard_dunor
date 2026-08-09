@@ -1,1 +1,122 @@
 @import "tailwindcss";
+
+@layer base {
+  html.dark,
+  body.dark,
+  .dark {
+    color-scheme: dark;
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+  }
+
+  /* Invert backgrounds for menus, containers, cards & sidebars */
+  .dark .bg-white,
+  .dark .bg-slate-50,
+  .dark .bg-slate-50\/70,
+  .dark .bg-slate-50\/80,
+  .dark .bg-slate-100,
+  .dark .bg-gray-50,
+  .dark .bg-gray-100 {
+    background-color: #1e293b !important;
+    color: #f8fafc !important;
+  }
+
+  .dark .bg-slate-200,
+  .dark .bg-slate-300 {
+    background-color: #334155 !important;
+  }
+
+  .dark .bg-indigo-50,
+  .dark .bg-indigo-50\/80 {
+    background-color: rgba(49, 46, 129, 0.4) !important;
+  }
+
+  .dark .bg-emerald-50,
+  .dark .bg-emerald-50\/80 {
+    background-color: rgba(6, 78, 59, 0.4) !important;
+  }
+
+  .dark .bg-amber-50,
+  .dark .bg-amber-50\/80 {
+    background-color: rgba(120, 53, 15, 0.4) !important;
+  }
+
+  .dark .bg-rose-50,
+  .dark .bg-rose-50\/80 {
+    background-color: rgba(136, 19, 55, 0.4) !important;
+  }
+
+  /* Navigation Sidebar, Header and Menus */
+  .dark aside,
+  .dark nav,
+  .dark header {
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
+  }
+
+  /* Text color inversion for dark mode */
+  .dark .text-slate-900,
+  .dark .text-slate-800,
+  .dark .text-slate-700,
+  .dark .text-slate-600,
+  .dark .text-slate-500,
+  .dark .text-gray-900,
+  .dark .text-gray-800,
+  .dark .text-gray-700,
+  .dark .text-gray-600 {
+    color: #f1f5f9 !important;
+  }
+
+  .dark .text-slate-400,
+  .dark .text-gray-400 {
+    color: #94a3b8 !important;
+  }
+
+  .dark .text-indigo-600,
+  .dark .text-indigo-700,
+  .dark .text-indigo-800 {
+    color: #a5b4fc !important;
+  }
+
+  .dark .text-emerald-700,
+  .dark .text-emerald-800 {
+    color: #34d399 !important;
+  }
+
+  .dark .text-amber-700,
+  .dark .text-amber-800 {
+    color: #fbbf24 !important;
+  }
+
+  /* Borders in dark mode */
+  .dark .border-slate-100,
+  .dark .border-slate-200,
+  .dark .border-slate-200\/80,
+  .dark .border-slate-300,
+  .dark .border-gray-200,
+  .dark .border-indigo-100,
+  .dark .border-indigo-200 {
+    border-color: #334155 !important;
+  }
+
+  /* Forms, inputs, selects, textareas in dark mode */
+  .dark input,
+  .dark select,
+  .dark textarea {
+    background-color: #1e293b !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+  }
+
+  .dark input::placeholder,
+  .dark textarea::placeholder {
+    color: #94a3b8 !important;
+  }
+
+  .dark option {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+  }
+}
+
+

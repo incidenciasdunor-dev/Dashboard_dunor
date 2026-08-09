@@ -88,7 +88,6 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   // Share / Censorship Modal
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
-  const [redactionMode, setRedactionMode] = useState<'words' | 'editor'>('words');
   const [anonymizeStudentNames, setAnonymizeStudentNames] = useState(false);
   const [hidePsychEvaluation, setHidePsychEvaluation] = useState(false);
   const [hideParentInterviews, setHideParentInterviews] = useState(false);
@@ -108,27 +107,32 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
   // Listen to `shared_reports` collection in Firestore
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'shared_reports'), (snapshot) => {
-      const reports: SharedReport[] = [];
-      snapshot.forEach((doc) => {
-        reports.push({ id: doc.id, ...doc.data() } as SharedReport);
+    if (!db) return;
+    try {
+      const unsub = onSnapshot(collection(db, 'shared_reports'), (snapshot) => {
+        const reports: SharedReport[] = [];
+        snapshot.forEach((doc) => {
+          reports.push({ id: doc.id, ...doc.data() } as SharedReport);
+        });
+        // Sort by share date desc
+        reports.sort((a, b) => (b.sharedAt || 0) - (a.sharedAt || 0));
+
+        // Filter reports visible to current user
+        const userEmailLower = profile.email?.toLowerCase();
+        const visibleReports = reports.filter(r => {
+          if (isSuperAdmin || isAdmin || r.sharedByEmail?.toLowerCase() === userEmailLower) return true;
+          return r.recipients?.some(rec => rec.email?.toLowerCase() === userEmailLower);
+        });
+
+        setSharedReports(visibleReports);
+      }, (err) => {
+        console.error("Error loading shared reports:", err);
       });
-      // Sort by share date desc
-      reports.sort((a, b) => (b.sharedAt || 0) - (a.sharedAt || 0));
 
-      // Filter reports visible to current user
-      const userEmailLower = profile.email?.toLowerCase();
-      const visibleReports = reports.filter(r => {
-        if (isSuperAdmin || isAdmin || r.sharedByEmail?.toLowerCase() === userEmailLower) return true;
-        return r.recipients?.some(rec => rec.email?.toLowerCase() === userEmailLower);
-      });
-
-      setSharedReports(visibleReports);
-    }, (err) => {
-      console.error("Error loading shared reports:", err);
-    });
-
-    return () => unsub();
+      return () => unsub();
+    } catch (err) {
+      console.error("Failed to setup shared_reports listener:", err);
+    }
   }, [profile, isAdmin, isSuperAdmin]);
 
   // Combine recipient options
@@ -218,15 +222,45 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       return "Actualmente no se registran alumnos en canalización con expediente activo en la selección.";
     }
 
+    const total = stats.totalCanalizados;
     const topGrades = (Object.entries(stats.gradeCounts) as [string, number][])
       .sort((a, b) => b[1] - a[1])
       .map(([g, c]) => `${g} (${c} alumno${c > 1 ? 's' : ''})`)
       .slice(0, 3)
       .join(', ');
 
-    return `Se presenta el Informe Psicopedagógico de Atención y Canalización de Alumnos. A la fecha se atienden de forma activa un total de ${stats.totalCanalizados} alumno(s) registrados con expediente individual. De este total, ${stats.enProceso} caso(s) se encuentran en seguimiento activo, ${stats.concluidos} caso(s) han sido concluidos satisfactoriamente y ${stats.derivados} caso(s) han sido derivados a atención externa especializada.\n\n` +
-      `Los grados/grupos con mayor prevalencia de atención corresponden a: ${topGrades || 'diversos grados'}.\n\n` +
-      `Se ha mantenido coordinación constante con docentes y padres de familia: el ${Math.round((stats.conEntrevistaPadres / (stats.totalCanalizados || 1)) * 100)}% de los expedientes cuentan con registro formal de entrevistas con tutores/padres, y el ${Math.round((stats.conEstrategiasDocentes / (stats.totalCanalizados || 1)) * 100)}% incluye acuerdos y estrategias docentes aplicadas en aula.`;
+    const getUniqueItemsText = (getter: (e: any) => string | undefined, defaultText: string) => {
+      const items = Array.from(new Set(
+        filteredExpedientes
+          .map(e => getter(e)?.trim())
+          .filter((t): t is string => Boolean(t && t.length > 2))
+          .map(t => t.replace(/^•\s*\[.*?\]:\s*/, '').replace(/^\[.*?\]:\s*/, '').trim())
+      ));
+      if (items.length === 0) return defaultText;
+      return items.join('; ');
+    };
+
+    const motivosStr = getUniqueItemsText(e => e.reasonAndBackground, 'atención a necesidades de aprendizaje, regulación emocional y acompañamiento conductual');
+    const estrategiasStr = getUniqueItemsText(e => e.teacherStrategies, 'implementación de adecuaciones curriculares y estrategias psicopedagógicas en el aula');
+    const entrevistasStr = getUniqueItemsText(e => e.parentInterviews, 'atención periódica y firma de acuerdos de colaboración con los tutores');
+    const evaluacionesStr = getUniqueItemsText(e => e.psychologicalEvaluation, 'valoración de estilos de aprendizaje e impresiones psicopedagógicas');
+    const seguimientoStr = getUniqueItemsText(e => e.psychologyFollowUp, 'sesiones de orientación, desarrollo de habilidades socioemocionales y acuerdos conductuales');
+    const avancesStr = getUniqueItemsText(e => e.latestProgress, 'evolución favorable y cumplimiento paulatino de los objetivos previstos');
+
+    const countConEntrevistas = filteredExpedientes.filter(e => e.parentInterviews?.trim()).length;
+    const countConEvaluacion = filteredExpedientes.filter(e => e.psychologicalEvaluation?.trim()).length;
+    const countConEstrategias = filteredExpedientes.filter(e => e.teacherStrategies?.trim()).length;
+    const countConSeguimiento = filteredExpedientes.filter(e => e.psychologyFollowUp?.trim()).length;
+    const countConAvances = filteredExpedientes.filter(e => e.latestProgress?.trim()).length;
+
+    return `El presente resumen ejecutivo consolida de manera integral la información psicopedagógica recopilada en un total de ${total} expediente(s) existente(s), concentrados principalmente en los niveles de ${topGrades || 'diversos grados'}.\n\n` +
+      `Respecto a los motivos de canalización y antecedentes, la población atendida presenta principalmente observaciones relacionadas con: ${motivosStr}.\n\n` +
+      `En cuanto a las estrategias previas aplicadas por los docentes, en el ${Math.round((countConEstrategias / (total || 1)) * 100)}% de los expedientes se registran intervenciones y adecuaciones en el aula como: ${estrategiasStr}.\n\n` +
+      `En el ámbito del acompañamiento familiar, el ${Math.round((countConEntrevistas / (total || 1)) * 100)}% de los casos cuenta con registro formal de entrevistas y acuerdos con padres de familia, enfocados en: ${entrevistasStr}.\n\n` +
+      `En materia de evaluación y diagnóstico psicopedagógico, se tiene constancia en el ${Math.round((countConEvaluacion / (total || 1)) * 100)}% de los expedientes mediante: ${evaluacionesStr}.\n\n` +
+      `Sobre el seguimiento y acuerdos establecidos por el Departamento de Psicología, el ${Math.round((countConSeguimiento / (total || 1)) * 100)}% de los alumnos cuenta con acciones activas de orientación y acuerdos como: ${seguimientoStr}.\n\n` +
+      `En relación a los últimos avances reportados, el ${Math.round((countConAvances / (total || 1)) * 100)}% de los estudiantes muestra logros y evoluciones cuantitativas/cualitativas observando: ${avancesStr}.\n\n` +
+      `Por último, respecto a las acciones de guardado, actualización y resguardo de avances, el 100% de los ${total} expedientes analizados se encuentran digitalizados, actualizados y debidamente resguardados en la plataforma institucional, garantizando la confidencialidad, la trazabilidad de los datos y la continuidad del proceso psicopedagógico.`;
   }, [filteredExpedientes, stats]);
 
   // Automatic Conclusions Text Generation
@@ -387,112 +421,100 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 rounded-3xl shadow-xl relative overflow-hidden">
-        <div className="absolute right-0 top-0 transform translate-x-8 -translate-y-8 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 text-indigo-300 font-bold text-xs uppercase tracking-wider mb-2">
-              <BrainCircuit className="w-4 h-4 text-indigo-400" />
-              <span>Departamento de Psicología & Orientación Escolar</span>
-            </div>
-            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight flex items-center gap-3">
-              <BarChart2 className="w-8 h-8 text-amber-400" />
-              <span>Informe de Canalizaciones y Seguimiento</span>
-            </h1>
-            <p className="text-slate-300 text-xs md:text-sm mt-1 max-w-2xl font-medium">
-              Consolidado automático de alumnos en canalización, expedientes activos, motivos de atención, acciones realizadas y avances registrados.
-            </p>
+      {/* Search, Filter, Print, and Shared Reports Controls Bar */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-200/80 dark:border-slate-800 flex flex-col md:flex-row items-center justify-between gap-3">
+        {/* Search Bar */}
+        <div className="relative flex-1 w-full">
+          <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Buscar por alumno, grado o motivo de canalización..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+
+        {/* Action Controls */}
+        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-end">
+          {/* Grade Filter */}
+          <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+            <Filter className="w-4 h-4 text-slate-400" />
+            <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Grado:</span>
+            <select
+              value={gradeFilter}
+              onChange={(e) => setGradeFilter(e.target.value)}
+              className="bg-transparent text-xs font-bold text-slate-800 dark:text-white focus:outline-none cursor-pointer"
+            >
+              <option value="ALL">Todos los Grados</option>
+              <option value="1">1º Grado</option>
+              <option value="2">2º Grado</option>
+              <option value="3">3º Grado</option>
+              <option value="Preescolar">Preescolar</option>
+              <option value="Primaria">Primaria</option>
+              <option value="Secundaria">Secundaria</option>
+            </select>
           </div>
 
+          {/* SubTab Toggle: Informe Principal & Informes Compartidos */}
+          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => { setActiveSubTab('MASTER'); setSelectedSharedReport(null); }}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                activeSubTab === 'MASTER'
+                  ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              )}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span>Informe</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('SHARED')}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer relative",
+                activeSubTab === 'SHARED'
+                  ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              )}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Informes Compartidos ({sharedReports.length})</span>
+            </button>
+          </div>
+
+          {/* Print Button */}
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-200 dark:border-slate-700"
+          >
+            <Printer className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+            <span>Imprimir</span>
+          </button>
+
+          {/* Compartir Option */}
           {canCreateAndShare && (
             <button
               type="button"
               onClick={handleOpenShareModal}
-              className="px-5 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 rounded-2xl font-bold text-xs md:text-sm shadow-lg flex items-center justify-center gap-2 transition-all transform hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              title="Censurar y compartir copia del informe"
             >
               <Share2 className="w-4 h-4" />
-              <span>Compartir Informe (Censurar / Editar)</span>
+              <span>Compartir</span>
             </button>
           )}
-        </div>
-
-        {/* Navigation Sub-Tabs */}
-        <div className="flex items-center gap-2 mt-6 pt-4 border-t border-white/10">
-          {canCreateAndShare && (
-            <button
-              onClick={() => { setActiveSubTab('MASTER'); setSelectedSharedReport(null); }}
-              className={cn(
-                "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer",
-                activeSubTab === 'MASTER' ? "bg-white text-indigo-950 shadow-md" : "bg-white/10 text-slate-200 hover:bg-white/20"
-              )}
-            >
-              <Sparkles className="w-4 h-4 text-amber-500" />
-              <span>Informe Maestro Automatizado</span>
-            </button>
-          )}
-
-          <button
-            onClick={() => setActiveSubTab('SHARED')}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer relative",
-              activeSubTab === 'SHARED' ? "bg-white text-indigo-950 shadow-md" : "bg-white/10 text-slate-200 hover:bg-white/20"
-            )}
-          >
-            <ShieldAlert className="w-4 h-4 text-emerald-400" />
-            <span>Informes Compartidos ({sharedReports.length})</span>
-            {sharedReports.length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            )}
-          </button>
         </div>
       </div>
 
       {/* SUB-TAB 1: MASTER AUTOMATED REPORT */}
       {activeSubTab === 'MASTER' && (
         <div className="space-y-6">
-          {/* Filters Bar */}
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="relative flex-1 w-full">
-              <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por alumno, grado o motivo de canalización..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-              <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                <Filter className="w-4 h-4 text-slate-400" />
-                <span className="text-xs font-bold text-slate-600">Grado:</span>
-                <select
-                  value={gradeFilter}
-                  onChange={(e) => setGradeFilter(e.target.value)}
-                  className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer"
-                >
-                  <option value="ALL">Todos los Grados</option>
-                  <option value="1">1º Grado</option>
-                  <option value="2">2º Grado</option>
-                  <option value="3">3º Grado</option>
-                  <option value="Preescolar">Preescolar</option>
-                  <option value="Primaria">Primaria</option>
-                  <option value="Secundaria">Secundaria</option>
-                </select>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Printer className="w-4 h-4" />
-                <span className="hidden sm:inline">Imprimir</span>
-              </button>
-            </div>
-          </div>
 
           {/* Statistical Cards Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -658,7 +680,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
                         <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
                           <span className="font-bold text-slate-800 flex items-center gap-1.5">
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Motivos y Antecedentes:
@@ -668,9 +690,9 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
                         <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
                           <span className="font-bold text-slate-800 flex items-center gap-1.5">
-                            <BrainCircuit className="w-3.5 h-3.5 text-indigo-600" /> Acciones & Seguimiento Psicología:
+                            <GraduationCap className="w-3.5 h-3.5 text-blue-600" /> Estrategias por Docentes:
                           </span>
-                          <p className="text-slate-600 whitespace-pre-line font-medium leading-relaxed">{st.psychologyFollowUp}</p>
+                          <p className="text-slate-600 whitespace-pre-line font-medium leading-relaxed">{st.teacherStrategies}</p>
                         </div>
 
                         <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
@@ -682,7 +704,21 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
                         <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
                           <span className="font-bold text-slate-800 flex items-center gap-1.5">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Avances Recientes & Estrategias:
+                            <BrainCircuit className="w-3.5 h-3.5 text-purple-600" /> Evaluación Psicopedagógica:
+                          </span>
+                          <p className="text-slate-600 whitespace-pre-line font-medium leading-relaxed">{st.psychologicalEvaluation}</p>
+                        </div>
+
+                        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
+                          <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                            <ClipboardList className="w-3.5 h-3.5 text-indigo-600" /> Seguimiento & Acuerdos Psicología:
+                          </span>
+                          <p className="text-slate-600 whitespace-pre-line font-medium leading-relaxed">{st.psychologyFollowUp}</p>
+                        </div>
+
+                        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
+                          <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Últimos Avances Reportados:
                           </span>
                           <p className="text-slate-600 whitespace-pre-line font-medium leading-relaxed">{st.latestProgress}</p>
                         </div>
@@ -777,21 +813,29 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
                         <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1 font-mono">
                           <span className="font-bold text-slate-800">Motivos y Antecedentes:</span>
                           <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.reasonAndBackground}</p>
                         </div>
                         <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1 font-mono">
-                          <span className="font-bold text-slate-800">Acciones Psicología:</span>
-                          <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.psychologyFollowUp}</p>
+                          <span className="font-bold text-slate-800">Estrategias Docentes:</span>
+                          <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.teacherStrategies}</p>
                         </div>
                         <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1 font-mono">
                           <span className="font-bold text-slate-800">Entrevistas con Padres:</span>
                           <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.parentInterviews}</p>
                         </div>
                         <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1 font-mono">
-                          <span className="font-bold text-slate-800">Estrategias y Avances:</span>
+                          <span className="font-bold text-slate-800">Evaluación Psicopedagógica:</span>
+                          <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.psychologicalEvaluation}</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1 font-mono">
+                          <span className="font-bold text-slate-800">Seguimiento Psicología:</span>
+                          <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.psychologyFollowUp}</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1 font-mono">
+                          <span className="font-bold text-slate-800">Últimos Avances:</span>
                           <p className="text-slate-700 leading-relaxed whitespace-pre-line">{st.latestProgress}</p>
                         </div>
                       </div>
@@ -936,31 +980,8 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="text-xs font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
                     <ShieldAlert className="w-4 h-4 text-amber-600" />
-                    <span>2. Opciones de Privacidad y Marcatextos Negro</span>
+                    <span>2. Opciones de Privacidad y Censura en Copia Compartida</span>
                   </span>
-
-                  <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-amber-200 shadow-2xs">
-                    <button
-                      type="button"
-                      onClick={() => setRedactionMode('words')}
-                      className={cn(
-                        "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border",
-                        redactionMode === 'words' ? "bg-slate-900 text-white border-slate-900 shadow-xs" : "text-slate-600 border-transparent hover:text-slate-900"
-                      )}
-                    >
-                      <span>🖍️ Marcatextos (Un Toque)</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRedactionMode('editor')}
-                      className={cn(
-                        "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border",
-                        redactionMode === 'editor' ? "bg-slate-900 text-white border-slate-900 shadow-xs" : "text-slate-600 border-transparent hover:text-slate-900"
-                      )}
-                    >
-                      <span>✏️ Editor y Selección Libre</span>
-                    </button>
-                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
@@ -1024,48 +1045,23 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
                   <label className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                     Resumen Ejecutivo (Censura de Texto)
                   </label>
-                  {redactionMode === 'editor' && (
-                    <button
-                      type="button"
-                      onClick={() => applyBlackoutToText(editableSummary, summaryTextareaRef.current, setEditableSummary)}
-                      className="px-2.5 py-1 bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
-                    >
-                      <span>🖍️ Marcatextos Negro (Censurar Selección)</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => applyBlackoutToText(editableSummary, summaryTextareaRef.current, setEditableSummary)}
+                    className="px-2.5 py-1 bg-slate-900 hover:bg-black text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <span>🖍️ Censurar Selección en Negro</span>
+                  </button>
                 </div>
 
-                {redactionMode === 'words' ? (
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs leading-relaxed flex flex-wrap items-center gap-1.5 select-none min-h-[80px]">
-                    {(editableSummary.match(/(\S+|\s+)/g) || []).map((token, tokenIdx) => {
-                      if (!/\S/.test(token)) return <span key={tokenIdx}>{token}</span>;
-                      const isBlackedOut = token.includes('█');
-                      return (
-                        <span
-                          key={tokenIdx}
-                          onClick={() => toggleWordBlackout(editableSummary, tokenIdx, setEditableSummary)}
-                          className={cn(
-                            "px-1 py-0.5 rounded transition-all cursor-pointer font-mono font-bold text-xs border",
-                            isBlackedOut
-                              ? "bg-black text-black border-black select-none hover:bg-slate-800"
-                              : "bg-amber-100 hover:bg-amber-200 text-slate-900 border-amber-300"
-                          )}
-                          title="Haz clic para marcar o desmarcar en negro"
-                        >
-                          {token}
-                        </span>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <textarea
-                    ref={summaryTextareaRef}
-                    rows={4}
-                    value={editableSummary}
-                    onChange={(e) => setEditableSummary(e.target.value)}
-                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900"
-                  />
-                )}
+                <textarea
+                  ref={summaryTextareaRef}
+                  rows={4}
+                  value={editableSummary}
+                  onChange={(e) => setEditableSummary(e.target.value)}
+                  placeholder="Edita o censura el resumen ejecutivo antes de compartir..."
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
               </div>
 
               {/* Student Cards Preview & Redaction */}
@@ -1086,12 +1082,24 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
                         <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono">
                           <strong>Motivos:</strong> {st.reasonAndBackground}
                         </div>
                         <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono">
+                          <strong>Estrategias Docentes:</strong> {st.teacherStrategies}
+                        </div>
+                        <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono">
+                          <strong>Entrevistas Padres:</strong> {hideParentInterviews ? '[INFORMACIÓN RESERVADA DE ENTREVISTAS]' : st.parentInterviews}
+                        </div>
+                        <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono">
+                          <strong>Eval. Psicopedagógica:</strong> {hidePsychEvaluation ? '[INFORMACIÓN RESERVADA DE EVALUACIÓN]' : st.psychologicalEvaluation}
+                        </div>
+                        <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono">
                           <strong>Seguimiento Psicología:</strong> {st.psychologyFollowUp}
+                        </div>
+                        <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono">
+                          <strong>Últimos Avances:</strong> {st.latestProgress}
                         </div>
                       </div>
                     </div>

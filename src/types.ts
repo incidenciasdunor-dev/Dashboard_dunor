@@ -366,6 +366,7 @@ export interface Expediente {
   psychologistId: string;
   psychologistName: string;
   psychologistEmail: string;
+  status?: 'EN_PROCESO' | 'CASO_CONCLUIDO';
   createdAt: number;
   updatedAt: number;
 }

@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2 } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -1689,6 +1689,54 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [hasCheckedProfile, setHasCheckedProfile] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [showAppSecretsModal, setShowAppSecretsModal] = useState(false);
+
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('theme') === 'dark';
+  });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const [systemPopup, setSystemPopup] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type?: 'success' | 'error' | 'warning' | 'info' | 'confirm';
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showSystemPopup = (
+    title: string,
+    message: string,
+    type: 'success' | 'error' | 'warning' | 'info' | 'confirm' = 'info',
+    onConfirm?: () => void,
+    confirmText: string = 'Aceptar',
+    cancelText: string = 'Cancelar'
+  ) => {
+    setSystemPopup({
+      isOpen: true,
+      title,
+      message,
+      type,
+      onConfirm,
+      confirmText,
+      cancelText
+    });
+  };
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -2448,22 +2496,21 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   useEffect(() => {
     if (!user || !profile) return;
-    let qTasks;
-    if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin) {
-      qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
-    } else {
-      qTasks = query(
-        collection(db, 'tasks'),
-        or(
-          where('assignedToEmail', '==', profile.email.toLowerCase()),
-          where('createdByEmail', '==', profile.email.toLowerCase())
-        ),
-        orderBy('createdAt', 'desc')
-      );
-    }
+    const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qTasks, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-      setTasks(docs);
+      const allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
+      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin) {
+        setTasks(allDocs);
+      } else {
+        const myEmailLower = profile.email?.toLowerCase();
+        const myUid = profile.uid;
+        const userTasks = allDocs.filter(t => 
+          (t.assignedToEmail && t.assignedToEmail.toLowerCase() === myEmailLower) || 
+          (t.createdByEmail && t.createdByEmail.toLowerCase() === myEmailLower) ||
+          (myUid && (t.assignedToEmail === myUid || t.createdByEmail === myUid))
+        );
+        setTasks(userTasks);
+      }
     }, (error) => {
       console.warn("Tasks listener notice:", error);
     });
@@ -3574,7 +3621,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+      <div className={cn("min-h-screen flex flex-col md:flex-row transition-colors duration-300", isDarkMode ? "dark bg-slate-950 text-slate-100" : "bg-slate-50 text-slate-900")}>
       {/* Mobile Header */}
       <div className="md:hidden bg-white border-b border-slate-200 p-4 flex items-center justify-between sticky top-0 z-50">
         <button 
@@ -3726,27 +3773,50 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 )}
               </div>
 
-              {/* Bottom Section with Logout */}
-              <div className="mt-auto pt-6 border-t border-slate-100 bg-white sticky bottom-0">
-                <div className="flex items-center gap-3 mb-4 px-2">
-                  <div className="w-10 h-10 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0">
+              {/* Bottom Section with Dark Mode & Logout */}
+              <div className="mt-auto pt-4 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 sticky bottom-0">
+                {/* Dark Mode Switch */}
+                <div className="flex items-center justify-between px-3 py-2 bg-slate-100 dark:bg-slate-800 rounded-xl mb-3 border border-slate-200/60 dark:border-slate-700/60">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200">
+                    {isDarkMode ? <Moon className="w-4 h-4 text-indigo-400" /> : <Sun className="w-4 h-4 text-amber-500" />}
+                    <span>{isDarkMode ? 'Modo Oscuro' : 'Modo Claro'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    className={cn(
+                      "w-11 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer",
+                      isDarkMode ? "bg-indigo-600 justify-end" : "bg-slate-300 justify-start"
+                    )}
+                    title={isDarkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+                  >
+                    <motion.div
+                      layout
+                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                      className="w-4 h-4 bg-white rounded-full shadow-md"
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3 mb-3 px-2">
+                  <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-950/60 rounded-full flex items-center justify-center text-indigo-600 dark:text-indigo-400 flex-shrink-0">
                     <UserIcon className="w-6 h-6" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-slate-900 truncate">{profile.name}</p>
-                    <p className="text-xs text-slate-500 truncate">
+                    <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{profile.name}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                       {isSuperAdmin ? 'Super Admin' : profile.role === 'DIRECTIVE' ? 'Directivo (Observador)' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="w-full flex items-center gap-3 px-3 py-3 text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all mb-2"
+                  className="w-full flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl transition-all mb-2 cursor-pointer font-bold text-xs"
                 >
-                  <LogOut className="w-5 h-5" />
-                  <span className="font-bold">Cerrar sesión</span>
+                  <LogOut className="w-4 h-4" />
+                  <span>Cerrar sesión</span>
                 </button>
-                <p className="text-[10px] text-slate-400 text-center pb-2">D By JV v 2.0</p>
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 text-center pb-2 font-mono">D By JV v 2.0</p>
               </div>
             </div>
           </motion.aside>
@@ -4004,50 +4074,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             >
               <div className="flex items-center justify-between mb-8">
                 <div>
-                  <h1 className="text-2xl font-bold text-slate-900">Notificaciones</h1>
-                  <p className="text-slate-500">Mantente al día con tus reportes</p>
+                  <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Notificaciones</h1>
+                  <p className="text-slate-500 dark:text-slate-400">Mantente al día con tus reportes</p>
                 </div>
-                {notifications.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    {notifications.some(n => !n.read) && (
-                      <button 
-                        onClick={markAllNotificationsAsRead}
-                        className="px-3.5 py-2 text-xs sm:text-sm font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
-                        title="Marcar todas las notificaciones como leídas"
-                      >
-                        <CheckCircle2 className="w-4 h-4 text-amber-600" />
-                        <span>Marcar todas como leídas</span>
-                      </button>
-                    )}
-                    {isNotifSelectionMode ? (
-                      <>
-                        <button 
-                          onClick={() => {
-                            setSelectedNotifications([]);
-                            setIsNotifSelectionMode(false);
-                          }}
-                          className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
-                        >
-                          Cancelar
-                        </button>
-                        <button 
-                          onClick={deleteMultipleNotifications}
-                          disabled={selectedNotifications.length === 0}
-                          className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded-xl shadow-lg shadow-red-100 transition-all disabled:opacity-50 cursor-pointer"
-                        >
-                          Eliminar ({selectedNotifications.length})
-                        </button>
-                      </>
-                    ) : (
-                      <button 
-                        onClick={() => setIsNotifSelectionMode(true)}
-                        className="px-4 py-2 text-sm font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all cursor-pointer"
-                      >
-                        Seleccionar
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
 
               <div className="space-y-3">
@@ -4635,6 +4664,26 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             </motion.div>
           )}
 
+          {activeTab === 'informes' && can('canViewInformes') && (
+            <motion.div
+              key="informes"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <InformeManager
+                expedientes={expedientes}
+                referrals={referrals}
+                profile={profile}
+                coordinators={coordinators}
+                directives={directives}
+                admins={admins}
+                sendNotification={sendNotification}
+                addLog={addLog}
+              />
+            </motion.div>
+          )}
+
           {!tabPriorityOrder.some(item => can(item.key)) && (
             <motion.div
               key="no-access"
@@ -4847,6 +4896,81 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         isOpen={showAppSecretsModal} 
         onClose={() => setShowAppSecretsModal(false)} 
       />
+
+      {/* Global System Popup Modal */}
+      <AnimatePresence>
+        {systemPopup.isOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSystemPopup(prev => ({ ...prev, isOpen: false }))}
+              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-2xl p-6 overflow-hidden z-10"
+            >
+              <div className="flex items-start gap-4 mb-4">
+                <div className={cn(
+                  "w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-sm",
+                  systemPopup.type === 'success' && "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400",
+                  systemPopup.type === 'error' && "bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400",
+                  systemPopup.type === 'warning' && "bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400",
+                  (systemPopup.type === 'info' || systemPopup.type === 'confirm' || !systemPopup.type) && "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400"
+                )}>
+                  {systemPopup.type === 'success' && <CheckCircle2 className="w-6 h-6" />}
+                  {systemPopup.type === 'error' && <AlertCircle className="w-6 h-6" />}
+                  {systemPopup.type === 'warning' && <AlertTriangle className="w-6 h-6" />}
+                  {(systemPopup.type === 'info' || systemPopup.type === 'confirm' || !systemPopup.type) && <Sparkles className="w-6 h-6" />}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white leading-snug">{systemPopup.title}</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 font-medium leading-relaxed">{systemPopup.message}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+                {systemPopup.type === 'confirm' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setSystemPopup(prev => ({ ...prev, isOpen: false }))}
+                      className="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs transition-all cursor-pointer"
+                    >
+                      {systemPopup.cancelText || 'Cancelar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (systemPopup.onConfirm) systemPopup.onConfirm();
+                        setSystemPopup(prev => ({ ...prev, isOpen: false }));
+                      }}
+                      className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer"
+                    >
+                      {systemPopup.confirmText || 'Confirmar'}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (systemPopup.onConfirm) systemPopup.onConfirm();
+                      setSystemPopup(prev => ({ ...prev, isOpen: false }));
+                    }}
+                    className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer"
+                  >
+                    {systemPopup.confirmText || 'Entendido'}
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </ErrorBoundary>
   );
 }

@@ -30,7 +30,7 @@ import {
   UserProfile,
   normalizeUserRole
 } from '../types';
-import { doc, setDoc, deleteDoc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteDoc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
 
@@ -64,7 +64,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const isPsychologist = userRole === 'PSYCHOLOGIST' || userRole === 'ADMIN' || (profile.role && String(profile.role).toLowerCase().includes('psico')) || (profile.role && String(profile.role).toLowerCase().includes('admin'));
   const allowManageExpedientes = canManageExpedientes && isPsychologist && !isDirectiveOrCoordinator;
 
-  const [viewMode, setViewMode] = useState<'FORM' | 'LIST'>(preselectedReferral && allowManageExpedientes ? 'FORM' : (allowManageExpedientes ? 'FORM' : 'LIST'));
+  const [viewMode, setViewMode] = useState<'FORM' | 'LIST'>(preselectedReferral && allowManageExpedientes ? 'FORM' : 'LIST');
   const [editingExpedienteId, setEditingExpedienteId] = useState<string | null>(null);
   const [selectedLinkedReferralId, setSelectedLinkedReferralId] = useState<string>('');
 
@@ -93,7 +93,19 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   }, []);
 
   // Form Data State
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    studentName: string;
+    gradeGroup: string;
+    reasonAndBackground: string;
+    teacherStrategies: string;
+    parentInterviews: string;
+    psychologicalEvaluation: string;
+    attachmentName: string;
+    attachmentData: string;
+    psychologyFollowUp: string;
+    latestProgress: string;
+    status: 'EN_PROCESO' | 'CASO_CONCLUIDO';
+  }>({
     studentName: '',
     gradeGroup: '',
     reasonAndBackground: '',
@@ -103,7 +115,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     attachmentName: '',
     attachmentData: '',
     psychologyFollowUp: '',
-    latestProgress: ''
+    latestProgress: '',
+    status: 'EN_PROCESO'
   });
 
   // Multiple Recipient Selection State (Requirement 3)
@@ -319,11 +332,19 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         psychologistId: profile.uid || profile.email,
         psychologistName: profile.name || 'Psicólogo Escolar',
         psychologistEmail: profile.email,
+        status: formData.status || 'EN_PROCESO',
         createdAt: editingExpedienteId ? (expedientes.find(e => e.id === editingExpedienteId)?.createdAt || Date.now()) : Date.now(),
         updatedAt: Date.now()
       };
 
       await setDoc(doc(db, 'expedientes', id), payload, { merge: true });
+
+      if (selectedLinkedReferralId) {
+        await updateDoc(doc(db, 'referrals', selectedLinkedReferralId), {
+          status: formData.status === 'CASO_CONCLUIDO' ? 'ATENDIDO' : 'EN_VALORACION',
+          updatedAt: Date.now()
+        }).catch(e => console.warn("Notice updating linked referral:", e));
+      }
 
       await addLog(
         editingExpedienteId ? 'Actualización de Expediente' : 'Nuevo Expediente Psicopedagógico',
@@ -367,11 +388,19 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         psychologistId: profile.uid || profile.email,
         psychologistName: profile.name || 'Psicólogo Escolar',
         psychologistEmail: profile.email,
+        status: formData.status || 'EN_PROCESO',
         createdAt: editingExpedienteId ? (expedientes.find(e => e.id === editingExpedienteId)?.createdAt || Date.now()) : Date.now(),
         updatedAt: Date.now()
       };
 
       await setDoc(doc(db, 'expedientes', id), masterPayload, { merge: true });
+
+      if (selectedLinkedReferralId) {
+        await updateDoc(doc(db, 'referrals', selectedLinkedReferralId), {
+          status: formData.status === 'CASO_CONCLUIDO' ? 'ATENDIDO' : 'EN_VALORACION',
+          updatedAt: Date.now()
+        }).catch(e => console.warn("Notice updating linked referral:", e));
+      }
 
       // 2. Prepare Shared Copy Payload
       const selectedUsersData = allAvailableRecipients.filter(r => selectedRecipients.includes(r.email));
@@ -442,7 +471,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       attachmentName: '',
       attachmentData: '',
       psychologyFollowUp: '',
-      latestProgress: ''
+      latestProgress: '',
+      status: 'EN_PROCESO'
     });
     if (onClearPreselectedReferral) onClearPreselectedReferral();
   };
@@ -461,10 +491,34 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       attachmentName: exp.attachmentName || '',
       attachmentData: exp.attachmentData || '',
       psychologyFollowUp: exp.psychologyFollowUp || '',
-      latestProgress: exp.latestProgress || ''
+      latestProgress: exp.latestProgress || '',
+      status: exp.status || 'EN_PROCESO'
     });
     setSelectedRecipients([]);
     setViewMode('FORM');
+  };
+
+  // Quick toggle expediente status
+  const handleToggleExpedienteStatus = async (exp: Expediente, newStatus: 'EN_PROCESO' | 'CASO_CONCLUIDO') => {
+    try {
+      await updateDoc(doc(db, 'expedientes', exp.id), {
+        status: newStatus,
+        updatedAt: Date.now()
+      });
+      if (exp.linkedReferralId) {
+        await updateDoc(doc(db, 'referrals', exp.linkedReferralId), {
+          status: newStatus === 'CASO_CONCLUIDO' ? 'ATENDIDO' : 'EN_VALORACION',
+          updatedAt: Date.now()
+        }).catch(e => console.warn("Notice updating referral:", e));
+      }
+      await addLog(
+        'Cambio de Estatus de Expediente',
+        `Estatus del expediente de ${exp.studentName} cambiado a ${newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso'}.`
+      );
+    } catch (err) {
+      console.error("Error updating status:", err);
+      alert("Error al actualizar el estatus del expediente.");
+    }
   };
 
   // Delete expediente
@@ -590,8 +644,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
           <form onSubmit={handleSaveExpediente} className="p-6 space-y-6">
             {/* Section 1: ALUMNO Y VINCULACIÓN */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-slate-50/70 rounded-2xl border border-slate-100">
-              <div className="md:col-span-1 space-y-1">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 p-4 bg-slate-50/70 rounded-2xl border border-slate-100">
+              <div className="space-y-1">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                   VINCULAR CANALIZACIÓN EXISTENTE (OPCIONAL)
                 </label>
@@ -609,7 +663,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                 </select>
               </div>
 
-              <div className="md:col-span-1 space-y-1">
+              <div className="space-y-1">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                   NOMBRE COMPLETO DEL ALUMNO *
                 </label>
@@ -623,7 +677,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                 />
               </div>
 
-              <div className="md:col-span-1 space-y-1">
+              <div className="space-y-1">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                   GRADO Y GRUPO / NIVEL
                 </label>
@@ -634,6 +688,20 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                   placeholder="Ej. 2º A Primaria"
                   className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  ESTATUS DEL EXPEDIENTE
+                </label>
+                <select
+                  value={formData.status || 'EN_PROCESO'}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="EN_PROCESO">⏳ En Proceso / Seguimiento Activo</option>
+                  <option value="CASO_CONCLUIDO">✅ Caso Concluido / Atención Finalizada</option>
+                </select>
               </div>
             </div>
 
@@ -702,20 +770,30 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
             <div className="p-5 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3">
               <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
                 <Paperclip className="w-4 h-4 text-indigo-600" />
-                DOCUMENTOS ADJUNTOS / PRUEBAS (MÁX. 1MB)
+                DOCUMENTOS ADJUNTOS / PRUEBAS (OPCIONAL, MÁX. 1MB)
               </label>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <label className="px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs rounded-xl border border-slate-200 shadow-sm cursor-pointer transition-all flex items-center gap-2">
                   <Paperclip className="w-4 h-4 text-indigo-600" />
-                  <span>Seleccionar Archivo</span>
+                  <span>{formData.attachmentName ? 'Cambiar Archivo' : 'Seleccionar Archivo (Opcional)'}</span>
                   <input type="file" onChange={handleFileChange} className="hidden" accept="image/*,.pdf,.doc,.docx" />
                 </label>
                 {formData.attachmentName ? (
-                  <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center gap-1.5">
-                    📎 {formData.attachmentName}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center gap-1.5">
+                      📎 {formData.attachmentName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, attachmentName: '', attachmentData: '' }))}
+                      className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                      title="Quitar archivo adjunto"
+                    >
+                      <X className="w-3.5 h-3.5" /> Quitar
+                    </button>
+                  </div>
                 ) : (
-                  <span className="text-xs text-slate-400">Sin archivo adjunto</span>
+                  <span className="text-xs text-slate-400">Sin archivo adjunto (no es obligatorio)</span>
                 )}
               </div>
             </div>
@@ -960,28 +1038,6 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
               <div>
                 💡 <strong>Nota Importante:</strong> Toda modificación, censura o sección ocultada en esta ventana afectará <u>únicamente</u> a la copia enviada.
               </div>
-              <div className="flex items-center gap-1 bg-slate-200/80 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setRedactionMode('words')}
-                  className={cn(
-                    "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border",
-                    redactionMode === 'words' ? "bg-slate-900 text-white border-slate-900 shadow-xs" : "text-slate-600 border-transparent hover:text-slate-900"
-                  )}
-                >
-                  <span>🖍️ Marcatextos Negro (Un Toque)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRedactionMode('editor')}
-                  className={cn(
-                    "px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border",
-                    redactionMode === 'editor' ? "bg-white text-indigo-900 border-slate-300 shadow-xs" : "text-slate-600 border-transparent hover:text-slate-900"
-                  )}
-                >
-                  <span>✏️ Editor y Selección Libre</span>
-                </button>
-              </div>
             </div>
 
             {/* Modal Body: Interactive Section Editors */}
@@ -1050,40 +1106,6 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                     {isHidden ? (
                       <div className="p-3 bg-slate-200/80 rounded-xl text-xs font-bold text-slate-600 text-center italic border border-slate-300">
                         🙈 Esta sección estará completamente oculta para los destinatarios de la copia compartida.
-                      </div>
-                    ) : redactionMode === 'words' ? (
-                      <div className="space-y-2">
-                        <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs leading-relaxed flex flex-wrap items-center gap-1.5 select-none min-h-[80px]">
-                          {(currentVal.match(/(\S+|\s+)/g) || []).map((token, tokenIdx) => {
-                            const isWhitespace = /^\s+$/.test(token);
-                            if (isWhitespace) {
-                              return <span key={tokenIdx} className="whitespace-pre">{token}</span>;
-                            }
-                            const isRedacted = /^█+$/.test(token.trim());
-                            return (
-                              <button
-                                key={tokenIdx}
-                                type="button"
-                                onClick={() => toggleWordRedaction(sec.key, tokenIdx)}
-                                className={cn(
-                                  "px-1.5 py-0.5 rounded transition-all cursor-pointer font-mono font-bold text-xs border shadow-2xs",
-                                  isRedacted
-                                    ? "bg-slate-950 text-slate-950 border-black shadow-inner"
-                                    : "bg-white text-slate-900 border-slate-300 hover:bg-amber-100 hover:border-amber-400"
-                                )}
-                                title={isRedacted ? "Toca para revelar palabra" : "Toca para marcar palabra en negro"}
-                              >
-                                {token}
-                              </button>
-                            );
-                          })}
-                          {(!currentVal || !currentVal.trim()) && (
-                            <span className="text-slate-400 italic font-sans text-xs">Sin texto registrado en esta sección.</span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-slate-500 font-medium">
-                          🖍️ <strong>Marcatextos de Color Negro:</strong> Haz clic o toca directamente cualquier palabra para ocultarla en negro (█) o revertirla al instante.
-                        </p>
                       </div>
                     ) : (
                       <div className="space-y-1">
@@ -1258,9 +1280,19 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                 filteredExpedientes.map(exp => (
                   <div key={exp.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-3 hover:border-indigo-200 transition-all">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                      <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-md">
-                        {exp.gradeGroup || 'Ficha Psicopedagógica'}
-                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-md">
+                          {exp.gradeGroup || 'Ficha Psicopedagógica'}
+                        </span>
+                        <span className={cn(
+                          "text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md border",
+                          exp.status === 'CASO_CONCLUIDO'
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800"
+                            : "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800"
+                        )}>
+                          {exp.status === 'CASO_CONCLUIDO' ? '✅ Caso Concluido' : '⏳ En Proceso'}
+                        </span>
+                      </div>
                       <span className="text-[11px] text-slate-400">
                         {new Date(exp.updatedAt || exp.createdAt).toLocaleDateString('es-MX')}
                       </span>
@@ -1277,21 +1309,35 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                       <strong>Motivo:</strong> {exp.reasonAndBackground}
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                      <button
-                        type="button"
-                        onClick={() => handleEditExpediente(exp)}
-                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                      >
-                        <Edit className="w-3.5 h-3.5" />
-                        <span>{allowManageExpedientes ? 'Ver / Editar Ficha' : 'Ver Ficha'}</span>
-                      </button>
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleEditExpediente(exp)}
+                          className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                          <span>{allowManageExpedientes ? 'Ver / Editar Ficha' : 'Ver Ficha'}</span>
+                        </button>
+
+                        {allowManageExpedientes && (
+                          <select
+                            value={exp.status || 'EN_PROCESO'}
+                            onChange={(e) => handleToggleExpedienteStatus(exp, e.target.value as any)}
+                            className="text-[11px] font-bold py-1 px-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-200 cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          >
+                            <option value="EN_PROCESO">⏳ En Proceso</option>
+                            <option value="CASO_CONCLUIDO">✅ Caso Concluido</option>
+                          </select>
+                        )}
+                      </div>
 
                       {allowManageExpedientes && (
                         <button
                           type="button"
                           onClick={() => handleDeleteExpediente(exp.id, exp.studentName)}
                           className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
+                          title="Eliminar Expediente"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>

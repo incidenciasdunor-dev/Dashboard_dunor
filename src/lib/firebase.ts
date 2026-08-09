@@ -73,15 +73,26 @@ function createDbInstance() {
       localCache: memoryLocalCache(),
     };
     if (targetDatabaseId && targetDatabaseId !== '(default)' && targetDatabaseId.trim().length > 0) {
-      return initializeFirestore(app, dbSettings, targetDatabaseId);
+      try {
+        return initializeFirestore(app, dbSettings, targetDatabaseId);
+      } catch (e1) {
+        return getFirestore(app, targetDatabaseId);
+      }
     } else {
-      return initializeFirestore(app, dbSettings);
+      try {
+        return initializeFirestore(app, dbSettings);
+      } catch (e1) {
+        return getFirestore(app);
+      }
     }
   } catch (e) {
-    // If already initialized, fallback to getFirestore
-    return (targetDatabaseId && targetDatabaseId !== '(default)' && targetDatabaseId.trim().length > 0)
-      ? getFirestore(app, targetDatabaseId)
-      : getFirestore(app);
+    console.error("Error creating db instance:", e);
+    try {
+      return getFirestore(app);
+    } catch (err) {
+      console.error("Fallback getFirestore error:", err);
+      return getFirestore(app);
+    }
   }
 }
 
