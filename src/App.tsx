@@ -2205,9 +2205,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       );
 
       if (matched) {
-        if (matched.uid) finalTargetUserIds.add(matched.uid);
+        const targetId = matched.uid || (matched.email ? matched.email.toLowerCase() : cleanLower);
+        finalTargetUserIds.add(targetId);
         if (matched.email && matched.email.includes('@')) {
-          finalTargetUserIds.add(matched.email.toLowerCase());
           targetEmails.add(matched.email.toLowerCase());
         }
       } else {
@@ -2229,7 +2229,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const schoolDirectives = allUsers.filter(u => u.role === 'DIRECTIVE');
     schoolDirectives.forEach(d => {
       if (d.uid) addTargetUser(d.uid);
-      if (d.email) addTargetUser(d.email);
+      else if (d.email) addTargetUser(d.email);
     });
 
     // 3. Admins & SuperAdmin (unless skipAdmins is true)
@@ -2237,7 +2237,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const schoolAdmins = allUsers.filter(u => u.role === 'ADMIN' || isSuperAdminEmail(u.email));
       schoolAdmins.forEach(a => {
         if (a.uid) addTargetUser(a.uid);
-        if (a.email) addTargetUser(a.email);
+        else if (a.email) addTargetUser(a.email);
       });
     }
 
@@ -2392,9 +2392,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     const finalTargetIds = Array.from(targetUserIds);
 
-    // Send in-app notification in real-time
+    // Send in-app notification in real-time (skipEmail: true since notifyIncidentInvolvedUsers handles the rich email below)
     if (finalTargetIds.length > 0) {
-      await sendNotification(finalTargetIds, title, message, incident.id, false, extraData);
+      await sendNotification(finalTargetIds, title, message, incident.id, false, { ...extraData, skipEmail: true });
     }
 
     // Send email notification to all involved users (default true unless explicitly false)
@@ -2661,7 +2661,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       for (const d of rawDocs) {
         if (!d.id) continue;
         const timeBlock = Math.floor((d.createdAt || 0) / 10000); // 10-second window
-        const contentKey = `${d.userId || ''}_${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${d.referralId || ''}_${d.taskId || ''}_${timeBlock}`;
+        const contentKey = `${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${d.referralId || ''}_${d.taskId || ''}_${timeBlock}`;
         if (seenContentKeys.has(contentKey)) {
           continue;
         }
@@ -5967,7 +5967,9 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           profile.uid,
           'Reporte Registrado Exitosamente',
           `Has creado y enviado el reporte de incidencia en "${formData.place}".`,
-          docRef.id
+          docRef.id,
+          true, // skipAdmins = true (personal confirmation only for the reporter)
+          { skipEmail: true } // skip email in sendNotification since we send the rich confirmation email below
         );
 
         if (systemSettings.emailNotificationsEnabled !== false && profile.email && sendEmail) {

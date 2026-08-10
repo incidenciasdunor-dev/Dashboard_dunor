@@ -209,16 +209,18 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       await setDoc(doc(db, 'referrals', id), newRef);
       await addLog('Nueva Canalización', `Se canalizó al alumno ${newRef.studentName} (${newRef.gradeGroup}) a Psicología.`);
 
-      // Send in-app notifications
+      // Send in-app and email notifications
       if (sendNotification) {
         const targetRecipients: string[] = [];
         if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
-        if (selectedCoord?.email) targetRecipients.push(selectedCoord.email.toLowerCase());
+        else if (selectedCoord?.email) targetRecipients.push(selectedCoord.email.toLowerCase());
+
         if (selectedPsych?.uid) targetRecipients.push(selectedPsych.uid);
-        if (selectedPsych?.email) targetRecipients.push(selectedPsych.email.toLowerCase());
+        else if (selectedPsych?.email) targetRecipients.push(selectedPsych.email.toLowerCase());
+
         formData.additionalRecipients.forEach(r => {
           if (r.uid) targetRecipients.push(r.uid);
-          if (r.email) targetRecipients.push(r.email.toLowerCase());
+          else if (r.email) targetRecipients.push(r.email.toLowerCase());
         });
 
         await sendNotification(
@@ -227,32 +229,12 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           `Se ha registrado una canalización para el estudiante "${newRef.studentName}" (${newRef.gradeGroup}) por ${profile.name}.`,
           '',
           false,
-          { referralId: id, type: 'referral' }
+          { 
+            referralId: id, 
+            type: 'referral',
+            detailsHtml: `<strong>Estudiante:</strong> ${newRef.studentName} (${newRef.gradeGroup})<br/><strong>Remitido por:</strong> ${profile.name}<br/><strong>Motivo:</strong> ${newRef.reasonAndBackground}`
+          }
         );
-      }
-
-      // Send email notifications
-      const recipientEmails = new Set<string>();
-      if (selectedCoord?.email) recipientEmails.add(selectedCoord.email);
-      if (selectedPsych?.email) recipientEmails.add(selectedPsych.email);
-      formData.additionalRecipients.forEach(r => {
-        if (r.email) recipientEmails.add(r.email);
-      });
-
-      for (const email of recipientEmails) {
-        try {
-          await fetch('/api/send-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: email,
-              subject: `📋 Nueva Canalización: ${newRef.studentName} (${newRef.gradeGroup})`,
-              text: `Se ha registrado una nueva canalización psicopedagógica para el alumno "${newRef.studentName}" (${newRef.gradeGroup}) realizada por ${profile.name}.\n\nMotivo: ${newRef.reasonAndBackground}`
-            })
-          });
-        } catch (e) {
-          console.error("Error sending referral email:", e);
-        }
       }
 
       setIsModalOpen(false);
