@@ -1680,7 +1680,11 @@ export default function App() {
 
   const isAuthLoading = loading && !authTimeout;
 
-  return <AppContent user={user} loading={isAuthLoading} />;
+  return (
+    <ErrorBoundary>
+      <AppContent user={user} loading={isAuthLoading} />
+    </ErrorBoundary>
+  );
 }
 
 function AppContent({ user, loading }: { user: User | null | undefined, loading: boolean }) {
@@ -2138,6 +2142,27 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   }, [isSuperAdmin]);
 
+  const sendEmail = async (to: string, subject: string, html: string) => {
+    if (!to || !to.includes('@')) return { error: 'Invalid email' };
+    try {
+      const response = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: to.trim().toLowerCase(), subject, html })
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        console.warn('[EMAIL-WARN] Server returned email error:', data.error || data);
+      } else {
+        console.log('[EMAIL-SUCCESS] Email sent successfully to:', to);
+      }
+      return data;
+    } catch (error) {
+      console.error('Email request exception:', error);
+      return { error: String(error) };
+    }
+  };
+
   const sendNotification = async (
     userIdOrIds: string | string[],
     title: string,
@@ -2166,21 +2191,30 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
 
     const finalTargetUserIds = new Set<string>();
+    const targetEmails = new Set<string>();
     const rawTargets: string[] = Array.isArray(userIdOrIds) ? userIdOrIds : [userIdOrIds];
 
     const addTargetUser = (str: string) => {
       if (!str || typeof str !== 'string' || !str.trim()) return;
       const clean = str.trim();
       const cleanLower = clean.toLowerCase();
+
       const matched = allUsers.find(u =>
         u.uid === clean ||
         (u.email && u.email.toLowerCase() === cleanLower)
       );
+
       if (matched) {
         if (matched.uid) finalTargetUserIds.add(matched.uid);
-        if (matched.email) finalTargetUserIds.add(matched.email.toLowerCase());
+        if (matched.email && matched.email.includes('@')) {
+          finalTargetUserIds.add(matched.email.toLowerCase());
+          targetEmails.add(matched.email.toLowerCase());
+        }
       } else {
         finalTargetUserIds.add(cleanLower);
+        if (cleanLower.includes('@')) {
+          targetEmails.add(cleanLower);
+        }
       }
     };
 
@@ -2219,6 +2253,41 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         console.error("Error sending notification doc to:", userId, e);
       }
     }
+
+    // 5. Send Email Notification to all recipient emails (unless skipEmail is set)
+    if (systemSettings.emailNotificationsEnabled !== false && !extraData?.skipEmail && targetEmails.size > 0) {
+      const appTitle = systemSettings.appName || 'DASHBOARD DUNOR';
+      const formattedMsg = message.replace(/\n/g, '<br/>');
+
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.5px;">${title}</h1>
+            <p style="color: #c7d2fe; margin: 4px 0 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase;">${appTitle}</p>
+          </div>
+          <div style="padding: 24px; background-color: #ffffff;">
+            <div style="background-color: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 15px; color: #334155; line-height: 1.6;">
+              ${formattedMsg}
+            </div>
+
+            ${extraData.detailsHtml ? `<div style="background-color: #f1f5f9; padding: 16px; border-radius: 12px; border: 1px solid #cbd5e1; margin-bottom: 20px; font-size: 14px; color: #1e293b;">${extraData.detailsHtml}</div>` : ''}
+
+            <p style="font-size: 13px; color: #64748b; text-align: center; margin: 20px 0 0 0;">Ingresa a la plataforma para revisar los detalles y realizar el seguimiento correspondiente.</p>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 14px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8; font-weight: 500;">Notificación automática del Sistema ${appTitle}.</p>
+          </div>
+        </div>
+      `;
+
+      for (const targetEmail of targetEmails) {
+        if (targetEmail && targetEmail.includes('@')) {
+          sendEmail(targetEmail, title, emailHtml).catch(err => {
+            console.error("Error sending email notification to:", targetEmail, err);
+          });
+        }
+      }
+    }
   };
 
   const addLog = async (action: string, details?: string) => {
@@ -2233,27 +2302,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       });
     } catch (e) {
       console.error("Error adding log:", e);
-    }
-  };
-
-  const sendEmail = async (to: string, subject: string, html: string) => {
-    if (!to || !to.includes('@')) return { error: 'Invalid email' };
-    try {
-      const response = await fetch('/api/send-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: to.trim().toLowerCase(), subject, html })
-      });
-      const data = await response.json();
-      if (!response.ok || data.error) {
-        console.warn('[EMAIL-WARN] Server returned email error:', data.error || data);
-      } else {
-        console.log('[EMAIL-SUCCESS] Email sent successfully to:', to);
-      }
-      return data;
-    } catch (error) {
-      console.error('Email request exception:', error);
-      return { error: String(error) };
     }
   };
 

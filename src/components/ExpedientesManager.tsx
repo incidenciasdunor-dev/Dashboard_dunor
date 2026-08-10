@@ -515,6 +515,25 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         'Cambio de Estatus de Expediente',
         `Estatus del expediente de ${exp.studentName} cambiado a ${newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso'}.`
       );
+
+      if (sendNotification) {
+        const recipients = new Set<string>();
+        if (exp.psychologistEmail) recipients.add(exp.psychologistEmail.toLowerCase());
+        if (exp.teacherEmail) recipients.add(exp.teacherEmail.toLowerCase());
+        if (exp.notifiedCoordinatorEmail) recipients.add(exp.notifiedCoordinatorEmail.toLowerCase());
+        if (coordinators) {
+          coordinators.forEach(c => { if (c.email) recipients.add(c.email.toLowerCase()); });
+        }
+        const statusLabel = newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso';
+        await sendNotification(
+          Array.from(recipients),
+          `Estatus de Expediente Actualizado: ${exp.studentName}`,
+          `El expediente psicopedagógico del estudiante ${exp.studentName} (${exp.gradeGroup || ''}) ha cambiado a estatus "${statusLabel}" por ${profile.name}.`,
+          exp.id,
+          false,
+          { expedienteId: exp.id, type: 'expediente' }
+        );
+      }
     } catch (err) {
       console.error("Error updating status:", err);
       alert("Error al actualizar el estatus del expediente.");
