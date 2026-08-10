@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -19,6 +19,7 @@ import { ExpedientesManager } from './components/ExpedientesManager';
 import { InformeManager } from './components/InformeManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
+import { SystemModal, SystemModalState } from './components/SystemModal';
 import confetti from 'canvas-confetti';
 
 const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
@@ -1363,7 +1364,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         });
         setError(null);
         setResetSent(false);
-        alert("¡Tu contraseña ha sido restablecida e iniciaste sesión con éxito!");
+        // Password reset successful and logged in directly
         return;
       }
 
@@ -2441,11 +2442,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const handleSendTestBroadcast = async () => {
     if (!testSubject.trim() || !testBody.trim()) {
-      alert('Por favor escribe un asunto y un mensaje para la prueba.');
+      showSystemPopup('Campos requeridos', 'Por favor escribe un asunto y un mensaje para la prueba.', 'info');
       return;
     }
     if (!sendSystemNotifCheck && !sendEmailNotifCheck) {
-      alert('Debes seleccionar al menos un canal de envío (Notificación en App o Correo).');
+      showSystemPopup('Selección requerida', 'Debes seleccionar al menos un canal de envío (Notificación en App o Correo).', 'info');
       return;
     }
 
@@ -2478,7 +2479,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const targetUsers = Array.from(userMap.values());
 
       if (targetUsers.length === 0) {
-        alert('No se encontraron usuarios registrados en el sistema.');
+        showSystemPopup('Sin usuarios', 'No se encontraron usuarios registrados en el sistema.', 'info');
         setIsSendingTestBroadcast(false);
         return;
       }
@@ -2551,18 +2552,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         `Asunto: "${testSubject}". Usuarios alcanzados: ${targetUsers.length}. Notificaciones App: ${notifSuccessCount}, Correos procesados: ${emailSuccessCount}`
       );
 
-      const summaryText = `✅ ¡Prueba de envío completada con éxito!\n\n` +
-        `• Total de usuarios/correos alcanzados: ${targetUsers.length}\n` +
+      const summaryText = `Total de usuarios/correos alcanzados: ${targetUsers.length}\n` +
         `• Notificaciones en la app creadas: ${notifSuccessCount}\n` +
         `• Correos procesados por el servidor: ${emailSuccessCount}` +
         (emailErrorCount > 0 ? ` (${emailErrorCount} sin servidor SMTP activo - también puedes usar la opción "Abrir Cliente de Correo Directo")` : '');
 
       setTestBroadcastResult(summaryText);
-      alert(summaryText);
+      showSystemPopup('Prueba de envío completada', summaryText, 'success');
 
     } catch (error) {
       console.error("Error in handleSendTestBroadcast:", error);
-      alert("Ocurrió un error al procesar el mensaje de prueba.");
+      showSystemPopup('Error', "Ocurrió un error al procesar el mensaje de prueba.", 'error');
     } finally {
       setIsSendingTestBroadcast(false);
     }
@@ -2576,7 +2576,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const emails = Array.from(new Set(combinedUsers.map(u => u.email?.toLowerCase().trim()).filter(Boolean)));
 
       if (emails.length === 0) {
-        alert('No se encontraron correos registrados en el sistema.');
+        showSystemPopup('Sin correos', 'No se encontraron correos registrados en el sistema.', 'info');
         return;
       }
 
@@ -2587,7 +2587,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       window.open(`mailto:?bcc=${bcc}&subject=${subject}&body=${body}`, '_blank');
     } catch (e) {
       console.error("Error opening mailto:", e);
-      alert('Error al recopilar la lista de correos.');
+      showSystemPopup('Error', 'Error al recopilar la lista de correos.', 'error');
     }
   };
 
@@ -2756,15 +2756,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const markAllNotificationsAsRead = async () => {
     try {
-      const unread = notifications.filter(n => !n.read);
-      if (unread.length === 0) return;
+      if (notifications.length === 0) return;
       const batch = writeBatch(db);
-      unread.forEach(n => {
-        batch.update(doc(db, 'notifications', n.id), { read: true });
+      notifications.forEach(n => {
+        batch.delete(doc(db, 'notifications', n.id));
       });
       await batch.commit();
+      setNotifications([]);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'notifications/markAllRead');
+      handleFirestoreError(error, OperationType.DELETE, 'notifications/markAllRead');
     }
   };
 
@@ -3637,10 +3637,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         await addDoc(collection(db, 'incidents'), inc);
       }
 
-      alert('¡Base de datos restablecida e inicializada con éxito! Se cargaron los ajustes, usuarios principales e incidencias de ejemplo.');
+      showSystemPopup('Inicialización exitosa', '¡Base de datos restablecida e inicializada con éxito! Se cargaron los ajustes, usuarios principales e incidencias de ejemplo.', 'success');
     } catch (err: any) {
       console.error("Error seeding DB:", err);
-      alert("Error al inicializar la base de datos: " + (err?.message || err));
+      showSystemPopup('Error', "Error al inicializar la base de datos: " + (err?.message || err), 'error');
     } finally {
       setIsSeeding(false);
     }
@@ -3669,24 +3669,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       URL.revokeObjectURL(url);
 
       await addLog('Exportó respaldo de base de datos', 'Archivo JSON generado');
-      alert('✅ Base de datos exportada y respaldada exitosamente.');
+      showSystemPopup('Exportación exitosa', 'Base de datos exportada y respaldada exitosamente.', 'success');
     } catch (err: any) {
       console.error("Export DB error:", err);
-      alert("Error al exportar la base de datos: " + (err?.message || err));
+      showSystemPopup('Error', "Error al exportar la base de datos: " + (err?.message || err), 'error');
     } finally {
       setIsExportingDb(false);
     }
   };
 
-  const handleImportDatabaseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!confirm("⚠️ ¿Estás seguro de importar este archivo de base de datos? Se actualizarán o restaurarán los datos en Firestore.")) {
-      event.target.value = '';
-      return;
-    }
-
+  const processImportFile = async (file: File) => {
     setIsImportingDb(true);
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -3708,16 +3700,33 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         }
 
         await addLog('Importó respaldo de base de datos', `${restoredDocs} documentos restaurados`);
-        alert(`✅ Base de datos restaurada con éxito. Se procesaron ${restoredDocs} documentos.`);
+        showSystemPopup('Restauración exitosa', `Base de datos restaurada con éxito. Se procesaron ${restoredDocs} documentos.`, 'success');
       } catch (err: any) {
         console.error("Import DB error:", err);
-        alert("Error al procesar el archivo de importación JSON: " + (err?.message || err));
+        showSystemPopup('Error', "Error al procesar el archivo de importación JSON: " + (err?.message || err), 'error');
       } finally {
         setIsImportingDb(false);
-        event.target.value = '';
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleImportDatabaseFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const currentInput = event.target;
+    showSystemPopup(
+      'Importar base de datos',
+      '¿Estás seguro de importar este archivo de base de datos? Se actualizarán o restaurarán los datos en Firestore.',
+      'confirm',
+      () => {
+        processImportFile(file);
+        currentInput.value = '';
+      },
+      'Importar',
+      'Cancelar'
+    );
   };
 
   const handleLogoImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3725,7 +3734,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (!file) return;
 
     if (file.size > 8 * 1024 * 1024) {
-      alert('La imagen seleccionada supera los 8MB. Por favor elige una imagen más ligera.');
+      showSystemPopup('Archivo muy grande', 'La imagen seleccionada supera los 8MB. Por favor elige una imagen más ligera.', 'error');
       return;
     }
 
@@ -3773,7 +3782,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
             localStorage.setItem('app_logo_url', compressedDataUrl);
             await addLog('Actualización de Logotipo', 'Se subió y guardó un nuevo logotipo en la base de datos Firestore.');
-            alert('✅ Logotipo guardado permanentemente en la base de datos Firestore.');
+            showSystemPopup('Logotipo actualizado', 'Logotipo guardado permanentemente en la base de datos Firestore.', 'success');
           }
         } catch (err) {
           console.error("Error processing logo image:", err);
@@ -4238,11 +4247,21 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <div className="flex items-center justify-between mb-8">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
                 <div>
                   <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Notificaciones</h1>
                   <p className="text-slate-500 dark:text-slate-400">Mantente al día con tus reportes</p>
                 </div>
+                {notifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={markAllNotificationsAsRead}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-bold text-xs rounded-xl transition-all border border-indigo-200 dark:border-indigo-800 shadow-sm cursor-pointer self-start sm:self-auto"
+                  >
+                    <CheckCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>Marcar todos como leídos</span>
+                  </button>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -6512,6 +6531,21 @@ const TaskManager = ({
   highlightedTaskId?: string | null;
   onClearHighlightedTask?: () => void;
 }) => {
+  const [sysModal, setSysModal] = useState<SystemModalState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showSystemPopup = (
+    title: string,
+    message: string,
+    type: 'success' | 'error' | 'warning' | 'info' | 'confirm' = 'info'
+  ) => {
+    setSysModal({ isOpen: true, title, message, type });
+  };
+
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -6639,7 +6673,7 @@ const TaskManager = ({
     e.preventDefault();
     const recipientsToNotify = getRecipientsForTarget(taskFormData.targetType, taskFormData.selectedEmails);
     if (recipientsToNotify.length === 0) {
-      alert("Por favor selecciona al menos un destinatario para la tarea.");
+      showSystemPopup("Selección requerida", "Por favor selecciona al menos un destinatario para la tarea.", "info");
       return;
     }
 
@@ -6699,24 +6733,24 @@ const TaskManager = ({
       await addLog('Asignó tarea(s)', `Título: ${taskFormData.title}, Destinatarios: ${recipientsToNotify.length}`);
       setShowAssignModal(false);
       setTaskFormData({ title: '', description: '', dueDate: format(new Date(Date.now() + 7 * 86400000), 'yyyy-MM-dd'), targetType: 'SPECIFIC', selectedEmails: [] });
-      alert("✅ Tarea(s) asignada(s) correctamente.");
+      showSystemPopup("Tarea asignada", "Tarea(s) asignada(s) correctamente.", "success");
     } catch (error) {
       console.error("Error creating task:", error);
-      alert("Error al asignar la tarea.");
+      showSystemPopup("Error", "Error al asignar la tarea.", "error");
     }
   };
 
   const handleSendCongratulation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!congratFormData.message.trim()) {
-      alert("Por favor escribe el mensaje de felicitación.");
+      showSystemPopup("Campo requerido", "Por favor escribe el mensaje de felicitación.", "info");
       return;
     }
 
     const recipientsToNotify = getRecipientsForTarget(congratFormData.targetType, congratFormData.selectedEmails);
 
     if (recipientsToNotify.length === 0) {
-      alert("No se encontraron destinatarios.");
+      showSystemPopup("Sin destinatarios", "No se encontraron destinatarios.", "info");
       return;
     }
 
@@ -6777,10 +6811,10 @@ const TaskManager = ({
       await addLog('Envió mensaje de felicitación', `Título: ${congratFormData.title}, Destinatarios: ${recipientsToNotify.length}`);
       setShowCongratulationModal(false);
       setCongratFormData({ targetType: 'SPECIFIC', selectedEmails: [], title: '¡Felicitaciones y Reconocimiento!', message: '' });
-      alert("✅ Mensaje de felicitación enviado y registrado en Tareas correctamente.");
+      showSystemPopup("Felicitación enviada", "Mensaje de felicitación enviado y registrado en Tareas correctamente.", "success");
     } catch (err) {
       console.error("Error sending congratulation:", err);
-      alert("Error al enviar la felicitación.");
+      showSystemPopup("Error", "Error al enviar la felicitación.", "error");
     }
   };
 
@@ -6804,7 +6838,7 @@ const TaskManager = ({
 
   const handleSubmitEvidence = async (task: Task) => {
     if (!evidenceText.trim()) {
-      alert("Por favor describe la evidencia o el trabajo realizado.");
+      showSystemPopup("Campo requerido", "Por favor describe la evidencia o el trabajo realizado.", "info");
       return;
     }
     try {
@@ -7391,6 +7425,8 @@ const TaskManager = ({
           </div>
         )}
       </AnimatePresence>
+
+      <SystemModal modal={sysModal} onClose={() => setSysModal(prev => ({ ...prev, isOpen: false }))} />
     </div>
   );
 };
@@ -7408,6 +7444,21 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   systemSettings: SystemSettings,
   firestoreRolePermissions?: Partial<RolePermissionsMap>
 }) => {
+  const [sysModal, setSysModal] = useState<SystemModalState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showSystemPopup = (
+    title: string,
+    message: string,
+    type: 'success' | 'error' | 'warning' | 'info' | 'confirm' = 'info'
+  ) => {
+    setSysModal({ isOpen: true, title, message, type });
+  };
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [userToEditPermissions, setUserToEditPermissions] = useState<UserProfile | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
@@ -7483,7 +7534,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   const deleteUser = async (userToDelete: UserProfile) => {
     // Rule 1: Coordinator cannot delete themselves or other coordinators
     if (isCoordinator && (userToDelete.role === 'COORDINATOR' || userToDelete.email.toLowerCase() === profile.email.toLowerCase())) {
-      alert("Un coordinador no puede eliminarse a sí mismo ni a otros coordinadores.");
+      showSystemPopup("Acción no permitida", "Un coordinador no puede eliminarse a sí mismo ni a otros coordinadores.", "info");
       return;
     }
 
@@ -7586,17 +7637,17 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           customPermissions: deleteField()
         });
         await addLog('Restableció permisos de usuario', `Usuario: ${userToUpdate.name} (${userToUpdate.email})`);
-        alert(`✅ Permisos de ${userToUpdate.name} restablecidos a las preferencias por defecto de su rol.`);
+        showSystemPopup("Permisos restablecidos", `Permisos de ${userToUpdate.name} restablecidos a las preferencias por defecto de su rol.`, "success");
       } else {
         await updateDoc(doc(db, 'users', emailId), {
           customPermissions: newPermissions
         });
         await addLog('Actualizó permisos individuales de usuario', `Usuario: ${userToUpdate.name} (${userToUpdate.email})`);
-        alert(`✅ Permisos individuales de ${userToUpdate.name} guardados con éxito en la base de datos Firestore.`);
+        showSystemPopup("Permisos guardados", `Permisos individuales de ${userToUpdate.name} guardados con éxito en la base de datos Firestore.`, "success");
       }
     } catch (error) {
       console.error("Error updating user permissions:", error);
-      alert("Error al actualizar los permisos del usuario en la base de datos.");
+      showSystemPopup("Error", "Error al actualizar los permisos del usuario en la base de datos.", "error");
     }
   };
 
@@ -7929,6 +7980,8 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           </div>
         )}
       </AnimatePresence>
+
+      <SystemModal modal={sysModal} onClose={() => setSysModal(prev => ({ ...prev, isOpen: false }))} />
     </div>
   );
 };

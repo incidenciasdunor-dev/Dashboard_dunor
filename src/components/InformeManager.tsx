@@ -6,10 +6,11 @@ import {
   ChevronDown, Send, UserCheck, RefreshCw, MessageSquare, PieChart,
   ClipboardList
 } from 'lucide-react';
-import { UserProfile, Expediente, Referral } from '../types';
+import { UserProfile, Expediente, Referral, normalizeUserRole } from '../types';
 import { cn } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, setDoc, doc } from 'firebase/firestore';
+import { SystemModal, SystemModalState } from './SystemModal';
 
 export interface SharedReportStudentCard {
   expedienteId: string;
@@ -64,11 +65,12 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   sendNotification,
   addLog
 }) => {
-  const isPsychologist = profile.role === 'PSYCHOLOGIST';
-  const isAdmin = profile.role === 'ADMIN';
-  const isSuperAdmin = profile.email?.toLowerCase().includes('dunor') || profile.role === 'ADMIN';
-  const isDirective = profile.role === 'DIRECTIVE';
-  const isCoordinator = profile.role === 'COORDINATOR';
+  const normRole = normalizeUserRole(profile.role);
+  const isPsychologist = normRole === 'PSYCHOLOGIST';
+  const isAdmin = normRole === 'ADMIN';
+  const isSuperAdmin = profile.email?.toLowerCase().includes('dunor') || normRole === 'ADMIN';
+  const isDirective = normRole === 'DIRECTIVE';
+  const isCoordinator = normRole === 'COORDINATOR';
 
   const canCreateAndShare = isPsychologist || isAdmin || isSuperAdmin;
 
@@ -76,6 +78,18 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'MASTER' | 'SHARED'>(
     canCreateAndShare ? 'MASTER' : 'SHARED'
   );
+
+  // Custom System Modal State
+  const [sysModal, setSysModal] = useState<SystemModalState>({
+    isOpen: false,
+    type: 'info',
+    title: '',
+    message: ''
+  });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setSysModal({ isOpen: true, type, title, message });
+  };
 
   // Filters for Master Report
   const [gradeFilter, setGradeFilter] = useState<string>('ALL');
@@ -117,11 +131,11 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
         // Sort by share date desc
         reports.sort((a, b) => (b.sharedAt || 0) - (a.sharedAt || 0));
 
-        // Filter reports visible to current user
+        // Filter reports visible to current user (Directive and Coordinator only view reports shared with them)
         const userEmailLower = profile.email?.toLowerCase();
         const visibleReports = reports.filter(r => {
-          if (isSuperAdmin || isAdmin || r.sharedByEmail?.toLowerCase() === userEmailLower) return true;
-          return r.recipients?.some(rec => rec.email?.toLowerCase() === userEmailLower);
+          if (isSuperAdmin || isAdmin || (isPsychologist && r.sharedByEmail?.toLowerCase() === userEmailLower)) return true;
+          return r.recipients?.some(rec => (rec.email && userEmailLower && rec.email.toLowerCase() === userEmailLower) || (profile.uid && rec.uid === profile.uid));
         });
 
         setSharedReports(visibleReports);
@@ -133,7 +147,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
     } catch (err) {
       console.error("Failed to setup shared_reports listener:", err);
     }
-  }, [profile, isAdmin, isSuperAdmin]);
+  }, [profile, isAdmin, isSuperAdmin, isPsychologist]);
 
   // Combine recipient options
   const allAvailableRecipients = useMemo(() => {
@@ -319,7 +333,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       const newText = text.substring(0, start) + redacted + text.substring(end);
       setter(newText);
     } else {
-      alert("🖍️ Marcatextos Negro: Por favor selecciona primero las palabras con el ratón o cursor para censurarlas, o usa el modo 'Tocar Palabras'.");
+      showAlert("Marcatextos Negro", "Por favor selecciona primero las palabras con el ratón o cursor para censurarlas, o usa el modo 'Tocar Palabras'.", "info");
     }
   };
 
@@ -354,7 +368,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   // Handle Save & Send Shared Report
   const handleConfirmAndSendSharedReport = async () => {
     if (selectedRecipients.length === 0) {
-      alert("Por favor selecciona al menos un destinatario para compartir el informe.");
+      showAlert("Seleccionar destinatarios", "Por favor selecciona al menos un destinatario para compartir el informe.", "info");
       return;
     }
 
@@ -407,13 +421,13 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
         );
       }
 
-      alert(`✅ ¡Informe compartido enviado con éxito a ${selectedRecipients.length} destinatario(s)!`);
+      showAlert("Envío exitoso", `¡Informe compartido enviado con éxito a ${selectedRecipients.length} destinatario(s)!`, "success");
       setIsShareModalOpen(false);
       setActiveSubTab('SHARED');
       setSelectedSharedReport(payload);
     } catch (err) {
       console.error("Error saving shared report:", err);
-      alert("Ocurrió un error al enviar el informe compartido.");
+      showAlert("Error", "Ocurrió un error al enviar el informe compartido.", "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -1136,6 +1150,9 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Custom System Modal */}
+      <SystemModal modal={sysModal} onClose={() => setSysModal(prev => ({ ...prev, isOpen: false }))} />
     </div>
   );
 };

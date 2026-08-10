@@ -33,6 +33,7 @@ import {
 import { doc, setDoc, updateDoc, deleteDoc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
+import { SystemModal, SystemModalState } from './SystemModal';
 
 interface ExpedientesManagerProps {
   expedientes: Expediente[];
@@ -76,6 +77,22 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState(false);
+
+  // Custom System Modal State
+  const [sysModal, setSysModal] = useState<SystemModalState>({
+    isOpen: false,
+    type: 'info',
+    title: '',
+    message: ''
+  });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setSysModal({ isOpen: true, type, title, message });
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void, type: 'confirm' | 'danger' = 'confirm', confirmText = 'Confirmar') => {
+    setSysModal({ isOpen: true, type, title, message, onConfirm, confirmText });
+  };
 
   // Subscribe to shared_expedientes collection in Firestore
   useEffect(() => {
@@ -219,11 +236,11 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   // Open Share / Redaction Modal
   const handleOpenShareModal = () => {
     if (!formData.studentName.trim() || !formData.reasonAndBackground.trim()) {
-      alert('Por favor completa primero el Nombre del Alumno y los Motivos de la Ficha antes de preparar la copia compartida.');
+      showAlert('Campos requeridos', 'Por favor completa primero el Nombre del Alumno y los Motivos de la Ficha antes de preparar la copia compartida.', 'info');
       return;
     }
     if (selectedRecipients.length === 0) {
-      alert('Por favor selecciona al menos un Coordinador o Directivo para compartir.');
+      showAlert('Seleccionar destinatarios', 'Por favor selecciona al menos un Coordinador o Directivo para compartir.', 'info');
       return;
     }
 
@@ -261,7 +278,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       const newText = currentText.substring(0, start) + redactedSelection + currentText.substring(end);
       setSharedCopyData(prev => ({ ...prev, [sectionKey]: newText }));
     } else {
-      alert("🖍️ Marcatextos Negro: Por favor selecciona con el cursor o ratón las palabras específicas que deseas censurar en negro, o utiliza el modo '🖍️ Marcatextos (Un Toque)' para marcar palabras directamente.");
+      showAlert('Marcatextos Negro', "Por favor selecciona con el cursor o ratón las palabras específicas que deseas censurar en negro, o utiliza el modo '🖍️ Marcatextos (Un Toque)' para marcar palabras directamente.", 'info');
     }
   };
 
@@ -299,16 +316,20 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const handleSaveExpediente = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!formData.studentName.trim() || !formData.reasonAndBackground.trim()) {
-      alert('Por favor completa el Nombre del Alumno y Motivos de la Ficha.');
+      showAlert('Campos requeridos', 'Por favor completa el Nombre del Alumno y Motivos de la Ficha.', 'info');
       return;
     }
 
     // If user selected recipients but clicked "Guardar Cambios" directly, prompt them to open share modal
     if (selectedRecipients.length > 0 && !isShareModalOpen) {
-      if (confirm(`Has seleccionado ${selectedRecipients.length} destinatario(s). ¿Deseas abrir la vista para preparar y censurar la copia compartida antes de enviar?`)) {
-        handleOpenShareModal();
-        return;
-      }
+      showConfirm(
+        'Preparar copia compartida',
+        `Has seleccionado ${selectedRecipients.length} destinatario(s). ¿Deseas abrir la vista para preparar y censurar la copia compartida antes de enviar?`,
+        () => handleOpenShareModal(),
+        'confirm',
+        'Abrir vista compartida'
+      );
+      return;
     }
 
     setIsSubmitting(true);
@@ -354,12 +375,12 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       setSaveSuccessMessage(true);
       setTimeout(() => setSaveSuccessMessage(false), 4000);
 
-      alert(`✅ Expediente maestro ${editingExpedienteId ? 'actualizado' : 'guardado'} exitosamente en la base de datos.`);
+      showAlert('¡Guardado exitoso!', `Expediente maestro ${editingExpedienteId ? 'actualizado' : 'guardado'} exitosamente en la base de datos.`, 'success');
       setViewMode('LIST');
       resetForm();
     } catch (err) {
       console.error("Error saving expediente:", err);
-      alert("Error al guardar el expediente.");
+      showAlert('Error', "Error al guardar el expediente.", 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -444,13 +465,13 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         `Alumno: ${formData.studentName}. Destinatarios (${selectedRecipients.length}): ${selectedUsersData.map(u => `${u.name} (${u.roleLabel})`).join(', ')}`
       );
 
-      alert(`✅ ¡Copia compartida enviada con éxito a ${selectedRecipients.length} usuario(s) seleccionado(s)!\n\nEl expediente original en la base de datos se guardó completo sin sufrir modificaciones.`);
+      showAlert('Envío exitoso', `¡Copia compartida enviada con éxito a ${selectedRecipients.length} usuario(s) seleccionado(s)!\n\nEl expediente original en la base de datos se guardó completo sin sufrir modificaciones.`, 'success');
       setIsShareModalOpen(false);
       setViewMode('LIST');
       resetForm();
     } catch (err) {
       console.error("Error sending shared copy:", err);
-      alert("Error al enviar la copia compartida.");
+      showAlert('Error', "Error al enviar la copia compartida.", 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -536,34 +557,48 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       }
     } catch (err) {
       console.error("Error updating status:", err);
-      alert("Error al actualizar el estatus del expediente.");
+      showAlert('Error', "Error al actualizar el estatus del expediente.", 'error');
     }
   };
 
   // Delete expediente
-  const handleDeleteExpediente = async (id: string, studentName: string) => {
-    if (!confirm(`¿Estás seguro de eliminar el expediente de ${studentName}?`)) return;
-    try {
-      await deleteDoc(doc(db, 'expedientes', id));
-      await addLog('Eliminación de Expediente', `Se eliminó la ficha psicopedagógica de ${studentName}.`);
-      alert('Expediente eliminado correctamente.');
-    } catch (e) {
-      console.error("Error deleting expediente:", e);
-      alert("Error al eliminar el expediente.");
-    }
+  const handleDeleteExpediente = (id: string, studentName: string) => {
+    showConfirm(
+      'Eliminar expediente',
+      `¿Estás seguro de eliminar el expediente de ${studentName}? Esta acción no se puede deshacer.`,
+      async () => {
+        try {
+          await deleteDoc(doc(db, 'expedientes', id));
+          await addLog('Eliminación de Expediente', `Se eliminó la ficha psicopedagógica de ${studentName}.`);
+          showAlert('Eliminado', 'Expediente eliminado correctamente.', 'success');
+        } catch (e) {
+          console.error("Error deleting expediente:", e);
+          showAlert('Error', "Error al eliminar el expediente.", 'error');
+        }
+      },
+      'danger',
+      'Eliminar'
+    );
   };
 
   // Delete shared expediente
-  const handleDeleteSharedExpediente = async (id: string, studentName: string) => {
-    if (!confirm(`¿Estás seguro de eliminar la copia compartida de ${studentName}?`)) return;
-    try {
-      await deleteDoc(doc(db, 'shared_expedientes', id));
-      await addLog('Eliminación de Copia Compartida', `Se eliminó la copia de expediente para ${studentName}.`);
-      alert('Copia compartida eliminada correctamente.');
-    } catch (e) {
-      console.error("Error deleting shared expediente:", e);
-      alert("Error al eliminar la copia compartida.");
-    }
+  const handleDeleteSharedExpediente = (id: string, studentName: string) => {
+    showConfirm(
+      'Eliminar copia compartida',
+      `¿Estás seguro de eliminar la copia compartida de ${studentName}?`,
+      async () => {
+        try {
+          await deleteDoc(doc(db, 'shared_expedientes', id));
+          await addLog('Eliminación de Copia Compartida', `Se eliminó la copia de expediente para ${studentName}.`);
+          showAlert('Eliminado', 'Copia compartida eliminada correctamente.', 'success');
+        } catch (e) {
+          console.error("Error deleting shared expediente:", e);
+          showAlert('Error', "Error al eliminar la copia compartida.", 'error');
+        }
+      },
+      'danger',
+      'Eliminar'
+    );
   };
 
   // File Attachment handler
@@ -571,7 +606,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 1024 * 1024) {
-        alert("El archivo excede el tamaño máximo permitido de 1MB.");
+        showAlert('Archivo muy grande', "El archivo excede el tamaño máximo permitido de 1MB.", 'error');
         return;
       }
       const reader = new FileReader();
@@ -595,7 +630,18 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     );
   });
 
+  const userEmailLower = profile.email?.toLowerCase();
   const filteredSharedExpedientes = sharedExpedientes.filter(exp => {
+    // Requirement 1: Directives and Coordinators (and non-psychologists/admins) only view expedientes shared with them
+    if (isDirectiveOrCoordinator || !isPsychologist) {
+      const isRecipient = Array.isArray(exp.recipients) && exp.recipients.some((r: any) => 
+        (r.uid && profile.uid && r.uid === profile.uid) || 
+        (r.email && userEmailLower && r.email.toLowerCase() === userEmailLower)
+      );
+      const isOwner = exp.sharedByEmail && userEmailLower && exp.sharedByEmail.toLowerCase() === userEmailLower;
+      if (!isRecipient && !isOwner) return false;
+    }
+
     const term = searchTerm.toLowerCase();
     return (
       exp.studentName?.toLowerCase().includes(term) ||
@@ -1500,6 +1546,9 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Custom System Modal */}
+      <SystemModal modal={sysModal} onClose={() => setSysModal(prev => ({ ...prev, isOpen: false }))} />
     </div>
   );
 };

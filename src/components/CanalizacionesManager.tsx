@@ -19,6 +19,7 @@ import {
   UserProfile,
   normalizeUserRole
 } from '../types';
+import { SystemModal, SystemModalState } from './SystemModal';
 import { doc, setDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
@@ -59,6 +60,17 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
+
+  const [sysModal, setSysModal] = useState<SystemModalState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    setSysModal({ isOpen: true, title, message, type });
+  };
 
   // Effect to auto-expand and scroll to highlighted referral when redirected from notifications
   useEffect(() => {
@@ -175,7 +187,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const handleCreateReferral = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.studentName.trim() || !formData.reasonAndBackground.trim()) {
-      alert('Por favor completa los campos obligatorios (*)');
+      showAlert('Campos obligatorios', 'Por favor completa los campos obligatorios (*)', 'info');
       return;
     }
 
@@ -247,10 +259,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         reasonAndBackground: '',
         teacherStrategies: ''
       });
-      alert('✅ Canalización enviada con éxito.');
+      showAlert('Canalización enviada', 'Canalización enviada con éxito.', 'success');
     } catch (err) {
       console.error("Error creating referral:", err);
-      alert("Error al enviar la canalización.");
+      showAlert('Error', "Error al enviar la canalización.", 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -368,7 +380,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       setTimeout(() => setSaveSuccessId(null), 3000);
     } catch (err) {
       console.error("Error saving psychologist comment:", err);
-      alert("Error al guardar el comentario.");
+      showAlert('Error', "Error al guardar el comentario.", 'error');
     } finally {
       setSavingCommentId(null);
     }
@@ -880,6 +892,11 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           </div>
         </div>
       )}
+
+      <SystemModal
+        state={sysModal}
+        onClose={() => setSysModal(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };
