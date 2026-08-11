@@ -6661,9 +6661,12 @@ const TaskManager = ({
   const showSystemPopup = (
     title: string,
     message: string,
-    type: 'success' | 'error' | 'warning' | 'info' | 'confirm' = 'info'
+    type: 'success' | 'error' | 'warning' | 'info' | 'confirm' = 'info',
+    onConfirm?: () => void,
+    confirmText?: string,
+    cancelText?: string
   ) => {
-    setSysModal({ isOpen: true, title, message, type });
+    setSysModal({ isOpen: true, title, message, type, onConfirm, confirmText, cancelText });
   };
 
   const [showAssignModal, setShowAssignModal] = useState(false);
@@ -6758,8 +6761,32 @@ const TaskManager = ({
     });
   }, [tasks, profile, systemSettings]);
 
-  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdminEmail(profile.email);
+  const isSuperAdmin = isSuperAdminEmail(profile?.email);
+  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin;
+  const canDeleteRecords = canCreateTask || canSendCongratulations || isDirectiveOrAdmin || isSuperAdmin;
   const assignableUsers = [...coordinators, ...teachers, ...psychologists];
+
+  const handleDeleteTask = (taskToDelete: Task, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    showSystemPopup(
+      'Eliminar Registro',
+      `¿Estás seguro de que deseas eliminar permanentemente el registro "${taskToDelete.title}"? Esta acción no se puede deshacer.`,
+      'confirm',
+      async () => {
+        try {
+          await deleteDoc(doc(db, 'tasks', taskToDelete.id));
+          await addLog('Eliminó registro de tarea/felicitación', `Título: ${taskToDelete.title}, Asignado a: ${taskToDelete.assignedToName}`);
+          if (selectedTask?.id === taskToDelete.id) {
+            setSelectedTask(null);
+          }
+          showSystemPopup('Registro eliminado', 'El registro ha sido eliminado con éxito.', 'success');
+        } catch (err) {
+          console.error("Error deleting task:", err);
+          showSystemPopup('Error', 'Ocurrió un error al intentar eliminar el registro.', 'error');
+        }
+      }
+    );
+  };
 
   const [taskFormData, setTaskFormData] = useState({
     title: '',
@@ -7141,7 +7168,19 @@ const TaskManager = ({
                       )}
                     </div>
                   </div>
-                  <div>{getStatusBadge(t)}</div>
+                  <div className="flex items-center gap-2">
+                    <div>{getStatusBadge(t)}</div>
+                    {(canDeleteRecords || t.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteTask(t, e)}
+                        title="Eliminar registro"
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <p className="text-sm text-slate-600 line-clamp-2">{t.description}</p>
@@ -7422,7 +7461,20 @@ const TaskManager = ({
                   <h2 className="text-2xl font-bold text-slate-900">{selectedTask.title}</h2>
                   <p className="text-xs text-slate-500 mt-1">Asignada a <strong>{selectedTask.assignedToName}</strong> por {selectedTask.createdByName}</p>
                 </div>
-                <button onClick={() => setSelectedTask(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl"><X className="w-5 h-5" /></button>
+                <div className="flex items-center gap-2">
+                  {(canDeleteRecords || selectedTask.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteTask(selectedTask, e)}
+                      title="Eliminar registro"
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-red-200 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Eliminar</span>
+                    </button>
+                  )}
+                  <button onClick={() => setSelectedTask(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer"><X className="w-5 h-5" /></button>
+                </div>
               </div>
 
               <div className="space-y-4">
