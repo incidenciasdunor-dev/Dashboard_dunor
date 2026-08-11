@@ -23,7 +23,8 @@ import {
   ShieldAlert,
   X,
   RotateCcw,
-  Printer
+  Printer,
+  UserPlus
 } from 'lucide-react';
 import {
   Expediente,
@@ -42,6 +43,8 @@ interface ExpedientesManagerProps {
   profile: UserProfile;
   coordinators: UserProfile[];
   directives?: UserProfile[];
+  teachers?: UserProfile[];
+  psychologists?: UserProfile[];
   addLog: (action: string, details?: string) => Promise<void>;
   sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean) => Promise<void>;
   canManageExpedientes?: boolean;
@@ -56,6 +59,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   profile,
   coordinators = [],
   directives = [],
+  teachers = [],
+  psychologists = [],
   addLog,
   sendNotification,
   canManageExpedientes = true,
@@ -75,6 +80,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   // Shared expedientes state
   const [sharedExpedientes, setSharedExpedientes] = useState<any[]>([]);
   const [selectedSharedExpediente, setSelectedSharedExpediente] = useState<any | null>(null);
+  const [sharedModalRecipients, setSharedModalRecipients] = useState<string[]>([]);
+  const [isUpdatingRecipients, setIsUpdatingRecipients] = useState(false);
   const [listTab, setListTab] = useState<'SHARED' | 'MASTER'>(isDirectiveOrCoordinator || !allowManageExpedientes ? 'SHARED' : 'MASTER');
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -156,7 +163,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     latestProgress: ''
   });
 
-  // Unique list of Coordinators and Directives
+  // Unique list of Coordinators, Directives, Teachers, and Psychologists
   const allAvailableRecipients = React.useMemo(() => {
     const list: { email: string; name: string; roleLabel: string; uid?: string }[] = [];
     const emailsSeen = new Set<string>();
@@ -175,8 +182,22 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       }
     });
 
+    (teachers || []).forEach(t => {
+      if (t.email && !emailsSeen.has(t.email.toLowerCase())) {
+        emailsSeen.add(t.email.toLowerCase());
+        list.push({ email: t.email, name: t.name || 'Docente', roleLabel: 'Docente', uid: t.uid });
+      }
+    });
+
+    (psychologists || []).forEach(p => {
+      if (p.email && !emailsSeen.has(p.email.toLowerCase())) {
+        emailsSeen.add(p.email.toLowerCase());
+        list.push({ email: p.email, name: p.name || 'Psicólogo', roleLabel: 'Psicólogo', uid: p.uid });
+      }
+    });
+
     return list;
-  }, [coordinators, directives]);
+  }, [coordinators, directives, teachers, psychologists]);
 
   // Handle preselected referral if passed
   useEffect(() => {
@@ -591,6 +612,62 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       showAlert('Error', "Error al enviar la copia compartida.", 'error');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Open shared copy modal and pre-load recipients
+  const handleOpenSharedExpedienteModal = (exp: any) => {
+    setSelectedSharedExpediente(exp);
+    const existingEmails = (exp.recipients || []).map((r: any) => r.email).filter(Boolean);
+    setSharedModalRecipients(existingEmails);
+  };
+
+  // Update recipients for an already created shared expediente
+  const handleUpdateSharedCopyRecipients = async () => {
+    if (!selectedSharedExpediente || !selectedSharedExpediente.id) return;
+    setIsUpdatingRecipients(true);
+    try {
+      const updatedRecipientsData = allAvailableRecipients.filter(r => sharedModalRecipients.includes(r.email));
+      const oldEmails = (selectedSharedExpediente.recipients || []).map((r: any) => r.email);
+      const newlyAdded = updatedRecipientsData.filter(r => !oldEmails.includes(r.email));
+
+      await updateDoc(doc(db, 'shared_expedientes', selectedSharedExpediente.id), {
+        recipients: updatedRecipientsData,
+        updatedAt: Date.now()
+      });
+
+      if (sendNotification && newlyAdded.length > 0) {
+        const recipientTargets = newlyAdded.map(u => u.uid || u.email).filter(Boolean);
+        if (recipientTargets.length > 0) {
+          await sendNotification(
+            recipientTargets,
+            `📄 Ficha de Expediente Compartida: ${selectedSharedExpediente.studentName}`,
+            `${profile.name || 'Psicología'} te ha otorgado acceso al expediente psicopedagógico compartido de ${selectedSharedExpediente.studentName} (${selectedSharedExpediente.gradeGroup || 'S/G'}).`,
+            selectedSharedExpediente.expedienteId || selectedSharedExpediente.id
+          );
+        }
+      }
+
+      await addLog(
+        'Actualización de destinatarios en expediente compartido',
+        `Alumno: ${selectedSharedExpediente.studentName}. Total destinatarios: ${updatedRecipientsData.length}. Nuevos: ${newlyAdded.map(u => u.name).join(', ') || 'Ninguno'}`
+      );
+
+      setSelectedSharedExpediente((prev: any) => ({
+        ...prev,
+        recipients: updatedRecipientsData
+      }));
+
+      showAlert(
+        'Destinatarios actualizados',
+        `Se actualizó la lista de destinatarios para este expediente compartido con éxito.${newlyAdded.length > 0 ? ` Se envió una notificación a ${newlyAdded.length} nuevo(s) destinatario(s).` : ''}`,
+        'success'
+      );
+    } catch (err) {
+      console.error("Error updating shared copy recipients:", err);
+      showAlert('Error', "Error al actualizar los destinatarios del expediente compartido.", 'error');
+    } finally {
+      setIsUpdatingRecipients(false);
     }
   };
 
@@ -1445,7 +1522,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                       <div className="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
-                          onClick={() => setSelectedSharedExpediente(exp)}
+                          onClick={() => handleOpenSharedExpedienteModal(exp)}
                           className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
                         >
                           <Eye className="w-3.5 h-3.5" />
@@ -1676,6 +1753,109 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                   </a>
                 </div>
               )}
+
+              {/* Recipients and Additional Sharing Section */}
+              <div className="bg-indigo-50/70 p-4 rounded-2xl border border-indigo-200 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h4 className="font-bold text-indigo-950 flex items-center gap-1.5 uppercase text-[11px]">
+                    <Users className="w-4 h-4 text-indigo-600" /> Destinatarios con Acceso a esta Copia
+                  </h4>
+                  {allowManageExpedientes && (
+                    <span className="text-[10px] font-extrabold text-indigo-800 bg-indigo-100 px-2.5 py-1 rounded-full border border-indigo-200">
+                      {sharedModalRecipients.length} Destinatario(s) Seleccionado(s)
+                    </span>
+                  )}
+                </div>
+
+                {/* Badges of current recipients */}
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedSharedExpediente.recipients && selectedSharedExpediente.recipients.length > 0 ? (
+                    selectedSharedExpediente.recipients.map((r: any, idx: number) => (
+                      <span key={r.email || idx} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-indigo-200 text-indigo-950 rounded-lg text-[11px] font-bold shadow-2xs">
+                        <User className="w-3 h-3 text-indigo-600" />
+                        <span>{r.name}</span>
+                        <span className="text-[10px] font-semibold text-slate-500">({r.roleLabel || 'Usuario'})</span>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-slate-500 text-[11px] italic">Sin destinatarios asignados.</span>
+                  )}
+                </div>
+
+                {/* For Psychologist / Psychopedagogical staff: Ability to add/edit recipients */}
+                {allowManageExpedientes && (
+                  <div className="pt-3 border-t border-indigo-200/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1">
+                        <UserPlus className="w-3.5 h-3.5 text-indigo-600" />
+                        Compartir también con otros usuarios
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        Selecciona o desmarca destinatarios para actualizar los permisos de esta copia
+                      </span>
+                    </div>
+
+                    {allAvailableRecipients.length === 0 ? (
+                      <p className="text-xs text-slate-500 italic bg-white p-2.5 rounded-xl border border-slate-200">
+                        No hay usuarios adicionales registrados en el sistema.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto p-2 bg-white/80 rounded-xl border border-indigo-100">
+                        {allAvailableRecipients.map(user => {
+                          const isSelected = sharedModalRecipients.includes(user.email);
+                          return (
+                            <label
+                              key={user.email}
+                              onClick={() => {
+                                setSharedModalRecipients(prev =>
+                                  prev.includes(user.email)
+                                    ? prev.filter(e => e !== user.email)
+                                    : [...prev, user.email]
+                                );
+                              }}
+                              className={cn(
+                                "flex items-center gap-2 p-2 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer select-none",
+                                isSelected
+                                  ? "bg-indigo-50 border-indigo-300 text-indigo-900 shadow-xs"
+                                  : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                              )}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}} // handled by parent container click
+                                className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <div className="flex flex-col min-w-0">
+                                <span className="truncate font-bold">{user.name}</span>
+                                <span className={cn("text-[9px] truncate", isSelected ? "text-indigo-700 font-semibold" : "text-slate-500")}>
+                                  {user.roleLabel} • {user.email}
+                                </span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={handleUpdateSharedCopyRecipients}
+                        disabled={isUpdatingRecipients}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isUpdatingRecipients ? (
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Send className="w-3.5 h-3.5" />
+                        )}
+                        <span>Guardar y Notificar Nuevos Destinatarios</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Modal Footer */}

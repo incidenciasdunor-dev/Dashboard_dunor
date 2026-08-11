@@ -162,6 +162,12 @@ export const RolePermissionsManager: React.FC<PermissionsManagerProps> = ({
 
   // Function to toggle single permission value in Firebase collection 'permisos'
   const handleTogglePermission = async (role: UserRole, key: keyof RolePermissions, currentValue: boolean) => {
+    if (!isSuperAdmin) {
+      setLastSavedMessage('Únicamente el Superadministrador puede modificar los permisos globales de rol.');
+      setTimeout(() => setLastSavedMessage(null), 3500);
+      return;
+    }
+
     const newValue = !currentValue;
     const saveId = `${role}-${key}`;
     setSavingKey(saveId);

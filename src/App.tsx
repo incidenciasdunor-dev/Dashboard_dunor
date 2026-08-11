@@ -126,7 +126,6 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 const SUPER_ADMIN_EMAILS = [
-  'jorge.villanueva@boletomovil.com',
   'mi_yorch@hotmail.com',
   'incidencias.dunor@gmail.com'
 ];
@@ -2120,6 +2119,31 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     return () => unsubscribe();
   }, []);
 
+  // Session inactivity auto-logout (15 minutes of no activity)
+  useEffect(() => {
+    if (!activeUser && !customUser) return;
+
+    let inactivityTimer: NodeJS.Timeout;
+    const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+    const resetInactivityTimer = () => {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        handleLogout();
+        showSystemPopup("Sesión Expirada", "Tu sesión se ha cerrado automáticamente por inactividad (15 minutos) para proteger la seguridad de tu cuenta.", "warning");
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    events.forEach(evt => window.addEventListener(evt, resetInactivityTimer, { passive: true }));
+    resetInactivityTimer();
+
+    return () => {
+      clearTimeout(inactivityTimer);
+      events.forEach(evt => window.removeEventListener(evt, resetInactivityTimer));
+    };
+  }, [activeUser, customUser]);
+
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
       if (snapshot.exists()) {
@@ -2252,6 +2276,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (!str || typeof str !== 'string' || !str.trim()) return;
       const clean = str.trim();
       const cleanLower = clean.toLowerCase();
+      if (cleanLower === 'jorge.villanueva@boletomovil.com') return;
 
       const matched = allUsers.find(u =>
         u.uid === clean ||
@@ -2418,6 +2443,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (!uidOrEmail) return;
       const clean = uidOrEmail.trim();
       if (!clean) return;
+      if (clean.toLowerCase() === 'jorge.villanueva@boletomovil.com') return;
       if (clean.toLowerCase() === excludeClean) return;
 
       const matched = allUsers.find(u =>
@@ -2851,11 +2877,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   };
 
   useEffect(() => {
+    // Ensure jorge.villanueva@boletomovil.com is removed from Firestore
+    deleteDoc(doc(db, 'users', 'jorge.villanueva@boletomovil.com')).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (profile || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'ADMIN'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
+          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setAdmins(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (admins)');
@@ -3038,7 +3070,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
         // Deduplicate by email (since uid might be missing for pre-registered)
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
+          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setCoordinators(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (coordinators)');
@@ -3052,7 +3085,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const q = query(collection(db, 'users'), where('role', '==', 'TEACHER'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
+          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setTeachers(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (teachers)');
@@ -3067,7 +3101,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
         // Deduplicate by email
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
+          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setTeachers(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (teachers-coordinator)');
@@ -3081,7 +3116,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const q = query(collection(db, 'users'), where('role', '==', 'PSYCHOLOGIST'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
+          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setPsychologists(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (psychologists)');
@@ -3095,7 +3131,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const q = query(collection(db, 'users'), where('role', '==', 'DIRECTIVE'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
+          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setDirectives(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (directives)');
@@ -3525,8 +3562,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
       const superAdmins = [
         { email: 'incidencias.dunor@gmail.com', name: 'Administrador Dunor', role: 'ADMIN' },
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
-        { email: 'jorge.villanueva@boletomovil.com', name: 'Jorge Villanueva', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -3637,8 +3673,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       // 2. Ensure super admin documents exist
       const superAdmins = [
         { email: 'incidencias.dunor@gmail.com', name: 'Administrador Dunor', role: 'ADMIN' },
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
-        { email: 'jorge.villanueva@boletomovil.com', name: 'Jorge Villanueva', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -4924,6 +4959,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 profile={profile}
                 coordinators={coordinators}
                 directives={directives}
+                teachers={teachers}
+                psychologists={psychologists}
                 addLog={addLog}
                 sendNotification={sendNotification}
                 canManageExpedientes={can('canManageExpedientes')}
@@ -7713,6 +7750,10 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   };
 
   const updateUserPermissions = async (userToUpdate: UserProfile, newPermissions: Partial<RolePermissions> | null) => {
+    if (!isSuperAdmin) {
+      showSystemPopup("Acción no permitida", "Únicamente el Superadministrador puede modificar los permisos de usuario.", "warning");
+      return;
+    }
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
       if (newPermissions === null) {
@@ -7837,7 +7878,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
 
@@ -7851,7 +7892,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7865,7 +7906,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7879,7 +7920,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7898,7 +7939,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             profile={profile}
             canManageUsers={canManageUsers}
             canAssignPsychologist={canAssignPsychologist}
-            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
+            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
           />
         )}
 
@@ -7907,6 +7948,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           isOpen={!!userToEditPermissions}
           systemSettings={systemSettings}
           firestoreRolePermissions={firestoreRolePermissions}
+          isSuperAdmin={isSuperAdmin}
           onClose={() => setUserToEditPermissions(null)}
           onSave={updateUserPermissions}
         />
@@ -8103,7 +8145,8 @@ const UserList = ({
   onEditPermissions?: (user: UserProfile) => void,
 }) => {
   const isCoordinator = profile.role === 'COORDINATOR';
-  const isAdminOrDirective = profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || isSuperAdminEmail(profile.email);
+  const isSuperAdmin = isSuperAdminEmail(profile?.email);
+  const isAdminOrDirective = profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || isSuperAdmin;
 
   return (
     <div className="space-y-4">
@@ -8142,7 +8185,7 @@ const UserList = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">{u.name}</h4>
-                      {hasCustomPerms && (
+                      {hasCustomPerms && isSuperAdmin && (
                         <span className="text-[10px] font-black bg-amber-500 text-amber-950 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1 border border-amber-400">
                           <ShieldCheck className="w-3 h-3 text-amber-950 fill-amber-950/20" />
                           Permisos Personalizados
@@ -8162,8 +8205,8 @@ const UserList = ({
                       )}
                     </div>
 
-                    {/* Chips showing active custom permissions directly on user card */}
-                    {hasCustomPerms && actualCustomEntries.length > 0 && (
+                    {/* Chips showing active custom permissions directly on user card - strictly for SuperAdmin */}
+                    {hasCustomPerms && actualCustomEntries.length > 0 && isSuperAdmin && (
                       <div className="flex flex-wrap items-center gap-1.5 mt-2">
                         {actualCustomEntries.map(([permKey, val]) => {
                           const labels: Record<string, string> = {
@@ -8291,7 +8334,7 @@ const UserList = ({
 
                   {!readOnly && (
                     <div className="flex items-center gap-2 ml-auto">
-                      {onEditPermissions && canManageUsers && (
+                      {onEditPermissions && canManageUsers && isSuperAdmin && (
                         <button
                           type="button"
                           onClick={() => onEditPermissions(u)}

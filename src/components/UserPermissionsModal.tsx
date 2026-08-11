@@ -18,6 +18,7 @@ interface UserPermissionsModalProps {
   isOpen: boolean;
   systemSettings: SystemSettings;
   firestoreRolePermissions?: Partial<RolePermissionsMap>;
+  isSuperAdmin?: boolean;
   onClose: () => void;
   onSave: (userToUpdate: UserProfile, updatedPermissions: Partial<RolePermissions> | null) => Promise<void>;
 }
@@ -27,6 +28,7 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
   isOpen,
   systemSettings,
   firestoreRolePermissions,
+  isSuperAdmin = false,
   onClose,
   onSave
 }) => {
@@ -65,6 +67,7 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
   if (!isOpen || !user) return null;
 
   const handleToggle = (key: keyof RolePermissions) => {
+    if (!isSuperAdmin) return;
     setPermissionsState(prev => ({
       ...prev,
       [key]: !prev[key]
@@ -72,6 +75,7 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
   };
 
   const handleSave = async () => {
+    if (!isSuperAdmin) return;
     setIsSaving(true);
     try {
       const customOnly: Partial<RolePermissions> = {};
@@ -95,6 +99,7 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
   };
 
   const handleResetToRoleDefaults = async () => {
+    if (!isSuperAdmin) return;
     if (!confirm(`¿Restablecer los permisos de ${user.name} a los valores predeterminados de su rol (${user.role})?`)) return;
     setIsSaving(true);
     try {
@@ -198,6 +203,18 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
 
           {/* Body */}
           <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-slate-50">
+            {!isSuperAdmin && (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2.5 shadow-xs">
+                <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-extrabold text-amber-950 text-sm">Modo sólo lectura</p>
+                  <p className="text-amber-900 mt-0.5 font-medium">
+                    El usuario directivo y otros roles no pueden modificar los permisos de usuario, únicamente el Superadministrador.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl text-xs text-indigo-900 flex items-start gap-2">
               <User className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
               <div>
@@ -348,8 +365,8 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
               <button
                 type="button"
                 onClick={handleResetToRoleDefaults}
-                disabled={isSaving}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                disabled={isSaving || !isSuperAdmin}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RotateCcw className="w-4 h-4 text-slate-500" />
                 Restablecer a Permisos de Rol
@@ -366,21 +383,23 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
                 onClick={onClose}
                 className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-50 transition-all cursor-pointer"
               >
-                Cancelar
+                Cerrar
               </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={isSaving}
-                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md shadow-indigo-100 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {isSaving ? (
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4" />
-                )}
-                Guardar Permisos de Usuario
-              </button>
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md shadow-indigo-100 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isSaving ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  Guardar Permisos de Usuario
+                </button>
+              )}
             </div>
           </div>
         </motion.div>
