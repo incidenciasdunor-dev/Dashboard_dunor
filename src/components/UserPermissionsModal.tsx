@@ -10,7 +10,7 @@ import {
   getRolePermission,
   normalizeUserRole
 } from '../types';
-import { ShieldCheck, Save, RotateCcw, X, CheckCircle2, User } from 'lucide-react';
+import { ShieldCheck, Save, RotateCcw, X, CheckCircle2, User, Star, XCircle, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface UserPermissionsModalProps {
@@ -54,7 +54,11 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
         ...roleBase,
         ...(user.customPermissions || {})
       });
-      setHasCustom(Boolean(user.customPermissions && Object.keys(user.customPermissions).length > 0));
+      const isCustomized = Boolean(
+        user.customPermissions &&
+        Object.entries(user.customPermissions).some(([k, v]) => v !== roleBase[k as keyof RolePermissions])
+      );
+      setHasCustom(isCustomized);
     }
   }, [user, systemSettings, firestoreRolePermissions]);
 
@@ -204,56 +208,138 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
               </div>
             </div>
 
-            {permissionDefinitions.map((cat, idx) => (
-              <div key={idx} className="space-y-3 bg-white p-4 rounded-xl border border-slate-200">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-900 border-b border-slate-100 pb-2 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-indigo-600" />
-                  {cat.category}
-                </h4>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {cat.items.map(item => {
-                    const isChecked = permissionsState[item.key];
-                    return (
-                      <div
-                        key={item.key}
-                        onClick={() => handleToggle(item.key)}
-                        className={cn(
-                          "p-3 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-3 select-none",
-                          isChecked
-                            ? "bg-indigo-50/50 border-indigo-200 hover:border-indigo-300 shadow-sm"
-                            : "bg-slate-50 border-slate-200 opacity-70 hover:opacity-100"
-                        )}
-                      >
-                        <div className="space-y-1 pr-2">
-                          <span className={cn("text-xs font-bold block", isChecked ? "text-indigo-950" : "text-slate-600")}>
-                            {item.label}
-                          </span>
-                          <p className="text-[11px] text-slate-500 leading-tight">
-                            {item.description}
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          className={cn(
-                            "relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none mt-0.5",
-                            isChecked ? "bg-indigo-600" : "bg-slate-300"
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm",
-                              isChecked ? "translate-x-6" : "translate-x-1"
-                            )}
-                          />
-                        </button>
-                      </div>
-                    );
-                  })}
+            {/* Color Legend */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-xs">
+              <span className="font-bold text-slate-800 flex items-center gap-1.5 flex-shrink-0">
+                <ShieldCheck className="w-4 h-4 text-amber-500" />
+                Diferenciador de Permisos:
+              </span>
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg font-bold shadow-2xs">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  ★ Ámbar: Personalizado (Activado)
+                </div>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-50 text-rose-900 border border-rose-200 rounded-lg font-bold shadow-2xs">
+                  <span className="w-2 h-2 rounded-full bg-rose-500" />
+                  ✕ Rojo: Personalizado (Desactivado)
+                </div>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-900 border border-indigo-200 rounded-lg font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-indigo-600" />
+                  Azul: Predeterminado del Rol ({user.role})
                 </div>
               </div>
-            ))}
+            </div>
+
+            {permissionDefinitions.map((cat, idx) => {
+              const roleBase = getRoleBase(user.role);
+
+              return (
+                <div key={idx} className="space-y-3 bg-white p-4 rounded-xl border border-slate-200">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-900 border-b border-slate-100 pb-2 flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-indigo-600" />
+                    {cat.category}
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {cat.items.map(item => {
+                      const isChecked = Boolean(permissionsState[item.key]);
+                      const roleDefault = Boolean(roleBase[item.key]);
+                      const isCustomized = isChecked !== roleDefault;
+                      const isCustomAdd = isCustomized && isChecked;
+                      const isCustomRemove = isCustomized && !isChecked;
+
+                      return (
+                        <div
+                          key={item.key}
+                          onClick={() => handleToggle(item.key)}
+                          className={cn(
+                            "p-3 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-3 select-none relative overflow-hidden",
+                            isCustomAdd
+                              ? "bg-amber-50/90 border-amber-400 ring-2 ring-amber-400/30 shadow-md"
+                              : isCustomRemove
+                              ? "bg-rose-50/80 border-rose-300 ring-1 ring-rose-300/40 opacity-90 hover:opacity-100"
+                              : isChecked
+                              ? "bg-indigo-50/50 border-indigo-200 hover:border-indigo-300 shadow-xs"
+                              : "bg-slate-50 border-slate-200 opacity-60 hover:opacity-100"
+                          )}
+                        >
+                          <div className="space-y-1 pr-2 flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={cn(
+                                  "text-xs block",
+                                  isCustomAdd
+                                    ? "text-amber-950 font-black"
+                                    : isCustomRemove
+                                    ? "text-rose-950 font-bold line-through"
+                                    : isChecked
+                                    ? "text-indigo-950 font-bold"
+                                    : "text-slate-600 font-medium"
+                                )}
+                              >
+                                {item.label}
+                              </span>
+
+                              {isCustomAdd && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-black bg-amber-500 text-amber-950 px-2 py-0.5 rounded-full shadow-xs uppercase tracking-wider">
+                                  <Star className="w-2.5 h-2.5 fill-amber-950 text-amber-950" />
+                                  Personalizado
+                                </span>
+                              )}
+
+                              {isCustomRemove && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full shadow-xs uppercase tracking-wider">
+                                  <XCircle className="w-2.5 h-2.5 text-white" />
+                                  Personalizado
+                                </span>
+                              )}
+
+                              {!isCustomized && isChecked && (
+                                <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-100/70 px-1.5 py-0.5 rounded-md">
+                                  Rol Base
+                                </span>
+                              )}
+                            </div>
+
+                            <p
+                              className={cn(
+                                "text-[11px] leading-tight",
+                                isCustomAdd
+                                  ? "text-amber-900/90 font-medium"
+                                  : isCustomRemove
+                                  ? "text-rose-800/80"
+                                  : "text-slate-500"
+                              )}
+                            >
+                              {item.description}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            className={cn(
+                              "relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none mt-0.5 shadow-xs",
+                              isCustomAdd
+                                ? "bg-amber-500 ring-2 ring-amber-300/50"
+                                : isChecked
+                                ? "bg-indigo-600"
+                                : "bg-slate-300"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm",
+                                isChecked ? "translate-x-6" : "translate-x-1"
+                              )}
+                            />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Footer */}

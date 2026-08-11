@@ -894,7 +894,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       )}
 
       <SystemModal
-        state={sysModal}
+        modal={sysModal}
         onClose={() => setSysModal(prev => ({ ...prev, isOpen: false }))}
       />
     </div>

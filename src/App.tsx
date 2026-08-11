@@ -1778,6 +1778,59 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [directives, setDirectives] = useState<UserProfile[]>([]);
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [liveToast, setLiveToast] = useState<{
+    id: string;
+    title: string;
+    message: string;
+    timestamp: number;
+    incidentId?: string;
+    referralId?: string;
+    taskId?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!liveToast) return;
+    const timer = setTimeout(() => {
+      setLiveToast(null);
+    }, 7000);
+    return () => clearTimeout(timer);
+  }, [liveToast]);
+
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+      const now = ctx.currentTime;
+      
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(659.25, now);
+      gain1.gain.setValueAtTime(0.12, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.25);
+
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(987.77, now + 0.08);
+      gain2.gain.setValueAtTime(0.15, now + 0.08);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.08);
+      osc2.stop(now + 0.4);
+    } catch (e) {
+      console.warn("Audio chime failed:", e);
+    }
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [isGroupedByStudent, setIsGroupedByStudent] = useState(false);
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
@@ -2219,10 +2272,31 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     };
 
-    // 1. Explicit target recipients
+    // 1. Explicit target recipients (expanding roles & ALL broadcasts)
     for (const raw of rawTargets) {
-      if (raw && typeof raw === 'string' && raw.trim()) {
-        addTargetUser(raw);
+      if (!raw || typeof raw !== 'string' || !raw.trim()) continue;
+      const clean = raw.trim();
+      const cleanUpper = clean.toUpperCase();
+
+      const roleMatches = allUsers.filter(u =>
+        normalizeUserRole(u.role) === cleanUpper ||
+        String(u.role).toUpperCase() === cleanUpper
+      );
+
+      if (roleMatches.length > 0) {
+        roleMatches.forEach(u => {
+          if (u.uid) addTargetUser(u.uid);
+          if (u.email) addTargetUser(u.email);
+        });
+        finalTargetUserIds.add(cleanUpper.toLowerCase());
+      } else if (cleanUpper === 'ALL') {
+        allUsers.forEach(u => {
+          if (u.uid) addTargetUser(u.uid);
+          if (u.email) addTargetUser(u.email);
+        });
+        finalTargetUserIds.add('all');
+      } else {
+        addTargetUser(clean);
       }
     }
 
@@ -2636,59 +2710,67 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     if (!user || !profile) return;
 
-    // Listen for notifications specifically targeted to current user (by UID or email)
+    // Listen for notifications specifically targeted to current user (by UID, email, role or broadcast)
     let isInitialLoad = true;
     const userUid = profile.uid;
     const userEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+    const normRole = normalizeUserRole(profile.role).toLowerCase();
+    const rawRole = profile.role ? String(profile.role).toLowerCase().trim() : '';
 
-    const targetIds = Array.from(new Set([userUid, userEmail].filter(Boolean)));
+    const targetIds = Array.from(new Set([userUid, userEmail, normRole, rawRole, 'all', 'ALL'].filter(Boolean)));
     if (targetIds.length === 0) return;
 
     let q;
     if (targetIds.length === 1) {
       q = query(collection(db, 'notifications'), where('userId', '==', targetIds[0]));
     } else {
-      q = query(collection(db, 'notifications'), where('userId', 'in', targetIds));
+      q = query(collection(db, 'notifications'), where('userId', 'in', targetIds.slice(0, 30)));
     }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rawDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
 
-      // In-memory deduplication by ID and content key to guarantee single notification item per event
+      // Clean deduplication by document ID
       const uniqueMap = new Map<string, any>();
-      const seenContentKeys = new Set<string>();
-
       for (const d of rawDocs) {
         if (!d.id) continue;
-        const timeBlock = Math.floor((d.createdAt || 0) / 10000); // 10-second window
-        const contentKey = `${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${d.referralId || ''}_${d.taskId || ''}_${timeBlock}`;
-        if (seenContentKeys.has(contentKey)) {
-          continue;
-        }
-        seenContentKeys.add(contentKey);
         uniqueMap.set(d.id, d);
       }
 
       const finalDocs = Array.from(uniqueMap.values());
       finalDocs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-      // Trigger standard browser notification for new unread messages
-      if ('Notification' in window && Notification.permission === 'granted') {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === "added") {
-            const data = change.doc.data();
-            // Only notify if it's NOT the initial load OR if it's very recent
-            // AND it hasn't been read yet
-            if (!isInitialLoad && !data.read) {
-              new Notification('Aviso de Incidencia', {
-                body: data.message || 'Tienes una nueva notificación',
-                icon: '/favicon.ico',
-                tag: change.doc.id // Use doc ID as tag to prevent duplicates
-              });
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const data = change.doc.data();
+          // Trigger instant real-time audio and visual alert for unread notifications added after load
+          if (!isInitialLoad && !data.read) {
+            playNotificationSound();
+
+            setLiveToast({
+              id: change.doc.id,
+              title: data.title || 'Nueva Notificación',
+              message: data.message || 'Tienes un nuevo aviso en la plataforma.',
+              timestamp: Date.now(),
+              incidentId: data.incidentId,
+              referralId: data.referralId,
+              taskId: data.taskId
+            });
+
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(data.title || 'Aviso de Incidencia', {
+                  body: data.message || 'Tienes una nueva notificación',
+                  icon: '/favicon.ico',
+                  tag: change.doc.id
+                });
+              } catch (e) {
+                console.warn('Native notification alert exception:', e);
+              }
             }
           }
-        });
-      }
+        }
+      });
 
       isInitialLoad = false;
       setNotifications(finalDocs);
@@ -2889,7 +2971,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     } else {
       setProfile(null);
       setIsProfileLoading(false);
-      setHasCheckedProfile(true);
+      setHasCheckedProfile(false);
     }
   }, [activeUser]);
 
@@ -3060,9 +3142,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     autoInitializeDb();
   }, []);
 
-  if (loading || (activeUser && !hasCheckedProfile)) return <LoadingScreen />;
+  if (loading || isProfileLoading || (activeUser && !hasCheckedProfile)) return <LoadingScreen />;
   
-  if (!activeUser) return <ErrorBoundary><LoginScreen systemSettings={effectiveSystemSettings} onCustomLogin={(uData) => { localStorage.setItem('app_custom_user', JSON.stringify(uData)); setCustomUser(uData); }} /></ErrorBoundary>;
+  if (!activeUser) return <ErrorBoundary><LoginScreen systemSettings={effectiveSystemSettings} onCustomLogin={(uData) => { setIsProfileLoading(true); setHasCheckedProfile(false); localStorage.setItem('app_custom_user', JSON.stringify(uData)); setCustomUser(uData); }} /></ErrorBoundary>;
   
   if (!profile) return (
     <ErrorBoundary>
@@ -4867,6 +4949,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 admins={admins}
                 sendNotification={sendNotification}
                 addLog={addLog}
+                systemSettings={systemSettings}
               />
             </motion.div>
           )}
@@ -7754,7 +7837,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
           />
         )}
 
@@ -7768,7 +7851,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7782,7 +7865,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7796,7 +7879,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
             profile={profile}
             canManageUsers={canManageUsers}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
           />
         )}
         
@@ -7815,7 +7898,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             profile={profile}
             canManageUsers={canManageUsers}
             canAssignPsychologist={canAssignPsychologist}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={(isSuperAdmin || isAdmin || canManageUsers) ? setUserToEditPermissions : undefined}
           />
         )}
 
@@ -8043,7 +8126,12 @@ const UserList = ({
           {users.map((u) => {
             // Rule 1: Coordinator cannot delete other coordinators or themselves
             const canDeleteThisUser = canManageUsers && !readOnly && !(isCoordinator && (u.role === 'COORDINATOR' || u.email.toLowerCase() === profile.email.toLowerCase()));
-            const hasCustomPerms = Boolean(u.customPermissions && Object.keys(u.customPermissions).length > 0);
+            const userRoleNorm = normalizeUserRole(u.role);
+            const roleBaseDefaults = DEFAULT_ROLE_PERMISSIONS[userRoleNorm] || DEFAULT_ROLE_PERMISSIONS.TEACHER;
+            const actualCustomEntries = u.customPermissions
+              ? Object.entries(u.customPermissions).filter(([k, v]) => v !== roleBaseDefaults[k as keyof RolePermissions])
+              : [];
+            const hasCustomPerms = actualCustomEntries.length > 0;
 
             return (
               <div key={u.email} className="bg-white rounded-xl border border-slate-200 p-4 hover:border-indigo-300 hover:shadow-sm transition-all group flex flex-col md:flex-row md:items-center gap-4">
@@ -8052,11 +8140,11 @@ const UserList = ({
                     <UserIcon className="w-5 h-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">{u.name}</h4>
-                      {hasCustomPerms && isSuperAdminEmail(profile?.email) && (
-                        <span className="text-[10px] font-bold bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-200 flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3 text-amber-600" />
+                      {hasCustomPerms && (
+                        <span className="text-[10px] font-black bg-amber-500 text-amber-950 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1 border border-amber-400">
+                          <ShieldCheck className="w-3 h-3 text-amber-950 fill-amber-950/20" />
                           Permisos Personalizados
                         </span>
                       )}
@@ -8073,6 +8161,53 @@ const UserList = ({
                         </div>
                       )}
                     </div>
+
+                    {/* Chips showing active custom permissions directly on user card */}
+                    {hasCustomPerms && actualCustomEntries.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        {actualCustomEntries.map(([permKey, val]) => {
+                          const labels: Record<string, string> = {
+                            canViewNotifications: 'Notificaciones',
+                            canViewIncidents: 'Incidencias',
+                            canCreateIncident: 'Crear Incidencia',
+                            canViewTasks: 'Tareas',
+                            canCreateTask: 'Crear Tareas',
+                            canViewUsers: 'Directorio',
+                            canViewLogs: 'Bitácora',
+                            canViewSettings: 'Ajustes',
+                            canViewPermissions: 'Permisos',
+                            canViewReferrals: 'Canalizaciones',
+                            canCreateReferral: 'Crear Canalización',
+                            canViewExpedientes: 'Expedientes',
+                            canManageExpedientes: 'Gestionar Expedientes',
+                            canViewInformes: 'Informes',
+                            canEditIncidents: 'Editar Incidencias',
+                            canDeleteIncidents: 'Eliminar Incidencias',
+                            canChangeStatus: 'Estado Incidencias',
+                            canAssignPsychologist: 'Asignar Psicólogo',
+                            canAddFollowUp: 'Seguimiento',
+                            canExportReports: 'Exportar Reportes',
+                            canSendCongratulations: 'Reconocimientos',
+                            canManageUsers: 'Gestionar Usuarios',
+                            canSendMassMessages: 'Envío Masivo',
+                          };
+                          const labelName = labels[permKey] || permKey;
+                          return (
+                            <span
+                              key={permKey}
+                              className={cn(
+                                "text-[10px] font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 shadow-2xs",
+                                val
+                                  ? "bg-amber-100 text-amber-950 border-amber-300 font-extrabold"
+                                  : "bg-rose-50 text-rose-800 border-rose-200 line-through opacity-85"
+                              )}
+                            >
+                              {val ? '★' : '✕'} {labelName}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {/* Rule 2: Options to assign Coordinators and Psychologists to Teachers */}
                     {u.role === 'TEACHER' && isAdminOrDirective && canManageUsers && (
@@ -8156,20 +8291,20 @@ const UserList = ({
 
                   {!readOnly && (
                     <div className="flex items-center gap-2 ml-auto">
-                      {onEditPermissions && canManageUsers && isSuperAdminEmail(profile?.email) && (
+                      {onEditPermissions && canManageUsers && (
                         <button
                           type="button"
                           onClick={() => onEditPermissions(u)}
                           className={cn(
-                            "px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer",
+                            "px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs",
                             hasCustomPerms
-                              ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
+                              ? "bg-amber-500 text-amber-950 border-amber-400 hover:bg-amber-400 font-extrabold"
                               : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-indigo-600"
                           )}
                           title="Ver y gestionar permisos individuales guardados en la base de datos para este usuario"
                         >
-                          <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>Permisos</span>
+                          <ShieldCheck className={cn("w-3.5 h-3.5", hasCustomPerms ? "text-amber-950 fill-amber-950/20" : "text-indigo-600")} />
+                          <span>{hasCustomPerms ? 'Permisos (Modificados)' : 'Permisos'}</span>
                         </button>
                       )}
 

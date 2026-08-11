@@ -22,7 +22,8 @@ import {
   Lock,
   ShieldAlert,
   X,
-  RotateCcw
+  RotateCcw,
+  Printer
 } from 'lucide-react';
 import {
   Expediente,
@@ -46,6 +47,7 @@ interface ExpedientesManagerProps {
   canManageExpedientes?: boolean;
   preselectedReferral?: Referral | null;
   onClearPreselectedReferral?: () => void;
+  systemSettings?: any;
 }
 
 export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
@@ -58,7 +60,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   sendNotification,
   canManageExpedientes = true,
   preselectedReferral,
-  onClearPreselectedReferral
+  onClearPreselectedReferral,
+  systemSettings
 }) => {
   const userRole = normalizeUserRole(profile.role);
   const isDirectiveOrCoordinator = userRole === 'DIRECTIVE' || userRole === 'COORDINATOR';
@@ -310,6 +313,120 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   // Restore section to original
   const restoreSectionText = (sectionKey: keyof typeof sharedCopyData) => {
     setSharedCopyData(prev => ({ ...prev, [sectionKey]: formData[sectionKey] || '' }));
+  };
+
+  // Print censored version of expediente
+  const printCensoredExpediente = (expData: any) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const studentName = expData.studentName || 'Alumno';
+    const gradeGroup = expData.gradeGroup || 'S/G';
+    const sharedBy = expData.sharedBy || profile.name || profile.email;
+    const dateStr = expData.sharedAt
+      ? new Date(expData.sharedAt).toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    const logoUrl = systemSettings?.appLogoUrl || "/logo.svg";
+    const appName = systemSettings?.appName || "DASHBOARD DUNOR";
+
+    const hiddenSections: string[] = expData.hiddenSections || [];
+
+    const formatSection = (title: string, text?: string, key?: string) => {
+      const isHidden = key && hiddenSections.includes(key);
+      if (isHidden) {
+        return `
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px; font-weight:bold; color:#1e3a8a; text-transform:uppercase; margin-bottom:4px;">${title}</div>
+            <div style="background:#f1f5f9; border:1px dashed #94a3b8; padding:8px 12px; font-style:italic; color:#64748b; font-size:11px; border-radius:6px;">
+              [ SECCIÓN RESERVADA / CONFIDENCIAL OCULTA EN ESTA COPIA ]
+            </div>
+          </div>
+        `;
+      }
+      if (!text || text.trim() === '') {
+        return `
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px; font-weight:bold; color:#1e3a8a; text-transform:uppercase; margin-bottom:4px;">${title}</div>
+            <div style="color:#94a3b8; font-style:italic; font-size:11px;">Sin información registrada.</div>
+          </div>
+        `;
+      }
+
+      const safeText = text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+
+      return `
+        <div style="margin-bottom:14px;">
+          <div style="font-size:11px; font-weight:bold; color:#1e3a8a; text-transform:uppercase; margin-bottom:4px;">${title}</div>
+          <div style="font-size:12px; color:#1e293b; line-height:1.6; font-family:monospace; background:#f8fafc; padding:10px 12px; border-radius:8px; border:1px solid #cbd5e1;">
+            ${safeText}
+          </div>
+        </div>
+      `;
+    };
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Expediente Psicopedagógico (Copia Censurada) - ${studentName}</title>
+          <style>
+            @page { size: letter; margin: 1.5cm; }
+            body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; line-height: 1.5; margin: 0; padding: 0; font-size: 12px; }
+            .header { border-bottom: 3px solid #10b981; padding-bottom: 12px; margin-bottom: 20px; }
+            .badge { display: inline-block; background: #d1fae5; color: #065f46; font-weight: bold; font-size: 10px; padding: 4px 10px; border-radius: 12px; text-transform: uppercase; border: 1px solid #a7f3d0; margin-bottom: 6px; }
+            .title { font-size: 18px; font-weight: bold; color: #064e3b; margin: 4px 0; }
+            .subtitle { font-size: 12px; color: #475569; }
+            .meta-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 12px; margin-bottom: 20px; font-size: 11px; }
+            .footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #cbd5e1; text-align: center; font-size: 9px; color: #64748b; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <img src="${logoUrl}" alt="${appName}" style="max-height:65px; max-width:180px; object-fit:contain;" onerror="this.style.display='none'" />
+                <div>
+                  <div style="font-size:14px; font-weight:900; letter-spacing:1px; color:#0f172a; text-transform:uppercase;">${appName}</div>
+                  <div style="font-size:10px; color:#475569; font-weight:600;">Atención Psicopedagógica y Control Escolar</div>
+                </div>
+              </div>
+              <span class="badge">🔒 COPIA CENSURADA / RESGUARDADA</span>
+            </div>
+            <div class="title">EXPEDIENTE PSICOPEDAGÓGICO ESCOLAR</div>
+            <div class="subtitle">Alumno: <strong>${studentName}</strong> • Grado y Grupo: <strong>${gradeGroup}</strong></div>
+          </div>
+
+          <div class="meta-box">
+            <div><strong>Emitido por:</strong> ${sharedBy} (Área de Psicología)</div>
+            <div><strong>Fecha de emisión:</strong> ${dateStr}</div>
+            <div><strong>Aviso de Confidencialidad:</strong> Documento impreso en versión censurada. Se omite la información personal sensible no compartida por el departamento de psicología.</div>
+          </div>
+
+          ${formatSection('1. Motivo de Canalización y Antecedentes', expData.reasonAndBackground, 'reasonAndBackground')}
+          ${formatSection('2. Estrategias Utilizadas por el Docente', expData.teacherStrategies, 'teacherStrategies')}
+          ${formatSection('3. Entrevistas con Padres de Familia', expData.parentInterviews, 'parentInterviews')}
+          ${formatSection('4. Evaluación Psicopedagógica', expData.psychologicalEvaluation, 'psychologicalEvaluation')}
+          ${formatSection('5. Seguimiento del Área de Psicología', expData.psychologyFollowUp, 'psychologyFollowUp')}
+          ${formatSection('6. Avances y Acuerdos Recientes', expData.latestProgress, 'latestProgress')}
+
+          <div class="footer">
+            DOCUMENTO CONFIDENCIAL CENSURADO — DEPARTAMENTO DE PSICOLOGÍA Y ATENCIÓN A LA COMUNIDAD ESCOLAR
+          </div>
+
+          <script>
+            window.onload = () => {
+              window.print();
+              setTimeout(() => window.close(), 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   // Save / Update Master Expediente
@@ -1194,13 +1311,30 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
             {/* Modal Footer */}
             <div className="p-6 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setIsShareModalOpen(false)}
-                className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl transition-all cursor-pointer"
-              >
-                Cancelar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => printCensoredExpediente({
+                    studentName: formData.studentName,
+                    gradeGroup: formData.gradeGroup,
+                    sharedBy: profile.name || profile.email,
+                    ...sharedCopyData,
+                    hiddenSections
+                  })}
+                  className="px-4 py-2.5 bg-slate-900 hover:bg-black text-white font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  title="Imprimir la vista previa de la copia censurada"
+                >
+                  <Printer className="w-4 h-4 text-amber-400" />
+                  <span>Imprimir Vista Previa Censurada</span>
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -1307,15 +1441,26 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                       </div>
                     )}
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSharedExpediente(exp)}
-                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Ver Expediente Compartido</span>
-                      </button>
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-2 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSharedExpediente(exp)}
+                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Ver Expediente Compartido</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => printCensoredExpediente(exp)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-slate-200"
+                          title="Imprimir versión censurada"
+                        >
+                          <Printer className="w-3.5 h-3.5 text-slate-600" />
+                          <span>Imprimir (Censurado)</span>
+                        </button>
+                      </div>
 
                       {allowManageExpedientes && (
                         <button
@@ -1534,11 +1679,20 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => printCensoredExpediente(selectedSharedExpediente)}
+                className="px-4 py-2 bg-slate-900 hover:bg-black text-white font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-sm"
+              >
+                <Printer className="w-4 h-4 text-emerald-400" />
+                <span>Imprimir Copia Censurada</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setSelectedSharedExpediente(null)}
-                className="px-6 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl transition-all cursor-pointer"
+                className="px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl transition-all cursor-pointer"
               >
                 Cerrar
               </button>

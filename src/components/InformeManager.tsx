@@ -53,6 +53,7 @@ interface InformeManagerProps {
   admins: UserProfile[];
   sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>;
   addLog?: (action: string, details: string) => Promise<void>;
+  systemSettings?: any;
 }
 
 export const InformeManager: React.FC<InformeManagerProps> = ({
@@ -63,7 +64,8 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   directives = [],
   admins = [],
   sendNotification,
-  addLog
+  addLog,
+  systemSettings
 }) => {
   const normRole = normalizeUserRole(profile.role);
   const isPsychologist = normRole === 'PSYCHOLOGIST';
@@ -175,7 +177,21 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
   // Filtered expedientes for master report
   const filteredExpedientes = useMemo(() => {
+    const normRole = normalizeUserRole(profile.role);
+    const isPsychologist = normRole === 'PSYCHOLOGIST';
+    const userEmailLower = profile.email?.toLowerCase();
+
     return expedientes.filter(exp => {
+      // Directives, Coordinators, Admins only view expedientes shared with them by the psychologist
+      if (!isPsychologist) {
+        const isRecipient = Array.isArray((exp as any).recipients) && (exp as any).recipients.some((r: any) =>
+          (r.uid && profile.uid && r.uid === profile.uid) ||
+          (r.email && userEmailLower && r.email.toLowerCase() === userEmailLower)
+        );
+        const isOwner = (exp as any).sharedByEmail && userEmailLower && (exp as any).sharedByEmail.toLowerCase() === userEmailLower;
+        if (!isRecipient && !isOwner) return false;
+      }
+
       const matchesSearch = searchQuery === '' || 
         exp.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         exp.gradeGroup.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -185,7 +201,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
       return matchesSearch && matchesGrade;
     });
-  }, [expedientes, searchQuery, gradeFilter]);
+  }, [expedientes, searchQuery, gradeFilter, profile.role, profile.uid, profile.email]);
 
   // Statistics calculation from expedientes
   const stats = useMemo(() => {
@@ -305,6 +321,137 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       };
     });
   }, [filteredExpedientes, referrals]);
+
+  // Dedicated Print Function for Reports
+  const handlePrintReport = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const reportTitle = activeSubTab === 'MASTER' 
+      ? 'INFORME GENERAL Y ESTADÍSTICO DE ATENCIÓN PSICOPEDAGÓGICA' 
+      : selectedSharedReport?.title || 'INFORME COMPARTIDO DE PSICOLOGÍA';
+
+    const logoUrl = systemSettings?.appLogoUrl || "/logo.svg";
+    const appName = systemSettings?.appName || "DASHBOARD DUNOR";
+
+    const execSummary = activeSubTab === 'MASTER' ? autoExecutiveSummary : selectedSharedReport?.executiveSummary || '';
+    const conclusions = activeSubTab === 'MASTER' ? autoConclusions : selectedSharedReport?.conclusions || '';
+    const dateStr = new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    let studentsListHtml = '';
+
+    if (activeSubTab === 'MASTER') {
+      studentsListHtml = filteredExpedientes.map((exp, idx) => `
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:10px; padding:12px; margin-bottom:12px; page-break-inside:avoid;">
+          <div style="font-weight:bold; font-size:13px; color:#1e293b; margin-bottom:4px;">
+            ${idx + 1}. ${exp.studentName} <span style="font-size:11px; color:#475569; background:#e2e8f0; padding:2px 8px; border-radius:12px;">Grado/Grupo: ${exp.gradeGroup || 'S/G'}</span>
+          </div>
+          <div style="font-size:11px; color:#334155; margin-bottom:6px;">
+            <strong>Estatus:</strong> ${exp.status === 'CONCLUIDO' ? 'Caso Concluido' : 'En Proceso'} | <strong>Psicólogo:</strong> ${exp.psychologistName || 'Asignado'}
+          </div>
+          ${exp.reasonAndBackground ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Motivo / Antecedentes:</strong> ${exp.reasonAndBackground}</div>` : ''}
+          ${exp.psychologicalEvaluation ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Evaluación Psicopedagógica:</strong> ${exp.psychologicalEvaluation}</div>` : ''}
+          ${exp.latestProgress ? `<div style="font-size:11px; color:#1e293b; margin-top:4px; font-weight:600;"><strong>Avances Recientes:</strong> ${exp.latestProgress}</div>` : ''}
+        </div>
+      `).join('');
+    } else if (selectedSharedReport) {
+      studentsListHtml = (selectedSharedReport.studentsBreakdown || []).map((s, idx) => `
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:10px; padding:12px; margin-bottom:12px; page-break-inside:avoid;">
+          <div style="font-weight:bold; font-size:13px; color:#1e293b; margin-bottom:4px;">
+            ${idx + 1}. ${s.studentName} <span style="font-size:11px; color:#475569; background:#e2e8f0; padding:2px 8px; border-radius:12px;">Grado/Grupo: ${s.gradeGroup || 'S/G'}</span>
+          </div>
+          ${s.reasonAndBackground ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Motivo / Antecedentes:</strong> ${s.reasonAndBackground}</div>` : ''}
+          ${s.teacherStrategies ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Estrategias Docentes:</strong> ${s.teacherStrategies}</div>` : ''}
+          ${s.psychologicalEvaluation ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Evaluación Psicopedagógica:</strong> ${s.psychologicalEvaluation}</div>` : ''}
+          ${s.latestProgress ? `<div style="font-size:11px; color:#1e293b; margin-top:4px; font-weight:600;"><strong>Avances Recientes:</strong> ${s.latestProgress}</div>` : ''}
+        </div>
+      `).join('');
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${reportTitle}</title>
+          <style>
+            @page { size: letter; margin: 1.5cm; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; line-height: 1.5; margin: 0; padding: 0; font-size: 12px; }
+            .header { border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 20px; text-align: center; }
+            .header h1 { font-size: 18px; color: #1e3a8a; margin: 0 0 4px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+            .header h2 { font-size: 13px; color: #334155; margin: 0 0 4px 0; font-weight: bold; }
+            .header p { font-size: 10px; color: #64748b; margin: 0; }
+            .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+            .stat-card { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; text-align: center; }
+            .stat-num { font-size: 18px; font-weight: bold; color: #1e293b; }
+            .stat-lbl { font-size: 9px; color: #64748b; text-transform: uppercase; font-weight: bold; }
+            .section { margin-bottom: 20px; }
+            .section-title { font-size: 12px; font-weight: bold; color: #1e3a8a; text-transform: uppercase; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; }
+            .content-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; white-space: pre-line; }
+            .footer { margin-top: 40px; padding-top: 10px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 9px; color: #94a3b8; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 2px solid #cbd5e1; padding-bottom: 12px; margin-bottom: 12px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <img src="${logoUrl}" alt="${appName}" style="max-height: 65px; max-width: 180px; object-fit: contain;" onerror="this.style.display='none'" />
+                <div style="text-align: left;">
+                  <div style="font-size: 14px; font-weight: 900; letter-spacing: 1px; color: #1e3a8a; text-transform: uppercase;">${appName}</div>
+                  <div style="font-size: 10px; color: #475569; font-weight: 600;">Atención Psicopedagógica y Control Escolar</div>
+                </div>
+              </div>
+              <div style="text-align: right; font-size: 10px; color: #64748b;">
+                <div><strong>Fecha de emisión:</strong> ${dateStr}</div>
+                <div><strong>Emitido por:</strong> ${profile.name || profile.email} (${profile.role})</div>
+              </div>
+            </div>
+            <h1>${reportTitle}</h1>
+          </div>
+
+          ${activeSubTab === 'MASTER' ? `
+            <div class="stats-grid">
+              <div class="stat-card"><div class="stat-num">${stats.totalCanalizados}</div><div class="stat-lbl">Total Canalizados</div></div>
+              <div class="stat-card"><div class="stat-num">${stats.enProceso}</div><div class="stat-lbl">En Seguimiento</div></div>
+              <div class="stat-card"><div class="stat-num">${stats.concluidos}</div><div class="stat-lbl">Concluidos</div></div>
+              <div class="stat-card"><div class="stat-num">${stats.conEntrevistaPadres}</div><div class="stat-lbl">Atención Familiar</div></div>
+            </div>
+          ` : ''}
+
+          <div class="section">
+            <div class="section-title">Resumen Ejecutivo</div>
+            <div class="content-box">${execSummary}</div>
+          </div>
+
+          ${conclusions ? `
+            <div class="section">
+              <div class="section-title">Conclusiones y Recomendaciones</div>
+              <div class="content-box">${conclusions}</div>
+            </div>
+          ` : ''}
+
+          <div class="section">
+            <div class="section-title">Desglose de Expedientes (${activeSubTab === 'MASTER' ? filteredExpedientes.length : (selectedSharedReport?.studentsBreakdown?.length || 0)})</div>
+            ${studentsListHtml || '<p style="color:#64748b; font-style:italic;">No hay alumnos registrados en el informe.</p>'}
+          </div>
+
+          <div class="footer">
+            Este documento es un informe confidencial generado para uso institucional exclusivo del personal autorizado.
+          </div>
+
+          <script>
+            window.onload = () => {
+              window.print();
+              setTimeout(() => window.close(), 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
 
   // Open Share & Redaction Modal
   const handleOpenShareModal = () => {
@@ -504,7 +651,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
           {/* Print Button */}
           <button
             type="button"
-            onClick={() => window.print()}
+            onClick={handlePrintReport}
             className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-200 dark:border-slate-700"
           >
             <Printer className="w-4 h-4 text-slate-600 dark:text-slate-300" />
@@ -778,7 +925,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
                   </span>
                   <button
                     type="button"
-                    onClick={() => window.print()}
+                    onClick={handlePrintReport}
                     className="px-3 py-1.5 bg-slate-900 text-white hover:bg-black rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <Printer className="w-4 h-4" />

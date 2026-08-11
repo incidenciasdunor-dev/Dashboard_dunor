@@ -14,29 +14,31 @@ export interface SystemModalState {
 }
 
 interface SystemModalProps {
-  modal: SystemModalState;
+  modal?: SystemModalState;
+  state?: SystemModalState;
   onClose: () => void;
 }
 
-export const SystemModal: React.FC<SystemModalProps> = ({ modal, onClose }) => {
-  if (!modal.isOpen) return null;
+export const SystemModal: React.FC<SystemModalProps> = ({ modal, state, onClose }) => {
+  const activeModal = modal || state;
+  if (!activeModal || !activeModal.isOpen) return null;
 
   const handleConfirm = () => {
-    if (modal.onConfirm) {
-      modal.onConfirm();
+    if (activeModal.onConfirm) {
+      activeModal.onConfirm();
     }
     onClose();
   };
 
   const handleCancel = () => {
-    if (modal.onCancel) {
-      modal.onCancel();
+    if (activeModal.onCancel) {
+      activeModal.onCancel();
     }
     onClose();
   };
 
   const getIcon = () => {
-    switch (modal.type) {
+    switch (activeModal.type) {
       case 'success':
         return <CheckCircle2 className="w-10 h-10 text-emerald-500" />;
       case 'error':
@@ -52,7 +54,7 @@ export const SystemModal: React.FC<SystemModalProps> = ({ modal, onClose }) => {
   };
 
   const getHeaderBg = () => {
-    switch (modal.type) {
+    switch (activeModal.type) {
       case 'success':
         return 'bg-emerald-50 border-emerald-100 text-emerald-900';
       case 'error':
@@ -84,21 +86,21 @@ export const SystemModal: React.FC<SystemModalProps> = ({ modal, onClose }) => {
 
             <div>
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">
-                {modal.title}
+                {activeModal.title}
               </h3>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300 whitespace-pre-line leading-relaxed">
-                {modal.message}
+                {activeModal.message}
               </p>
             </div>
 
             <div className="pt-2 flex items-center justify-center gap-3">
-              {(modal.type === 'confirm' || modal.type === 'danger') && (
+              {(activeModal.type === 'confirm' || activeModal.type === 'danger') && (
                 <button
                   type="button"
                   onClick={handleCancel}
                   className="flex-1 px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
                 >
-                  {modal.cancelText || 'Cancelar'}
+                  {activeModal.cancelText || 'Cancelar'}
                 </button>
               )}
 
@@ -106,14 +108,14 @@ export const SystemModal: React.FC<SystemModalProps> = ({ modal, onClose }) => {
                 type="button"
                 onClick={handleConfirm}
                 className={`flex-1 px-5 py-3 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer ${
-                  modal.type === 'danger'
+                  activeModal.type === 'danger'
                     ? 'bg-rose-600 hover:bg-rose-700'
-                    : modal.type === 'confirm'
+                    : activeModal.type === 'confirm'
                     ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-indigo-600 hover:bg-indigo-700'
                 }`}
               >
-                {modal.confirmText || (modal.type === 'confirm' || modal.type === 'danger' ? 'Confirmar' : 'Aceptar')}
+                {activeModal.confirmText || (activeModal.type === 'confirm' || activeModal.type === 'danger' ? 'Confirmar' : 'Aceptar')}
               </button>
             </div>
           </div>
