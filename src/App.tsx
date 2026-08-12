@@ -2017,6 +2017,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   };
   const [newCategory, setNewCategory] = useState('');
   const [editingCategory, setEditingCategory] = useState<{ original: string; name: string } | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<string | null>(null);
   const [appNameInput, setAppNameInput] = useState(systemSettings.appName || 'DASHBOARD DUNOR');
   const [appLogoInput, setAppLogoInput] = useState(systemSettings.appLogoUrl || '');
 
@@ -4616,13 +4617,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               {/* Hidden Secrets Card per requirement */}
 
               {/* Categorías de Incidencia */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    <ClipboardList className="w-5 h-5 text-indigo-600" />
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <div className="p-6 border-b border-slate-100 dark:border-slate-800">
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <ClipboardList className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                     Categorías de Incidencia
                   </h2>
-                  <p className="text-sm text-slate-500 mt-1">
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
                     Agrega, modifica o elimina las categorías elegibles para el reporte de incidencias.
                   </p>
                 </div>
@@ -4634,23 +4635,24 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         value={newCategory}
                         onChange={(e) => setNewCategory(e.target.value)}
                         placeholder="Escribe el nombre de la nueva categoría..."
-                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                        className="flex-1 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                         onKeyDown={async (e) => {
                           if (e.key === 'Enter') {
                             if (!newCategory.trim()) return;
                             const catToAdd = newCategory.trim();
-                            const currentCats = systemSettings.categories || [];
+                            const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                             if (currentCats.includes(catToAdd)) {
                               setNewCategory('');
                               return;
                             }
                             const updatedCategories = [...currentCats, catToAdd];
+                            setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                            setNewCategory('');
                             try {
                               await setDoc(doc(db, 'settings', 'global'), {
                                 categories: updatedCategories
                               }, { merge: true });
                               await addLog('Creó una nueva categoría', `Categoría: ${catToAdd}`);
-                              setNewCategory('');
                             } catch (error) {
                               console.error("Error adding category:", error);
                             }
@@ -4661,23 +4663,24 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         onClick={async () => {
                           if (!newCategory.trim()) return;
                           const catToAdd = newCategory.trim();
-                          const currentCats = systemSettings.categories || [];
+                          const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                           if (currentCats.includes(catToAdd)) {
                             setNewCategory('');
                             return;
                           }
                           const updatedCategories = [...currentCats, catToAdd];
+                          setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                          setNewCategory('');
                           try {
                             await setDoc(doc(db, 'settings', 'global'), {
                               categories: updatedCategories
                             }, { merge: true });
                             await addLog('Creó una nueva categoría', `Categoría: ${catToAdd}`);
-                            setNewCategory('');
                           } catch (error) {
                             console.error("Error adding category:", error);
                           }
                         }}
-                        className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2 cursor-pointer shadow-sm text-sm"
+                        className="bg-indigo-600 dark:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all flex items-center gap-2 cursor-pointer shadow-sm text-sm"
                       >
                         <Plus className="w-4 h-4" />
                         Agregar Categoría
@@ -4686,17 +4689,18 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
-                    {(systemSettings.categories || []).map((cat) => {
+                    {(systemSettings.categories || DEFAULT_SETTINGS.categories || []).map((cat) => {
                       const isEditingThis = editingCategory?.original === cat;
+                      const isDeletingThis = deletingCategory === cat;
                       return (
-                        <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-slate-300 transition-all group">
+                        <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600 transition-all group min-h-[50px]">
                           {isEditingThis ? (
                             <div className="flex items-center gap-2 w-full">
                               <input
                                 type="text"
                                 value={editingCategory.name}
                                 onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
-                                className="flex-1 bg-white border border-indigo-300 rounded-lg px-3 py-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                className="flex-1 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-indigo-600 rounded-lg px-3 py-1 text-sm font-semibold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 autoFocus
                                 onKeyDown={async (e) => {
                                   if (e.key === 'Enter') {
@@ -4707,14 +4711,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                                       setEditingCategory(null);
                                       return;
                                     }
-                                    const currentCats = systemSettings.categories || [];
+                                    const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                                     const updatedCategories = currentCats.map(c => c === oldName ? newName : c);
+                                    setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                                    setEditingCategory(null);
                                     try {
                                       await setDoc(doc(db, 'settings', 'global'), {
                                         categories: updatedCategories
                                       }, { merge: true });
                                       await addLog('Modificó una categoría', `De: "${oldName}" a: "${newName}"`);
-                                      setEditingCategory(null);
                                     } catch (error) {
                                       console.error("Error updating category:", error);
                                     }
@@ -4732,58 +4737,87 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                                     setEditingCategory(null);
                                     return;
                                   }
-                                  const currentCats = systemSettings.categories || [];
+                                  const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                                   const updatedCategories = currentCats.map(c => c === oldName ? newName : c);
+                                  setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                                  setEditingCategory(null);
                                   try {
                                     await setDoc(doc(db, 'settings', 'global'), {
                                       categories: updatedCategories
                                     }, { merge: true });
                                     await addLog('Modificó una categoría', `De: "${oldName}" a: "${newName}"`);
-                                    setEditingCategory(null);
                                   } catch (error) {
                                     console.error("Error updating category:", error);
                                   }
                                 }}
                                 title="Guardar cambio"
-                                className="p-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-lg transition-all cursor-pointer"
+                                className="p-1.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/60 rounded-lg transition-all cursor-pointer"
                               >
                                 <Check className="w-4 h-4" />
                               </button>
                               <button
                                 onClick={() => setEditingCategory(null)}
                                 title="Cancelar"
-                                className="p-1.5 bg-slate-200 text-slate-600 hover:bg-slate-300 rounded-lg transition-all cursor-pointer"
+                                className="p-1.5 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg transition-all cursor-pointer"
                               >
                                 <X className="w-4 h-4" />
                               </button>
                             </div>
+                          ) : isDeletingThis ? (
+                            <div className="flex items-center justify-between w-full gap-2 animate-fadeIn">
+                              <span className="text-xs font-bold text-rose-600 dark:text-rose-400 truncate">
+                                ¿Confirmas eliminar?
+                              </span>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <button
+                                  onClick={async () => {
+                                    const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
+                                    const updatedCategories = currentCats.filter(c => c !== cat);
+                                    setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                                    setDeletingCategory(null);
+                                    try {
+                                      await setDoc(doc(db, 'settings', 'global'), {
+                                        categories: updatedCategories
+                                      }, { merge: true });
+                                      await addLog('Eliminó una categoría', `Categoría: ${cat}`);
+                                    } catch (error) {
+                                      console.error("Error removing category:", error);
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm"
+                                >
+                                  Sí, eliminar
+                                </button>
+                                <button
+                                  onClick={() => setDeletingCategory(null)}
+                                  className="px-2 py-1 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-semibold transition-all cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
                           ) : (
                             <>
-                              <span className="text-sm font-semibold text-slate-700">{cat}</span>
+                              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{cat}</span>
                               {(isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || profile.role === 'COORDINATOR') && (
                                 <div className="flex items-center gap-1 opacity-90 group-hover:opacity-100 transition-opacity">
                                   <button
-                                    onClick={() => setEditingCategory({ original: cat, name: cat })}
+                                    onClick={() => {
+                                      setDeletingCategory(null);
+                                      setEditingCategory({ original: cat, name: cat });
+                                    }}
                                     title="Modificar nombre de categoría"
-                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg transition-all cursor-pointer"
                                   >
                                     <Edit2 className="w-4 h-4" />
                                   </button>
                                   <button
-                                    onClick={async () => {
-                                      const currentCats = systemSettings.categories || [];
-                                      const updatedCategories = currentCats.filter(c => c !== cat);
-                                      try {
-                                        await setDoc(doc(db, 'settings', 'global'), {
-                                          categories: updatedCategories
-                                        }, { merge: true });
-                                        await addLog('Eliminó una categoría', `Categoría: ${cat}`);
-                                      } catch (error) {
-                                        console.error("Error removing category:", error);
-                                      }
+                                    onClick={() => {
+                                      setEditingCategory(null);
+                                      setDeletingCategory(cat);
                                     }}
                                     title="Eliminar categoría"
-                                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-all cursor-pointer"
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
