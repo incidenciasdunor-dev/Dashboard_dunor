@@ -66,7 +66,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canViewTasks: false,
     canCreateTask: false,
     canViewUsers: true,
-    canViewLogs: false,
+    canViewLogs: true,
     canViewSettings: true,
     canViewReferrals: true,
     canCreateReferral: true,

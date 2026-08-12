@@ -134,12 +134,15 @@ export const isFirestoreInternalAssertion = (msg: any) => {
     str.includes('unexpected state') ||
     str.includes('missing stream token') ||
     str.includes('target id already exists') ||
+    str.includes('database is closing') ||
+    str.includes('database is hidden') ||
+    str.includes('closing/hidden') ||
     str.includes('da08') ||
     str.includes('c050') ||
     str.includes('ca9') ||
     str.includes('fi08') ||
     str.includes('12.17.0') ||
-    (str.includes('firestore') && (str.includes('assertion') || str.includes('internal') || str.includes('unexpected')))
+    (str.includes('firestore') && (str.includes('assertion') || str.includes('internal') || str.includes('unexpected') || str.includes('closing')))
   );
 };
 

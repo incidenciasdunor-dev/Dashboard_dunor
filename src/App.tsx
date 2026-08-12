@@ -1282,6 +1282,14 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       if (result.user) authUid = result.user.uid;
     } catch (authErr: any) {
       console.warn("createUserWithEmailAndPassword fallback:", authErr?.code || authErr?.message);
+      if (authErr?.code === 'auth/email-already-in-use') {
+        try {
+          const res = await signInWithEmailAndPassword(auth, cleanEmail, password);
+          if (res.user) authUid = res.user.uid;
+        } catch (e) {
+          console.warn("signInWithEmailAndPassword in register fallback:", e);
+        }
+      }
     }
 
     try {
@@ -1718,6 +1726,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
+
+  useEffect(() => {
+    if (activeUser && !auth.currentUser) {
+      signInAnonymously(auth).catch((err) => {
+        console.warn("signInAnonymously session sync notice:", err);
+      });
+    }
+  }, [activeUser]);
 
   const [systemPopup, setSystemPopup] = useState<{
     isOpen: boolean;
@@ -3179,6 +3195,34 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     autoInitializeDb();
   }, []);
 
+  const handleLogout = async () => {
+    localStorage.removeItem('app_custom_user');
+    localStorage.removeItem('last_user_email');
+    setCustomUser(null);
+    setProfile(null);
+    setIsProfileLoading(false);
+    setHasCheckedProfile(false);
+    setIncidents([]);
+    setTasks([]);
+    setReferrals([]);
+    setExpedientes([]);
+    setNotifications([]);
+    setAdmins([]);
+    setCoordinators([]);
+    setTeachers([]);
+    setPsychologists([]);
+    setDirectives([]);
+    try {
+      if (auth.currentUser) {
+        await signOut(auth).catch((e) => {
+          console.warn("signOut handled notice:", e?.message || e);
+        });
+      }
+    } catch (e: any) {
+      console.warn("Logout notice:", e?.message || e);
+    }
+  };
+
   if (loading || isProfileLoading || (activeUser && !hasCheckedProfile)) return <LoadingScreen />;
   
   if (!activeUser) return <ErrorBoundary><LoginScreen systemSettings={effectiveSystemSettings} onCustomLogin={(uData) => { setIsProfileLoading(true); setHasCheckedProfile(false); localStorage.setItem('app_custom_user', JSON.stringify(uData)); setCustomUser(uData); }} /></ErrorBoundary>;
@@ -3200,30 +3244,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       </div>
     </ErrorBoundary>
   );
-
-  const handleLogout = async () => {
-    localStorage.removeItem('app_custom_user');
-    localStorage.removeItem('last_user_email');
-    setCustomUser(null);
-    setProfile(null);
-    setIsProfileLoading(false);
-    setHasCheckedProfile(false);
-    setIncidents([]);
-    setTasks([]);
-    setReferrals([]);
-    setExpedientes([]);
-    setNotifications([]);
-    setAdmins([]);
-    setCoordinators([]);
-    setTeachers([]);
-    setPsychologists([]);
-    setDirectives([]);
-    try {
-      await signOut(auth);
-    } catch (e) {
-      console.error("Logout error:", e);
-    }
-  };
 
   const markAsReceived = async (incidentId: string) => {
     if (profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
@@ -6612,7 +6632,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
 
 const InputGroup = ({ label, children, required }: { label: string, children: React.ReactNode, required?: boolean }) => (
   <div className="space-y-1.5">
-    <label className="text-sm font-bold text-slate-700 flex items-center gap-1">
+    <label className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1">
       {label}
       {required && <span className="text-red-500">*</span>}
     </label>
@@ -7053,20 +7073,20 @@ const TaskManager = ({
   const getStatusBadge = (task: Task) => {
     if (isTaskOverdue(task)) {
       return (
-        <span className="bg-red-100 text-red-800 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 flex items-center gap-1 shadow-sm">
-          <AlertTriangle className="w-3.5 h-3.5 text-red-600 flex-shrink-0" /> Incumplida
+        <span className="bg-red-100 dark:bg-red-950/80 text-red-800 dark:text-red-200 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 flex items-center gap-1 shadow-sm">
+          <AlertTriangle className="w-3.5 h-3.5 text-red-600 dark:text-red-400 flex-shrink-0" /> Incumplida
         </span>
       );
     }
     switch (task.status) {
       case 'RECIBIDA':
-        return <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-200 flex items-center gap-1"><Eye className="w-3 h-3" /> Recibida</span>;
+        return <span className="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800 flex items-center gap-1"><Eye className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Recibida</span>;
       case 'ASIGNADA':
-        return <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-200 flex items-center gap-1"><Clock className="w-3 h-3" /> Re-asignada</span>;
+        return <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-800 flex items-center gap-1"><Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Re-asignada</span>;
       case 'REALIZADA':
-        return <span className="bg-purple-100 text-purple-800 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-200 flex items-center gap-1"><FileText className="w-3 h-3" /> Realizada</span>;
+        return <span className="bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-200 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-200 dark:border-purple-800 flex items-center gap-1"><FileText className="w-3 h-3 text-purple-600 dark:text-purple-400" /> Realizada</span>;
       case 'COMPLETADA':
-        return <span className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-600" /> Completada</span>;
+        return <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> Completada</span>;
       default:
         return null;
     }
@@ -7076,8 +7096,8 @@ const TaskManager = ({
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Gestión de Tareas</h1>
-          <p className="text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Gestión de Tareas</h1>
+          <p className="text-slate-500 dark:text-slate-400">
             {isDirectiveOrAdmin
               ? 'Asigna, supervisa y revisa tareas y compromisos del personal'
               : 'Consulta tus tareas asignadas y envía evidencias de cumplimiento'}
@@ -7106,16 +7126,16 @@ const TaskManager = ({
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1 border-b border-slate-200">
+      <div className="flex gap-2 overflow-x-auto pb-1 border-b border-slate-200 dark:border-slate-800">
         {(['ALL', 'RECIBIDA', 'ASIGNADA', 'REALIZADA', 'COMPLETADA', 'INCUMPLIDA'] as const).map(st => (
           <button
             key={st}
             onClick={() => setTaskFilter(st)}
             className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5",
+              "px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer",
               taskFilter === st
                 ? st === 'INCUMPLIDA' ? "bg-red-600 text-white shadow-sm" : "bg-indigo-600 text-white shadow-sm"
-                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
             )}
           >
             {st === 'ALL' ? 'Todas' : st === 'ASIGNADA' ? 'Re-asignada' : st === 'RECIBIDA' ? 'Recibida' : st === 'REALIZADA' ? 'Realizada' : st === 'COMPLETADA' ? 'Completada' : '⚠️ Incumplidas'}
@@ -7125,7 +7145,7 @@ const TaskManager = ({
 
       {/* Task List */}
       {filteredTasks.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-12 text-center text-slate-400 dark:text-slate-500">
           <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-20" />
           <p className="text-sm font-medium">No hay tareas en esta categoría.</p>
         </div>
@@ -7140,29 +7160,29 @@ const TaskManager = ({
                 className={cn(
                   "rounded-2xl border p-5 transition-all cursor-pointer space-y-3",
                   overdue
-                    ? "bg-red-50/40 border-red-200 border-l-4 border-l-red-500 hover:border-red-300 hover:shadow-md"
-                    : "bg-white border-slate-200 hover:border-indigo-300 hover:shadow-md"
+                    ? "bg-red-50/40 dark:bg-red-950/30 border-red-200 dark:border-red-900/60 border-l-4 border-l-red-500 hover:border-red-300 dark:hover:border-red-700 hover:shadow-md"
+                    : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md"
                 )}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       {t.title}
                       {overdue && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 bg-red-100 text-red-700 rounded-full border border-red-200 flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3 text-red-600" /> Vencida
+                        <span className="text-[10px] font-bold px-2 py-0.5 bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 rounded-full border border-red-200 dark:border-red-800 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-red-600 dark:text-red-400" /> Vencida
                         </span>
                       )}
                     </h3>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-500 font-medium">
-                      <span>Para: <strong>{t.assignedToName}</strong> ({t.assignedToRole})</span>
-                      <span>De: <strong>{t.createdByName}</strong> ({t.createdByRole})</span>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-500 dark:text-slate-400 font-medium">
+                      <span>Para: <strong className="text-slate-800 dark:text-slate-200">{t.assignedToName}</strong> ({t.assignedToRole})</span>
+                      <span>De: <strong className="text-slate-800 dark:text-slate-200">{t.createdByName}</strong> ({t.createdByRole})</span>
                       {t.dueDate ? (
-                        <span className={cn("font-bold px-1.5 py-0.5 rounded", overdue ? "bg-red-100 text-red-700" : "text-red-600")}>
+                        <span className={cn("font-bold px-1.5 py-0.5 rounded", overdue ? "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300" : "text-red-600 dark:text-red-400")}>
                           Límite: {t.dueDate}
                         </span>
                       ) : (
-                        <span className="font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs flex items-center gap-1">
+                        <span className="font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-1">
                           🎉 Reconocimiento
                         </span>
                       )}
@@ -7175,7 +7195,7 @@ const TaskManager = ({
                         type="button"
                         onClick={(e) => handleDeleteTask(t, e)}
                         title="Eliminar registro"
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-all cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -7183,17 +7203,18 @@ const TaskManager = ({
                   </div>
                 </div>
 
-                <p className="text-sm text-slate-600 line-clamp-2">{t.description}</p>
+                <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-2">{t.description}</p>
 
                 {t.directiveFeedback && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
-                    <strong>Observación de Dirección:</strong> {t.directiveFeedback}
+                  <div className="bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-700 rounded-xl p-3 text-xs">
+                    <strong className="text-amber-800 dark:text-amber-300 font-bold">Observación de Dirección:</strong>{' '}
+                    <span className="text-amber-950 dark:text-amber-100 font-semibold">{t.directiveFeedback}</span>
                   </div>
                 )}
 
-                <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-400">
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-400 dark:text-slate-500">
                   <span>Creada: {format(t.createdAt, 'dd/MM/yyyy HH:mm')}</span>
-                  <span className="text-indigo-600 font-bold hover:underline">Ver detalles →</span>
+                  <span className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline">Ver detalles →</span>
                 </div>
               </div>
             );
@@ -7205,15 +7226,15 @@ const TaskManager = ({
       <AnimatePresence>
         {showAssignModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAssignModal(false)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
-              <h2 className="text-2xl font-bold text-slate-900 mb-6">Asignar Nueva Tarea</h2>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAssignModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">Asignar Nueva Tarea</h2>
               <form onSubmit={handleAssignTask} className="space-y-4">
                 <InputGroup label="Opciones de Destinatario" required>
                   <select
                     value={taskFormData.targetType}
                     onChange={(e) => setTaskFormData({ ...taskFormData, targetType: e.target.value as any })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 mb-2"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 mb-2"
                   >
                     <option value="SPECIFIC">Seleccionar Persona(s) Específica(s)</option>
                     <option value="ALL_TEACHERS">Todos los Docentes</option>
@@ -7233,7 +7254,7 @@ const TaskManager = ({
                             setTaskFormData({ ...taskFormData, selectedEmails: [...taskFormData.selectedEmails, email] });
                           }
                         }}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500"
                       >
                         <option value="">-- Selecciona persona para agregar --</option>
                         <optgroup label="Coordinadores">
@@ -7271,7 +7292,7 @@ const TaskManager = ({
                                   selectedEmails: taskFormData.selectedEmails.filter(e => e.toLowerCase() !== email.toLowerCase())
                                 });
                               }}
-                              className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 hover:text-red-700 border border-indigo-100 hover:border-red-100 transition-all group"
+                              className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-200 px-3 py-1.5 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 dark:hover:bg-red-950 hover:text-red-700 dark:hover:text-red-300 border border-indigo-100 dark:border-indigo-800 hover:border-red-100 dark:hover:border-red-800 transition-all group"
                             >
                               <UserIcon className="w-3.5 h-3.5" />
                               <span>{person?.name || email}</span>
@@ -7280,7 +7301,7 @@ const TaskManager = ({
                           );
                         })}
                         {taskFormData.selectedEmails.length === 0 && (
-                          <span className="text-xs text-slate-400 italic px-1">Sin personas seleccionadas. Elige personas arriba para agregarlas.</span>
+                          <span className="text-xs text-slate-400 dark:text-slate-500 italic px-1">Sin personas seleccionadas. Elige personas arriba para agregarlas.</span>
                         )}
                       </div>
                     </div>
@@ -7294,7 +7315,7 @@ const TaskManager = ({
                     value={taskFormData.title}
                     onChange={(e) => setTaskFormData({ ...taskFormData, title: e.target.value })}
                     placeholder="Ej. Entrega de planeaciones del mes"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
                   />
                 </InputGroup>
 
@@ -7305,7 +7326,7 @@ const TaskManager = ({
                     value={taskFormData.description}
                     onChange={(e) => setTaskFormData({ ...taskFormData, description: e.target.value })}
                     placeholder="Describe los requerimientos y lo que debe incluir la evidencia..."
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
                   />
                 </InputGroup>
 
@@ -7315,13 +7336,13 @@ const TaskManager = ({
                     type="date"
                     value={taskFormData.dueDate}
                     onChange={(e) => setTaskFormData({ ...taskFormData, dueDate: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 font-medium"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 font-medium"
                   />
                 </InputGroup>
 
                 <div className="flex gap-3 pt-4">
-                  <button type="button" onClick={() => setShowAssignModal(false)} className="flex-1 py-2.5 border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50">Cancelar</button>
-                  <button type="submit" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-indigo-100">Asignar Tarea</button>
+                  <button type="button" onClick={() => setShowAssignModal(false)} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">Cancelar</button>
+                  <button type="submit" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-indigo-100 dark:shadow-none cursor-pointer">Asignar Tarea</button>
                 </div>
               </form>
             </motion.div>
@@ -7333,18 +7354,18 @@ const TaskManager = ({
       <AnimatePresence>
         {showCongratulationModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowCongratulationModal(false)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowCongratulationModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl"><Award className="w-6 h-6" /></div>
-                <h2 className="text-2xl font-bold text-slate-900">Enviar Felicitación</h2>
+                <div className="p-3 bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 rounded-xl"><Award className="w-6 h-6" /></div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Enviar Felicitación</h2>
               </div>
               <form onSubmit={handleSendCongratulation} className="space-y-4">
                 <InputGroup label="Opciones de Destinatario" required>
                   <select
                     value={congratFormData.targetType}
                     onChange={(e) => setCongratFormData({ ...congratFormData, targetType: e.target.value as any })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-emerald-500 mb-2"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 mb-2"
                   >
                     <option value="SPECIFIC">Seleccionar Persona(s) Específica(s)</option>
                     <option value="ALL_TEACHERS">Todos los Docentes</option>
@@ -7364,7 +7385,7 @@ const TaskManager = ({
                             setCongratFormData({ ...congratFormData, selectedEmails: [...congratFormData.selectedEmails, email] });
                           }
                         }}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 font-medium text-slate-800 focus:ring-2 focus:ring-emerald-500"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500"
                       >
                         <option value="">-- Selecciona persona para agregar --</option>
                         <optgroup label="Coordinadores">
@@ -7402,7 +7423,7 @@ const TaskManager = ({
                                   selectedEmails: congratFormData.selectedEmails.filter(e => e.toLowerCase() !== email.toLowerCase())
                                 });
                               }}
-                              className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 hover:text-red-700 border border-emerald-100 hover:border-red-100 transition-all group"
+                              className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-200 px-3 py-1.5 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 dark:hover:bg-red-950 hover:text-red-700 dark:hover:text-red-300 border border-emerald-100 dark:border-emerald-800 hover:border-red-100 dark:hover:border-red-800 transition-all group"
                             >
                               <UserIcon className="w-3.5 h-3.5" />
                               <span>{person?.name || email}</span>
@@ -7411,7 +7432,7 @@ const TaskManager = ({
                           );
                         })}
                         {congratFormData.selectedEmails.length === 0 && (
-                          <span className="text-xs text-slate-400 italic px-1">Sin personas seleccionadas. Elige personas arriba para agregarlas.</span>
+                          <span className="text-xs text-slate-400 dark:text-slate-500 italic px-1">Sin personas seleccionadas. Elige personas arriba para agregarlas.</span>
                         )}
                       </div>
                     </div>
@@ -7424,7 +7445,7 @@ const TaskManager = ({
                     type="text"
                     value={congratFormData.title}
                     onChange={(e) => setCongratFormData({ ...congratFormData, title: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500"
                   />
                 </InputGroup>
 
@@ -7435,13 +7456,13 @@ const TaskManager = ({
                     value={congratFormData.message}
                     onChange={(e) => setCongratFormData({ ...congratFormData, message: e.target.value })}
                     placeholder="Expresa un reconocimiento por su compromiso, esfuerzo o logros destacados..."
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-emerald-500"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-emerald-500"
                   />
                 </InputGroup>
 
                 <div className="flex gap-3 pt-4">
-                  <button type="button" onClick={() => setShowCongratulationModal(false)} className="flex-1 py-2.5 border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50">Cancelar</button>
-                  <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-emerald-100">Enviar Reconocimiento</button>
+                  <button type="button" onClick={() => setShowCongratulationModal(false)} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">Cancelar</button>
+                  <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-emerald-100 dark:shadow-none cursor-pointer">Enviar Reconocimiento</button>
                 </div>
               </form>
             </motion.div>
@@ -7453,13 +7474,13 @@ const TaskManager = ({
       <AnimatePresence>
         {selectedTask && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedTask(null)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-xl bg-white rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto space-y-6">
-              <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedTask(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto space-y-6">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
                 <div>
                   <div className="mb-1">{getStatusBadge(selectedTask)}</div>
-                  <h2 className="text-2xl font-bold text-slate-900">{selectedTask.title}</h2>
-                  <p className="text-xs text-slate-500 mt-1">Asignada a <strong>{selectedTask.assignedToName}</strong> por {selectedTask.createdByName}</p>
+                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white">{selectedTask.title}</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Asignada a <strong className="text-slate-800 dark:text-slate-200">{selectedTask.assignedToName}</strong> por {selectedTask.createdByName}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   {(canDeleteRecords || selectedTask.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
@@ -7467,62 +7488,66 @@ const TaskManager = ({
                       type="button"
                       onClick={(e) => handleDeleteTask(selectedTask, e)}
                       title="Eliminar registro"
-                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-red-200 cursor-pointer"
+                      className="px-3 py-1.5 bg-red-50 dark:bg-red-950/60 hover:bg-red-100 dark:hover:bg-red-900/60 text-red-600 dark:text-red-300 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-red-200 dark:border-red-800 cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       <span>Eliminar</span>
                     </button>
                   )}
-                  <button onClick={() => setSelectedTask(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer"><X className="w-5 h-5" /></button>
+                  <button onClick={() => setSelectedTask(null)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl cursor-pointer"><X className="w-5 h-5" /></button>
                 </div>
               </div>
 
               <div className="space-y-4">
                 {isTaskOverdue(selectedTask) && (
-                  <div className="bg-red-50 border border-red-200 text-red-900 rounded-xl p-3.5 text-xs font-bold flex items-center gap-2.5 shadow-sm">
-                    <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                  <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-900 dark:text-red-200 rounded-xl p-3.5 text-xs font-bold flex items-center gap-2.5 shadow-sm">
+                    <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0" />
                     <span>⚠️ Esta tarea superó la fecha límite ({selectedTask.dueDate}) sin completarse y ha sido marcada como INCUMPLIDA.</span>
                   </div>
                 )}
                 <div>
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Descripción / Instrucciones</h4>
-                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 text-sm text-slate-800 whitespace-pre-line">
+                  <h4 className="text-xs font-bold text-slate-400 dark:text-slate-400 uppercase tracking-wider mb-1">Descripción / Instrucciones</h4>
+                  <div className="bg-slate-50 dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700/80 rounded-xl p-4 text-sm text-slate-800 dark:text-slate-100 whitespace-pre-line">
                     {selectedTask.description}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-6 text-xs text-slate-500 bg-slate-50 p-3 rounded-xl">
+                <div className="flex items-center gap-6 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 p-3 rounded-xl border border-slate-100 dark:border-slate-700/80">
                   {selectedTask.dueDate ? (
-                    <span>Fecha Límite: <strong className="text-red-600 font-bold">{selectedTask.dueDate}</strong></span>
+                    <span>Fecha Límite: <strong className="text-red-600 dark:text-red-400 font-bold">{selectedTask.dueDate}</strong></span>
                   ) : (
-                    <span>Tipo: <strong className="text-emerald-700 font-bold">🎉 Reconocimiento / Felicitación (Sin Límite)</strong></span>
+                    <span>Tipo: <strong className="text-emerald-700 dark:text-emerald-400 font-bold">🎉 Reconocimiento / Felicitación (Sin Límite)</strong></span>
                   )}
                   {selectedTask.readAt && <span>Visto: {format(selectedTask.readAt, 'dd/MM HH:mm')}</span>}
                 </div>
 
                 {selectedTask.directiveFeedback && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 space-y-1">
-                    <strong className="text-amber-700 font-bold block">Observaciones de Dirección / Reasignación:</strong>
-                    <p>{selectedTask.directiveFeedback}</p>
+                  <div className="bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-700 rounded-xl p-4 text-xs space-y-1.5">
+                    <strong className="text-amber-800 dark:text-amber-300 font-bold block text-xs uppercase tracking-wider">Observaciones de Dirección / Reasignación:</strong>
+                    <p className="text-amber-950 dark:text-amber-100 font-semibold text-sm leading-relaxed bg-amber-100/60 dark:bg-amber-900/40 p-3 rounded-lg border border-amber-200/80 dark:border-amber-800/80">
+                      {selectedTask.directiveFeedback}
+                    </p>
                   </div>
                 )}
 
                 {/* Evidence Details if submitted */}
                 {selectedTask.evidenceText && (
                   <div>
-                    <h4 className="text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Evidencia Entregada</h4>
-                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-sm text-emerald-950 whitespace-pre-line">
-                      <p>{selectedTask.evidenceText}</p>
+                    <h4 className="text-xs font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider mb-1">Evidencia Entregada</h4>
+                    <div className="bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4 text-sm whitespace-pre-line space-y-2">
+                      <p className="text-emerald-950 dark:text-emerald-100 font-semibold text-sm leading-relaxed bg-emerald-100/60 dark:bg-emerald-900/40 p-3 rounded-lg border border-emerald-200/80 dark:border-emerald-800/80">
+                        {selectedTask.evidenceText}
+                      </p>
                       {selectedTask.evidenceFiles && selectedTask.evidenceFiles.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-emerald-200">
-                          <span className="text-xs font-bold text-emerald-800">Enlace / Archivo: </span>
-                          <a href={selectedTask.evidenceFiles[0]} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 underline font-semibold break-all">
+                        <div className="pt-2 border-t border-emerald-200 dark:border-emerald-800">
+                          <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">Enlace / Archivo: </span>
+                          <a href={selectedTask.evidenceFiles[0]} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 dark:text-indigo-300 underline font-semibold break-all">
                             {selectedTask.evidenceFiles[0]}
                           </a>
                         </div>
                       )}
                       {selectedTask.evidenceSubmittedAt && (
-                        <span className="block mt-2 text-[10px] text-emerald-600 font-bold">Entregado el: {format(selectedTask.evidenceSubmittedAt, 'dd/MM/yyyy HH:mm')}</span>
+                        <span className="block text-[11px] text-emerald-700 dark:text-emerald-300 font-bold">Entregado el: {format(selectedTask.evidenceSubmittedAt, 'dd/MM/yyyy HH:mm')}</span>
                       )}
                     </div>
                   </div>
@@ -7531,9 +7556,9 @@ const TaskManager = ({
                 {/* Form to Submit Evidence for Assigned User */}
                 {selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() &&
                   (selectedTask.status === 'RECIBIDA' || selectedTask.status === 'ASIGNADA') && (
-                  <div className="border-t border-slate-200 pt-4 space-y-3">
-                    <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                      <Send className="w-4 h-4 text-indigo-600" />
+                  <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                    <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                      <Send className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                       Subir / Compartir Evidencia de Cumplimiento
                     </h4>
                     <InputGroup label="Detalles de la Evidencia" required>
@@ -7542,7 +7567,7 @@ const TaskManager = ({
                         value={evidenceText}
                         onChange={(e) => setEvidenceText(e.target.value)}
                         placeholder="Describe el trabajo realizado o cómo se dio cumplimiento a la tarea..."
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
                       />
                     </InputGroup>
                     <InputGroup label="Enlace de Evidencia (Google Drive / Archivo URL)">
@@ -7551,12 +7576,12 @@ const TaskManager = ({
                         value={evidenceFile}
                         onChange={(e) => setEvidenceFile(e.target.value)}
                         placeholder="https://..."
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
                       />
                     </InputGroup>
                     <button
                       onClick={() => handleSubmitEvidence(selectedTask)}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm"
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm cursor-pointer"
                     >
                       Enviar Evidencia al Directivo (Estatus: Realizada)
                     </button>
@@ -7565,27 +7590,27 @@ const TaskManager = ({
 
                 {/* Directive Review Options for REALIZADA status */}
                 {isDirectiveOrAdmin && selectedTask.status === 'REALIZADA' && (
-                  <div className="border-t border-slate-200 pt-4 space-y-3">
-                    <h4 className="text-sm font-bold text-slate-800">Revisión de Evidencia por Dirección</h4>
+                  <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                    <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Revisión de Evidencia por Dirección</h4>
                     <InputGroup label="Observaciones (si requiere corrección)">
                       <input
                         type="text"
                         value={directiveFeedback}
                         onChange={(e) => setDirectiveFeedback(e.target.value)}
                         placeholder="Escribe comentarios de corrección si la reasignas..."
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
                       />
                     </InputGroup>
                     <div className="flex gap-3">
                       <button
                         onClick={() => handleUpdateTaskStatus(selectedTask, 'ASIGNADA')}
-                        className="flex-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold py-2.5 rounded-xl text-sm transition-all"
+                        className="flex-1 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-bold py-2.5 rounded-xl text-sm transition-all cursor-pointer"
                       >
                         Reasignar (Requerir Corrección)
                       </button>
                       <button
                         onClick={() => handleUpdateTaskStatus(selectedTask, 'COMPLETADA')}
-                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl shadow-md text-sm transition-all"
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl shadow-md text-sm transition-all cursor-pointer"
                       >
                         Aprobar (Marcar Completada)
                       </button>
@@ -7665,16 +7690,23 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.email || !formData.email.includes('@')) {
+      showSystemPopup("Correo inválido", "Ingresa un correo electrónico válido.", "warning");
+      return;
+    }
     setLoading(true);
     try {
       const emailId = formData.email.toLowerCase().trim();
       const newUserData: any = {
-        ...formData,
+        name: formData.name.trim(),
         email: emailId,
+        phone: formData.phone.trim(),
         role: newUserRole,
         uid: emailId,
         isRegistered: false,
         password: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now()
       };
 
       // Rule 8: If Coordinator adds a user, auto-link ONLY if the new user is NOT a coordinator
@@ -7688,12 +7720,24 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         newUserData.educationLevel = educationLevel;
       }
 
-      await setDoc(doc(db, 'users', emailId), newUserData);
+      await setDoc(doc(db, 'users', emailId), newUserData, { merge: true });
       await addLog('Creó un usuario', `Nombre: ${formData.name}, Email: ${emailId}, Rol: ${newUserRole}`);
+
+      showSystemPopup(
+        "Usuario Registrado Exitosamente",
+        `El usuario "${formData.name}" (${emailId}) ha sido guardado correctamente en la base de datos con el rol ${newUserRole}.\n\nCuando este usuario ingrese por primera vez con su correo, el sistema lo redirigirá a generar su contraseña.`,
+        "success"
+      );
+
       setShowAddModal(false);
       setFormData({ name: '', email: '', phone: '' });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `users/${formData.email}`);
+    } catch (error: any) {
+      console.error("Error adding user:", error);
+      showSystemPopup(
+        "Error al Guardar Usuario",
+        error?.message || "Ocurrió un error al intentar guardar el usuario en la base de datos.",
+        "error"
+      );
     } finally {
       setLoading(false);
     }
