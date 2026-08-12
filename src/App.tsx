@@ -2769,7 +2769,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (targetIds.length === 0) return;
 
     let q;
-    if (targetIds.length === 1) {
+    if (isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
+      q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
+    } else if (targetIds.length === 1) {
       q = query(collection(db, 'notifications'), where('userId', '==', targetIds[0]));
     } else {
       q = query(collection(db, 'notifications'), where('userId', 'in', targetIds.slice(0, 30)));
@@ -3033,7 +3035,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (!profile) return;
 
     let q;
-    if (isSuperAdminEmail(profile.email) || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
+    if (isSuperAdmin || isSuperAdminEmail(profile.email) || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
       q = query(collection(db, 'incidents'), orderBy('createdAt', 'desc'));
     } else if (profile.role === 'COORDINATOR') {
       q = query(
