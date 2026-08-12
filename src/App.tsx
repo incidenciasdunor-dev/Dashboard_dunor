@@ -2016,6 +2016,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     await processNotificationClickAndDelete(notif);
   };
   const [newCategory, setNewCategory] = useState('');
+  const [editingCategory, setEditingCategory] = useState<{ original: string; name: string } | null>(null);
   const [appNameInput, setAppNameInput] = useState(systemSettings.appName || 'DASHBOARD DUNOR');
   const [appLogoInput, setAppLogoInput] = useState(systemSettings.appLogoUrl || '');
 
@@ -2046,7 +2047,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const [printIncident, setPrintIncident] = useState<Incident | null>(null);
 
-  const isSuperAdmin = (normalizeUserRole(profile?.role) === 'ADMIN' || !profile?.role) && isSuperAdminEmail(profile?.email);
+  const isSuperAdmin = isSuperAdminEmail(profile?.email);
 
   const effectiveRolePermissions = useMemo(() => {
     const merged: RolePermissionsMap = { ...DEFAULT_ROLE_PERMISSIONS };
@@ -2832,7 +2833,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [user, profile, isSuperAdmin]);
 
   useEffect(() => {
-    if (!user || !profile) return;
+    if (!activeUser || !profile) return;
     const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qTasks, (snapshot) => {
       const allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
@@ -2852,10 +2853,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       console.warn("Tasks listener notice:", error);
     });
     return () => unsubscribe();
-  }, [user, profile, isSuperAdmin]);
+  }, [activeUser, profile, isSuperAdmin]);
 
   useEffect(() => {
-    if (!user || !profile) return;
+    if (!activeUser || !profile) return;
     const qReferrals = query(collection(db, 'referrals'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qReferrals, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Referral));
@@ -2864,10 +2865,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       console.warn("Referrals listener notice:", error);
     });
     return () => unsubscribe();
-  }, [user, profile]);
+  }, [activeUser, profile]);
 
   useEffect(() => {
-    if (!user || !profile) return;
+    if (!activeUser || !profile) return;
     const qExpedientes = query(collection(db, 'expedientes'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qExpedientes, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expediente));
@@ -2876,7 +2877,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       console.warn("Expedientes listener notice:", error);
     });
     return () => unsubscribe();
-  }, [user, profile]);
+  }, [activeUser, profile]);
 
   const markNotificationAsRead = async (id: string) => {
     try {
@@ -4588,7 +4589,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               )}
 
               {/* Seed / Initialize Database Card */}
-              {(isSuperAdmin || profile.role === 'ADMIN') && (
+              {isSuperAdmin && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                   <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                     <div>
@@ -4621,64 +4622,178 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                     <ClipboardList className="w-5 h-5 text-indigo-600" />
                     Categorías de Incidencia
                   </h2>
-                  <p className="text-sm text-slate-500 mt-1">Administra las categorías disponibles para los reportes.</p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Agrega, modifica o elimina las categorías elegibles para el reporte de incidencias.
+                  </p>
                 </div>
                 <div className="p-6 space-y-4">
-                  {profile.role === 'COORDINATOR' && (
+                  {(isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || profile.role === 'COORDINATOR') && (
                     <div className="flex gap-2">
                       <input
                         type="text"
                         value={newCategory}
                         onChange={(e) => setNewCategory(e.target.value)}
-                        placeholder="Nueva categoría..."
-                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                        placeholder="Escribe el nombre de la nueva categoría..."
+                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            if (!newCategory.trim()) return;
+                            const catToAdd = newCategory.trim();
+                            const currentCats = systemSettings.categories || [];
+                            if (currentCats.includes(catToAdd)) {
+                              setNewCategory('');
+                              return;
+                            }
+                            const updatedCategories = [...currentCats, catToAdd];
+                            try {
+                              await setDoc(doc(db, 'settings', 'global'), {
+                                categories: updatedCategories
+                              }, { merge: true });
+                              await addLog('Creó una nueva categoría', `Categoría: ${catToAdd}`);
+                              setNewCategory('');
+                            } catch (error) {
+                              console.error("Error adding category:", error);
+                            }
+                          }
+                        }}
                       />
                       <button
                         onClick={async () => {
                           if (!newCategory.trim()) return;
-                          const updatedCategories = [...(systemSettings.categories || []), newCategory.trim()];
+                          const catToAdd = newCategory.trim();
+                          const currentCats = systemSettings.categories || [];
+                          if (currentCats.includes(catToAdd)) {
+                            setNewCategory('');
+                            return;
+                          }
+                          const updatedCategories = [...currentCats, catToAdd];
                           try {
                             await setDoc(doc(db, 'settings', 'global'), {
                               categories: updatedCategories
                             }, { merge: true });
-                            await addLog('Creó una nueva categoría', `Categoría: ${newCategory.trim()}`);
+                            await addLog('Creó una nueva categoría', `Categoría: ${catToAdd}`);
                             setNewCategory('');
                           } catch (error) {
                             console.error("Error adding category:", error);
                           }
                         }}
-                        className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2"
+                        className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2 cursor-pointer shadow-sm text-sm"
                       >
                         <Plus className="w-4 h-4" />
-                        Agregar
+                        Agregar Categoría
                       </button>
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {(systemSettings.categories || []).map((cat) => (
-                      <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 group">
-                        <span className="text-sm font-medium text-slate-700">{cat}</span>
-                        {profile.role === 'COORDINATOR' && (
-                          <button
-                            onClick={async () => {
-                              const updatedCategories = (systemSettings.categories || []).filter(c => c !== cat);
-                              try {
-                                await setDoc(doc(db, 'settings', 'global'), {
-                                  categories: updatedCategories
-                                }, { merge: true });
-                                await addLog('Eliminó una categoría', `Categoría: ${cat}`);
-                              } catch (error) {
-                                console.error("Error removing category:", error);
-                              }
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+                    {(systemSettings.categories || []).map((cat) => {
+                      const isEditingThis = editingCategory?.original === cat;
+                      return (
+                        <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-slate-300 transition-all group">
+                          {isEditingThis ? (
+                            <div className="flex items-center gap-2 w-full">
+                              <input
+                                type="text"
+                                value={editingCategory.name}
+                                onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
+                                className="flex-1 bg-white border border-indigo-300 rounded-lg px-3 py-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                autoFocus
+                                onKeyDown={async (e) => {
+                                  if (e.key === 'Enter') {
+                                    if (!editingCategory.name.trim()) return;
+                                    const oldName = editingCategory.original;
+                                    const newName = editingCategory.name.trim();
+                                    if (oldName === newName) {
+                                      setEditingCategory(null);
+                                      return;
+                                    }
+                                    const currentCats = systemSettings.categories || [];
+                                    const updatedCategories = currentCats.map(c => c === oldName ? newName : c);
+                                    try {
+                                      await setDoc(doc(db, 'settings', 'global'), {
+                                        categories: updatedCategories
+                                      }, { merge: true });
+                                      await addLog('Modificó una categoría', `De: "${oldName}" a: "${newName}"`);
+                                      setEditingCategory(null);
+                                    } catch (error) {
+                                      console.error("Error updating category:", error);
+                                    }
+                                  } else if (e.key === 'Escape') {
+                                    setEditingCategory(null);
+                                  }
+                                }}
+                              />
+                              <button
+                                onClick={async () => {
+                                  if (!editingCategory.name.trim()) return;
+                                  const oldName = editingCategory.original;
+                                  const newName = editingCategory.name.trim();
+                                  if (oldName === newName) {
+                                    setEditingCategory(null);
+                                    return;
+                                  }
+                                  const currentCats = systemSettings.categories || [];
+                                  const updatedCategories = currentCats.map(c => c === oldName ? newName : c);
+                                  try {
+                                    await setDoc(doc(db, 'settings', 'global'), {
+                                      categories: updatedCategories
+                                    }, { merge: true });
+                                    await addLog('Modificó una categoría', `De: "${oldName}" a: "${newName}"`);
+                                    setEditingCategory(null);
+                                  } catch (error) {
+                                    console.error("Error updating category:", error);
+                                  }
+                                }}
+                                title="Guardar cambio"
+                                className="p-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-lg transition-all cursor-pointer"
+                              >
+                                <Check className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setEditingCategory(null)}
+                                title="Cancelar"
+                                className="p-1.5 bg-slate-200 text-slate-600 hover:bg-slate-300 rounded-lg transition-all cursor-pointer"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="text-sm font-semibold text-slate-700">{cat}</span>
+                              {(isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || profile.role === 'COORDINATOR') && (
+                                <div className="flex items-center gap-1 opacity-90 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={() => setEditingCategory({ original: cat, name: cat })}
+                                    title="Modificar nombre de categoría"
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
+                                  >
+                                    <Edit2 className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      const currentCats = systemSettings.categories || [];
+                                      const updatedCategories = currentCats.filter(c => c !== cat);
+                                      try {
+                                        await setDoc(doc(db, 'settings', 'global'), {
+                                          categories: updatedCategories
+                                        }, { merge: true });
+                                        await addLog('Eliminó una categoría', `Categoría: ${cat}`);
+                                      } catch (error) {
+                                        console.error("Error removing category:", error);
+                                      }
+                                    }}
+                                    title="Eliminar categoría"
+                                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
