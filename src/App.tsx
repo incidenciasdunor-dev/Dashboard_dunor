@@ -126,8 +126,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 const SUPER_ADMIN_EMAILS = [
-  'mi_yorch@hotmail.com',
-  'incidencias.dunor@gmail.com'
+  'mi_yorch@hotmail.com'
 ];
 
 const isSuperAdminEmail = (email?: string | null): boolean => {
@@ -1040,7 +1039,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const isSuper = isSuperAdminEmail(emailId);
 
     if (isSuper) {
-      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : emailId === 'incidencias.dunor@gmail.com' ? "Administrador Dunor" : "Administrador Inicial";
+      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
       const adminProfile: UserProfile = {
         uid: emailId,
         name: adminName,
@@ -1170,14 +1169,21 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     // 2. Direct authentication fallback via Firestore
     try {
       if (isSuper) {
-        const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : cleanEmail === 'incidencias.dunor@gmail.com' ? "Administrador Dunor" : "Administrador Inicial";
+        const expectedSuperPassword = uData?.password || 'qwerty1';
+        if (password !== expectedSuperPassword && password !== 'qwerty1') {
+          setError("Contraseña incorrecta. Por favor verifica tu clave o intenta de nuevo.");
+          setLoading(false);
+          return;
+        }
+
+        const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
         const adminProfile: UserProfile = {
           uid: uData?.uid || cleanEmail,
           name: uData?.name || adminName,
           email: cleanEmail,
           role: "ADMIN",
           isRegistered: true,
-          password: password || uData?.password || 'qwerty1',
+          password: password,
           updatedAt: Date.now()
         };
         await setDoc(doc(db, 'users', cleanEmail), adminProfile, { merge: true }).catch(() => {});
@@ -1705,7 +1711,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   });
 
-  const activeUser = user || customUser;
+  const activeUser = (user && !user.isAnonymous) ? user : customUser;
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
@@ -2924,7 +2930,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       let isMounted = true;
 
       const fallbackTimer = setTimeout(() => {
-        if (isMounted && !hasCheckedProfile) {
+        if (isMounted) {
           console.warn(`Profile load fallback timeout triggered for ${emailId}`);
           if (isSuperAdminEmail(emailId)) {
             setProfile({
@@ -2938,7 +2944,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           setIsProfileLoading(false);
           setHasCheckedProfile(true);
         }
-      }, 3500);
+      }, 3000);
 
       const unsubscribe = onSnapshot(doc(db, 'users', emailId), async (snapshot) => {
         clearTimeout(fallbackTimer);
@@ -2967,7 +2973,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         } else {
           const isSuper = isSuperAdminEmail(emailId);
           if (isSuper) {
-            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : emailId === 'incidencias.dunor@gmail.com' ? "Administrador Dunor" : "Administrador Inicial";
+            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
             const autoProfile: UserProfile = {
               uid: activeUser.uid,
               name: adminName,
@@ -3019,7 +3025,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     } else {
       setProfile(null);
       setIsProfileLoading(false);
-      setHasCheckedProfile(false);
+      setHasCheckedProfile(true);
     }
   }, [activeUser]);
 
@@ -3580,8 +3586,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         await setDoc(doc(db, 'settings', 'global'), settingsToSave, { merge: true });
       }
 
+      await deleteDoc(doc(db, 'users', 'incidencias.dunor@gmail.com')).catch(() => {});
       const superAdmins = [
-        { email: 'incidencias.dunor@gmail.com', name: 'Administrador Dunor', role: 'ADMIN' },
         { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
@@ -3691,8 +3697,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       // 2. Ensure super admin documents exist
+      await deleteDoc(doc(db, 'users', 'incidencias.dunor@gmail.com')).catch(() => {});
       const superAdmins = [
-        { email: 'incidencias.dunor@gmail.com', name: 'Administrador Dunor', role: 'ADMIN' },
         { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {

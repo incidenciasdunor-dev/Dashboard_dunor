@@ -212,6 +212,10 @@ export const getRolePermission = (
   isSuperAdmin: boolean = false,
   userCustomPermissions?: Partial<RolePermissions>
 ): boolean => {
+  if (isSuperAdmin) {
+    return true;
+  }
+
   const normRole = normalizeUserRole(role);
   const effectiveRole: UserRole | undefined = normRole || (isSuperAdmin ? 'ADMIN' : undefined);
   const isAdminOrSuperWithoutRole = isSuperAdmin && (normRole === 'ADMIN' || !normRole);

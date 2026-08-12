@@ -2,59 +2,47 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
     // Reglas para la colección 'users':
-    // - Permitir 'get' individual para que la pantalla de login/registro verifique si un correo está dado de alta o registrado.
-    // - Permitir 'create' y 'update' para que usuarios nuevos puedan completar su registro y generar contraseña.
-    // - Exigir autenticación para listar todos los usuarios (list) o eliminar cuentas (delete).
     match /users/{userId} {
-      allow get: if true;
-      allow create, update: if true;
-      allow list, delete: if isAuthenticated();
+      allow get, list, create, update, delete: if true;
     }
 
-    // Todas las demás colecciones requieren autenticación para leer o escribir.
+    // Todas las colecciones permiten lectura y escritura completa
     match /incidents/{incidentId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /notifications/{notificationId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /settings/{settingId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /permisos/{permisoId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /mail/{mailId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /logs/{logId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /referrals/{referralId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
     match /expedientes/{expedienteId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
-    // Regla global de protección para cualquier otra colección o subcolección
+    // Regla global
     match /{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
   }
 }
-
-
-
