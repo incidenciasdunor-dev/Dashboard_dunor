@@ -45,6 +45,7 @@ interface ExpedientesManagerProps {
   directives?: UserProfile[];
   teachers?: UserProfile[];
   psychologists?: UserProfile[];
+  admins?: UserProfile[];
   addLog: (action: string, details?: string) => Promise<void>;
   sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean) => Promise<void>;
   canManageExpedientes?: boolean;
@@ -61,6 +62,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   directives = [],
   teachers = [],
   psychologists = [],
+  admins = [],
   addLog,
   sendNotification,
   canManageExpedientes = true,
@@ -70,8 +72,9 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 }) => {
   const userRole = normalizeUserRole(profile.role);
   const isDirectiveOrCoordinator = userRole === 'DIRECTIVE' || userRole === 'COORDINATOR';
-  const isPsychologist = userRole === 'PSYCHOLOGIST' || userRole === 'ADMIN' || (profile.role && String(profile.role).toLowerCase().includes('psico')) || (profile.role && String(profile.role).toLowerCase().includes('admin'));
-  const allowManageExpedientes = canManageExpedientes && isPsychologist && !isDirectiveOrCoordinator;
+  const isPsychologist = userRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
+  const isAdmin = userRole === 'ADMIN';
+  const allowManageExpedientes = canManageExpedientes && isPsychologist && !isDirectiveOrCoordinator && !isAdmin;
 
   const [viewMode, setViewMode] = useState<'FORM' | 'LIST'>(preselectedReferral && allowManageExpedientes ? 'FORM' : 'LIST');
   const [editingExpedienteId, setEditingExpedienteId] = useState<string | null>(null);
@@ -82,7 +85,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const [selectedSharedExpediente, setSelectedSharedExpediente] = useState<any | null>(null);
   const [sharedModalRecipients, setSharedModalRecipients] = useState<string[]>([]);
   const [isUpdatingRecipients, setIsUpdatingRecipients] = useState(false);
-  const [listTab, setListTab] = useState<'SHARED' | 'MASTER'>(isDirectiveOrCoordinator || !allowManageExpedientes ? 'SHARED' : 'MASTER');
+  const [listTab, setListTab] = useState<'SHARED' | 'MASTER'>(isDirectiveOrCoordinator || isAdmin || !allowManageExpedientes ? 'SHARED' : 'MASTER');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -163,7 +166,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     latestProgress: ''
   });
 
-  // Unique list of Coordinators, Directives, Teachers, and Psychologists
+  // Unique list of Coordinators, Directives, Teachers, Psychologists, and Admins
   const allAvailableRecipients = React.useMemo(() => {
     const list: { email: string; name: string; roleLabel: string; uid?: string }[] = [];
     const emailsSeen = new Set<string>();
@@ -182,6 +185,13 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       }
     });
 
+    (admins || []).forEach(a => {
+      if (a.email && !emailsSeen.has(a.email.toLowerCase())) {
+        emailsSeen.add(a.email.toLowerCase());
+        list.push({ email: a.email, name: a.name || 'Administrador', roleLabel: 'Administrador', uid: a.uid });
+      }
+    });
+
     (teachers || []).forEach(t => {
       if (t.email && !emailsSeen.has(t.email.toLowerCase())) {
         emailsSeen.add(t.email.toLowerCase());
@@ -197,7 +207,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     });
 
     return list;
-  }, [coordinators, directives, teachers, psychologists]);
+  }, [coordinators, directives, admins, teachers, psychologists]);
 
   // Handle preselected referral if passed
   useEffect(() => {
@@ -254,6 +264,16 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       setSelectedRecipients(prev => prev.filter(e => !dirEmails.includes(e)));
     } else {
       setSelectedRecipients(prev => Array.from(new Set([...prev, ...dirEmails])));
+    }
+  };
+
+  const toggleSelectAllAdmins = () => {
+    const adminEmails = allAvailableRecipients.filter(r => r.roleLabel === 'Administrador').map(r => r.email);
+    const allSelected = adminEmails.length > 0 && adminEmails.every(e => selectedRecipients.includes(e));
+    if (allSelected) {
+      setSelectedRecipients(prev => prev.filter(e => !adminEmails.includes(e)));
+    } else {
+      setSelectedRecipients(prev => Array.from(new Set([...prev, ...adminEmails])));
     }
   };
 
@@ -826,8 +846,8 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
   const userEmailLower = profile.email?.toLowerCase();
   const filteredSharedExpedientes = sharedExpedientes.filter(exp => {
-    // Requirement 1: Directives and Coordinators (and non-psychologists/admins) only view expedientes shared with them
-    if (isDirectiveOrCoordinator || !isPsychologist) {
+    // Directives, Coordinators, Admins, and non-psychologists only view expedientes shared with them
+    if (isDirectiveOrCoordinator || isAdmin || !isPsychologist) {
       const isRecipient = Array.isArray(exp.recipients) && exp.recipients.some((r: any) => 
         (r.uid && profile.uid && r.uid === profile.uid) || 
         (r.email && userEmailLower && r.email.toLowerCase() === userEmailLower)
@@ -1204,6 +1224,52 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                         </div>
                       </div>
                     )}
+
+                    {/* Admins Section */}
+                    {allAvailableRecipients.some(r => r.roleLabel === 'Administrador') && (
+                      <div className="space-y-2 pt-2 border-t border-slate-100">
+                        <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                          <span className="text-[11px] font-extrabold text-purple-900 uppercase tracking-wider flex items-center gap-1.5">
+                            <ShieldAlert className="w-3.5 h-3.5 text-purple-600" /> Administradores
+                          </span>
+                          <button
+                            type="button"
+                            onClick={toggleSelectAllAdmins}
+                            className="text-[11px] font-bold text-purple-600 hover:text-purple-800 cursor-pointer"
+                          >
+                            Seleccionar / Deseleccionar Todos
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                          {allAvailableRecipients.filter(r => r.roleLabel === 'Administrador').map(a => {
+                            const isSelected = selectedRecipients.includes(a.email);
+                            return (
+                              <label
+                                key={a.email}
+                                onClick={() => toggleRecipient(a.email)}
+                                className={cn(
+                                  "flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer select-none",
+                                  isSelected 
+                                    ? "bg-purple-50 border-purple-300 text-purple-900 shadow-sm"
+                                    : "bg-slate-50/80 border-slate-200 text-slate-700 hover:bg-slate-100"
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}}
+                                  className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
+                                />
+                                <div className="flex flex-col min-w-0">
+                                  <span className="truncate font-bold">{a.name}</span>
+                                  <span className="text-[10px] text-slate-500 truncate">{a.email}</span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1447,7 +1513,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
               )}
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>Expedientes Compartidos ({sharedExpedientes.length})</span>
+              <span>Expedientes Compartidos ({filteredSharedExpedientes.length})</span>
             </button>
 
             {allowManageExpedientes && (

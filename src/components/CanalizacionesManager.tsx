@@ -270,6 +270,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
   // Save psychologist comment
   const handleSavePsychologistComment = async (ref: Referral) => {
+    if (!isPsychologistUser) {
+      showAlert('Acceso Restringido', 'Únicamente el usuario psicólogo puede realizar o modificar comentarios en canalizaciones.', 'warning');
+      return;
+    }
     const commentVal = editingComments[ref.id] !== undefined ? editingComments[ref.id] : (ref.psychologistComment || '');
     setSavingCommentId(ref.id);
     try {
@@ -387,12 +391,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   };
 
   const normRole = normalizeUserRole(profile.role);
-  const isPsychologistUser = normRole === 'PSYCHOLOGIST' ||
-    normRole === 'ADMIN' ||
-    isSuperAdmin ||
-    (profile.role && String(profile.role).toLowerCase().includes('psico')) ||
-    (profile.role && String(profile.role).toLowerCase().includes('orienta'));
-
+  const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
   const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
 
   return (

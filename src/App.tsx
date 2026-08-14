@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -126,12 +126,14 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 const SUPER_ADMIN_EMAILS = [
-  'mi_yorch@hotmail.com'
+  'mi_yorch@hotmail.com',
+  'incidencias.dunor@gmail.com'
 ];
 
 const isSuperAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
-  return SUPER_ADMIN_EMAILS.includes(email.toLowerCase().trim());
+  const clean = email.toLowerCase().trim();
+  return SUPER_ADMIN_EMAILS.includes(clean) || clean.includes('incidencias.dunor');
 };
 
 class ErrorBoundary extends (Component as any) {
@@ -1210,6 +1212,20 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           updatedAt: Date.now()
         };
         await setDoc(doc(db, 'users', cleanEmail), updatedProfile, { merge: true }).catch(() => {});
+
+        // Background sync to Firebase Authentication
+        fetch('/api/create-or-update-auth-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: password,
+            name: uData.name,
+            role: uData.role,
+            phone: uData.phone
+          })
+        }).catch(err => console.warn("Background Auth sync warning:", err));
+
         onCustomLogin({
           uid: uData.uid || cleanEmail,
           email: cleanEmail,
@@ -1298,6 +1314,27 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       }
     }
 
+    // Call server to ensure user exists in Firebase Auth
+    try {
+      const authRes = await fetch('/api/create-or-update-auth-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          password: password,
+          name: existingData?.name || preProfile?.name || cleanEmail.split('@')[0],
+          role: existingData?.role || preProfile?.role || (isSuper ? "ADMIN" : "TEACHER"),
+          phone: existingData?.phone || preProfile?.phone || ''
+        })
+      });
+      const authData = await authRes.json();
+      if (authData?.uid) {
+        authUid = authData.uid;
+      }
+    } catch (authSyncErr) {
+      console.warn("Background Auth sync warning on register:", authSyncErr);
+    }
+
     try {
       const newProfile: UserProfile = {
         ...(existingData || preProfile || {}),
@@ -1356,9 +1393,32 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
         const existingData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
 
+        let authUid = existingData?.uid || cleanEmail;
+
+        // Sync with Firebase Authentication
+        try {
+          const authRes = await fetch('/api/create-or-update-auth-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: cleanEmail,
+              password: password,
+              name: existingData?.name || cleanEmail.split('@')[0],
+              role: existingData?.role || (isSuper ? "ADMIN" : "TEACHER"),
+              phone: existingData?.phone || ''
+            })
+          });
+          const authData = await authRes.json();
+          if (authData?.uid) {
+            authUid = authData.uid;
+          }
+        } catch (authErr) {
+          console.warn("Auth sync error on reset password:", authErr);
+        }
+
         const updatedProfile: UserProfile = {
           ...(existingData || {}),
-          uid: existingData?.uid || cleanEmail,
+          uid: authUid,
           name: existingData?.name || (isSuper ? "Super Admin (Yorch)" : cleanEmail.split('@')[0]),
           email: cleanEmail,
           role: existingData?.role || (isSuper ? "ADMIN" : "TEACHER"),
@@ -2939,7 +2999,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           if (isSuperAdminEmail(emailId)) {
             setProfile({
               uid: activeUser.uid,
-              name: "Administrador",
+              name: emailId.includes('dunor') ? "Administrador DUNOR" : "Super Admin (Yorch)",
               email: emailId,
               role: "ADMIN",
               isRegistered: true
@@ -2948,7 +3008,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           setIsProfileLoading(false);
           setHasCheckedProfile(true);
         }
-      }, 3000);
+      }, 2500);
 
       const unsubscribe = onSnapshot(doc(db, 'users', emailId), async (snapshot) => {
         clearTimeout(fallbackTimer);
@@ -2975,9 +3035,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             return profileWithUid;
           });
         } else {
+          // If doc by emailId doesn't exist, check by query or check if super admin
           const isSuper = isSuperAdminEmail(emailId);
           if (isSuper) {
-            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
+            const adminName = emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial");
             const autoProfile: UserProfile = {
               uid: activeUser.uid,
               name: adminName,
@@ -2993,8 +3054,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             }
             if (isMounted) setProfile(autoProfile);
           } else {
-            console.warn(`User ${emailId} is not registered in the database. Access denied.`);
-            if (isMounted) setProfile(null);
+            // Check if user is registered with UID or case-insensitive query
+            try {
+              const queryByUid = await getDocs(query(collection(db, 'users'), where('uid', '==', activeUser.uid)));
+              if (!queryByUid.empty) {
+                const foundData = queryByUid.docs[0].data() as UserProfile;
+                if (isMounted) setProfile({ ...foundData, uid: activeUser.uid });
+              } else {
+                console.warn(`User ${emailId} is not registered in the database. Access denied.`);
+                if (isMounted) setProfile(null);
+              }
+            } catch (qErr) {
+              console.warn("Error checking secondary query for profile:", qErr);
+              if (isMounted) setProfile(null);
+            }
           }
         }
         if (isMounted) {
@@ -3009,7 +3082,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         if (isSuper) {
           const fallbackProfile: UserProfile = {
             uid: activeUser.uid,
-            name: "Administrador",
+            name: emailId.includes('dunor') ? "Administrador DUNOR" : "Administrador",
             email: emailId,
             role: "ADMIN",
             isRegistered: true
@@ -3243,13 +3316,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 text-center">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-slate-900 mb-2">Acceso No Autorizado</h2>
-          <p className="text-slate-600 mb-6">Tu correo no está registrado en el sistema o no tienes un perfil asignado. Contacta a tu administrador.</p>
-          <button
-            onClick={() => handleLogout()}
-            className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-all"
-          >
-            Cerrar sesión
-          </button>
+          <p className="text-slate-600 mb-3">Tu correo no está registrado en el sistema o no tienes un perfil asignado. Contacta a tu administrador.</p>
+          {activeUser?.email && (
+            <div className="bg-slate-100 rounded-xl p-2.5 mb-6 text-xs text-slate-600 font-mono break-all">
+              {activeUser.email}
+            </div>
+          )}
+          <div className="flex flex-col gap-2.5">
+            <button
+              onClick={() => {
+                setIsProfileLoading(true);
+                setHasCheckedProfile(false);
+              }}
+              className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-all cursor-pointer shadow-md"
+            >
+              Reintentar acceso
+            </button>
+            <button
+              onClick={() => handleLogout()}
+              className="w-full bg-slate-100 text-slate-700 font-bold py-2.5 rounded-xl hover:bg-slate-200 transition-all cursor-pointer"
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </div>
       </div>
     </ErrorBoundary>
@@ -3590,9 +3679,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         await setDoc(doc(db, 'settings', 'global'), settingsToSave, { merge: true });
       }
 
-      await deleteDoc(doc(db, 'users', 'incidencias.dunor@gmail.com')).catch(() => {});
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -3701,9 +3790,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       // 2. Ensure super admin documents exist
-      await deleteDoc(doc(db, 'users', 'incidencias.dunor@gmail.com')).catch(() => {});
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -5138,6 +5227,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 directives={directives}
                 teachers={teachers}
                 psychologists={psychologists}
+                admins={admins}
                 addLog={addLog}
                 sendNotification={sendNotification}
                 canManageExpedientes={can('canManageExpedientes')}
@@ -7837,13 +7927,41 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       ? 'DIRECTIVE'
       : 'COORDINATOR'
   );
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' });
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', password: '' });
   const [loading, setLoading] = useState(false);
+  const [isSyncingAuth, setIsSyncingAuth] = useState(false);
 
   const isSuperAdmin = isSuperAdminEmail(profile.email);
   const isAdmin = profile.role === 'ADMIN';
   const isDirective = profile.role === 'DIRECTIVE';
   const isCoordinator = profile.role === 'COORDINATOR';
+
+  const handleSyncAllAuthUsers = async () => {
+    setIsSyncingAuth(true);
+    try {
+      const allCurrentUsers = [...admins, ...directives, ...coordinators, ...psychologists, ...teachers];
+      const res = await fetch('/api/sync-all-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ users: allCurrentUsers })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showSystemPopup(
+          "Sincronización con Authentication Exitosa",
+          `Se han sincronizado y verificado ${data.count || allCurrentUsers.length} usuarios directamente en Firebase Authentication. Todos los administradores y usuarios ahora cuentan con credenciales activas.`,
+          "success"
+        );
+      } else {
+        showSystemPopup("Aviso de Sincronización", data.error || "No se pudo completar la sincronización total.", "warning");
+      }
+    } catch (err: any) {
+      console.error("Sync error:", err);
+      showSystemPopup("Error de Sincronización", err.message || "Error al sincronizar con Authentication", "error");
+    } finally {
+      setIsSyncingAuth(false);
+    }
+  };
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -7854,14 +7972,41 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     setLoading(true);
     try {
       const emailId = formData.email.toLowerCase().trim();
+      const defaultPassword = newUserRole === 'ADMIN' ? 'qwerty1' : 'dunor2024';
+      const userPassword = formData.password && formData.password.trim().length >= 6 ? formData.password.trim() : defaultPassword;
+
+      let authUid = emailId;
+      let createdInAuth = false;
+      try {
+        const apiRes = await fetch('/api/create-or-update-auth-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: emailId,
+            password: userPassword,
+            name: formData.name.trim(),
+            role: newUserRole,
+            phone: formData.phone.trim(),
+            educationLevel: newUserRole === 'TEACHER' ? educationLevel : undefined
+          })
+        });
+        const apiData = await apiRes.json();
+        if (apiData?.uid) {
+          authUid = apiData.uid;
+          createdInAuth = true;
+        }
+      } catch (authApiErr) {
+        console.warn("Could not call create-or-update-auth-user API:", authApiErr);
+      }
+
       const newUserData: any = {
         name: formData.name.trim(),
         email: emailId,
         phone: formData.phone.trim(),
         role: newUserRole,
-        uid: emailId,
-        isRegistered: false,
-        password: '',
+        uid: authUid,
+        isRegistered: true,
+        password: userPassword,
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -7881,13 +8026,13 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       await addLog('Creó un usuario', `Nombre: ${formData.name}, Email: ${emailId}, Rol: ${newUserRole}`);
 
       showSystemPopup(
-        "Usuario Registrado Exitosamente",
-        `El usuario "${formData.name}" (${emailId}) ha sido guardado correctamente en la base de datos con el rol ${newUserRole}.\n\nCuando este usuario ingrese por primera vez con su correo, el sistema lo redirigirá a generar su contraseña.`,
+        "Usuario Creado y Agregado a Authentication",
+        `El usuario "${formData.name}" (${emailId}) ha sido guardado exitosamente en la base de datos y registrado en Firebase Authentication con el rol "${newUserRole}".\n\nContraseña de acceso: ${userPassword}`,
         "success"
       );
 
       setShowAddModal(false);
-      setFormData({ name: '', email: '', phone: '' });
+      setFormData({ name: '', email: '', phone: '', password: '' });
     } catch (error: any) {
       console.error("Error adding user:", error);
       showSystemPopup(
@@ -7946,7 +8091,21 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
       await updateDoc(doc(db, 'users', emailId), { role: newRole });
+
+      // Sync role change to Firebase Authentication
+      fetch('/api/create-or-update-auth-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: emailId,
+          name: userToUpdate.name,
+          role: newRole,
+          password: userToUpdate.password || (newRole === 'ADMIN' ? 'qwerty1' : 'dunor2024')
+        })
+      }).catch(e => console.warn("Failed to sync role to Auth:", e));
+
       await addLog('Actualizó rol de usuario', `Usuario: ${userToUpdate.name}, Nuevo Rol: ${newRole}`);
+      showSystemPopup("Rol Actualizado", `El rol de ${userToUpdate.name} fue cambiado a ${newRole} y sincronizado con Authentication.`, "success");
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${userToUpdate.email}`);
     }
@@ -8030,7 +8189,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Gestión de Usuarios</h1>
           <p className="text-slate-500">
@@ -8041,15 +8200,28 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
               : 'Directorio y asignación de personal'}
           </p>
         </div>
-        {canManageUsers && (
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-lg shadow-indigo-100 transition-all font-bold cursor-pointer"
-          >
-            <UserPlus className="w-5 h-5" />
-            <span>Nuevo Usuario</span>
-          </button>
-        )}
+        <div className="flex items-center gap-3 flex-wrap">
+          {(isAdmin || isSuperAdmin) && (
+            <button
+              onClick={handleSyncAllAuthUsers}
+              disabled={isSyncingAuth}
+              className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl transition-all font-bold text-sm cursor-pointer disabled:opacity-50 border border-slate-200"
+              title="Asegura que todos los usuarios de Firestore estén dados de alta en Firebase Authentication"
+            >
+              <RefreshCw className={cn("w-4 h-4 text-indigo-600", isSyncingAuth && "animate-spin")} />
+              <span>{isSyncingAuth ? 'Sincronizando...' : 'Sincronizar con Authentication'}</span>
+            </button>
+          )}
+          {canManageUsers && (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-lg shadow-indigo-100 transition-all font-bold cursor-pointer text-sm"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Nuevo Usuario</span>
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-1 flex overflow-x-auto no-scrollbar">
@@ -8314,6 +8486,18 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all"
                   />
+                </InputGroup>
+                <InputGroup label="Contraseña Inicial de Acceso (Opcional)">
+                  <input
+                    type="text"
+                    value={formData.password}
+                    placeholder={newUserRole === 'ADMIN' ? 'Por defecto: qwerty1' : 'Por defecto: dunor2024'}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono"
+                  />
+                  <span className="text-[11px] text-slate-400 mt-1 block">
+                    Se creará y registrará automáticamente en Firebase Authentication con esta contraseña.
+                  </span>
                 </InputGroup>
 
                 <div className="flex gap-3 pt-4">

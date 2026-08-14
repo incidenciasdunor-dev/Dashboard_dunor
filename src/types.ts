@@ -71,7 +71,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canViewReferrals: true,
     canCreateReferral: true,
     canViewExpedientes: true,
-    canManageExpedientes: true,
+    canManageExpedientes: false,
     canViewInformes: true,
 
     canEditIncidents: true,

@@ -68,13 +68,13 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   systemSettings
 }) => {
   const normRole = normalizeUserRole(profile.role);
-  const isPsychologist = normRole === 'PSYCHOLOGIST';
+  const isPsychologist = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
   const isAdmin = normRole === 'ADMIN';
-  const isSuperAdmin = profile.email?.toLowerCase().includes('dunor') || normRole === 'ADMIN';
   const isDirective = normRole === 'DIRECTIVE';
   const isCoordinator = normRole === 'COORDINATOR';
 
-  const canCreateAndShare = isPsychologist || isAdmin || isSuperAdmin;
+  // Only psychologist can create and share live master reports
+  const canCreateAndShare = isPsychologist;
 
   // Active view tab: 'MASTER' (Live report generation) vs 'SHARED' (Consult shared reports)
   const [activeSubTab, setActiveSubTab] = useState<'MASTER' | 'SHARED'>(
@@ -133,11 +133,16 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
         // Sort by share date desc
         reports.sort((a, b) => (b.sharedAt || 0) - (a.sharedAt || 0));
 
-        // Filter reports visible to current user (Directive and Coordinator only view reports shared with them)
+        // Filter reports visible to current user (Admin, Directive, and Coordinator only view reports shared with them)
         const userEmailLower = profile.email?.toLowerCase();
         const visibleReports = reports.filter(r => {
-          if (isSuperAdmin || isAdmin || (isPsychologist && r.sharedByEmail?.toLowerCase() === userEmailLower)) return true;
-          return r.recipients?.some(rec => (rec.email && userEmailLower && rec.email.toLowerCase() === userEmailLower) || (profile.uid && rec.uid === profile.uid));
+          // Psychologist who created/shared the report can see it
+          if (isPsychologist && r.sharedByEmail?.toLowerCase() === userEmailLower) return true;
+          // Admins, Directives, Coordinators only view reports shared with them
+          return r.recipients?.some(rec => 
+            (rec.email && userEmailLower && rec.email.toLowerCase() === userEmailLower) || 
+            (profile.uid && rec.uid === profile.uid)
+          );
         });
 
         setSharedReports(visibleReports);
@@ -149,7 +154,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
     } catch (err) {
       console.error("Failed to setup shared_reports listener:", err);
     }
-  }, [profile, isAdmin, isSuperAdmin, isPsychologist]);
+  }, [profile, isAdmin, isPsychologist]);
 
   // Combine recipient options
   const allAvailableRecipients = useMemo(() => {
@@ -618,35 +623,42 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
           </div>
 
           {/* SubTab Toggle: Informe Principal & Informes Compartidos */}
-          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
-            <button
-              type="button"
-              onClick={() => { setActiveSubTab('MASTER'); setSelectedSharedReport(null); }}
-              className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
-                activeSubTab === 'MASTER'
-                  ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs"
-                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-              )}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>Informe</span>
-            </button>
+          {canCreateAndShare ? (
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => { setActiveSubTab('MASTER'); setSelectedSharedReport(null); }}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                  activeSubTab === 'MASTER'
+                    ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                )}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                <span>Informe</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('SHARED')}
-              className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer relative",
-                activeSubTab === 'SHARED'
-                  ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs"
-                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-              )}
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-emerald-500" />
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('SHARED')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer relative",
+                  activeSubTab === 'SHARED'
+                    ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                )}
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Informes Compartidos ({sharedReports.length})</span>
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-200 text-xs font-bold shadow-xs">
+              <ShieldAlert className="w-4 h-4 text-emerald-600" />
               <span>Informes Compartidos ({sharedReports.length})</span>
-            </button>
-          </div>
+            </div>
+          )}
 
           {/* Print Button */}
           <button
@@ -674,7 +686,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       </div>
 
       {/* SUB-TAB 1: MASTER AUTOMATED REPORT */}
-      {activeSubTab === 'MASTER' && (
+      {canCreateAndShare && activeSubTab === 'MASTER' && (
         <div className="space-y-6">
 
           {/* Statistical Cards Grid */}
@@ -905,7 +917,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       )}
 
       {/* SUB-TAB 2: SHARED REPORTS CONSULTATION */}
-      {(activeSubTab === 'SHARED' || selectedSharedReport) && (
+      {(!canCreateAndShare || activeSubTab === 'SHARED' || selectedSharedReport) && (
         <div className="space-y-6">
           {selectedSharedReport ? (
             /* Detailed View of a Selected Shared Report */
