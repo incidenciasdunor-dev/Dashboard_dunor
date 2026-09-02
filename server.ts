@@ -13,26 +13,28 @@ const initializeAdmin = () => {
   if (admin.apps.length) return;
 
   try {
-    // 1. Try default initialization (best for Cloud Run)
-    admin.initializeApp();
-    console.log("Firebase Admin initialized with default credentials");
-  } catch (defaultErr) {
-    console.log("Default initialization failed, trying with config file...");
-    try {
-      // 2. Try reading from firebase-applet-config.json
-      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    // 1. Try reading from firebase-applet-config.json first to target the actual project
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      if (config.projectId) {
         admin.initializeApp({
           projectId: config.projectId
         });
         console.log(`Firebase Admin initialized with projectId from config: ${config.projectId}`);
-      } else {
-        throw new Error("Config file not found");
+        return;
       }
-    } catch (configErr: any) {
-      console.error("Firebase Admin initialization failed completely:", configErr.message);
     }
+  } catch (configErr: any) {
+    console.warn("Firebase Admin config file read notice:", configErr.message);
+  }
+
+  try {
+    // 2. Default initialization fallback
+    admin.initializeApp();
+    console.log("Firebase Admin initialized with default credentials");
+  } catch (defaultErr: any) {
+    console.error("Firebase Admin initialization failed completely:", defaultErr.message);
   }
 };
 
@@ -61,6 +63,155 @@ async function startServer() {
       console.error("Test Admin error:", error);
       res.status(500).json({ error: error.message, code: error.code });
     }
+  });
+
+  // API Route for creating or updating a user in Firebase Auth
+  app.post("/api/create-or-update-auth-user", async (req, res) => {
+    let { email, password, name, role, phone, educationLevel } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "El correo electrónico es requerido." });
+    }
+
+    email = email.toLowerCase().trim();
+    role = (role || 'TEACHER').toUpperCase();
+    const displayName = name?.trim() || email.split('@')[0];
+    const userPassword = password && password.length >= 6 ? password : (role === 'ADMIN' ? 'qwerty1' : 'dunor2024');
+
+    let authUid = email;
+    let createdInAuth = false;
+    let updatedInAuth = false;
+    let authError = null;
+
+    if (admin.apps.length) {
+      try {
+        let userRecord;
+        try {
+          userRecord = await admin.auth().getUserByEmail(email);
+          authUid = userRecord.uid;
+          const updatePayload: any = { displayName };
+          if (password && password.length >= 6) {
+            updatePayload.password = password;
+          }
+          await admin.auth().updateUser(userRecord.uid, updatePayload);
+          updatedInAuth = true;
+        } catch (notFoundErr: any) {
+          if (notFoundErr.code === 'auth/user-not-found') {
+            userRecord = await admin.auth().createUser({
+              email,
+              password: userPassword,
+              displayName,
+              emailVerified: true
+            });
+            authUid = userRecord.uid;
+            createdInAuth = true;
+          } else {
+            throw notFoundErr;
+          }
+        }
+
+        try {
+          await admin.auth().setCustomUserClaims(authUid, {
+            role: role,
+            admin: role === 'ADMIN'
+          });
+        } catch (claimsErr) {
+          console.warn("Could not set custom claims:", claimsErr);
+        }
+
+        try {
+          const dbAdmin = admin.firestore();
+          const docData: any = {
+            uid: authUid,
+            email,
+            name: displayName,
+            role,
+            isRegistered: true,
+            password: userPassword,
+            updatedAt: Date.now()
+          };
+          if (phone) docData.phone = phone;
+          if (educationLevel) docData.educationLevel = educationLevel;
+          await dbAdmin.collection('users').doc(email).set(docData, { merge: true });
+        } catch (dbErr) {
+          console.warn("Firestore sync in create-auth notice:", dbErr);
+        }
+      } catch (err: any) {
+        console.warn("[CREATE-AUTH] Firebase Auth notice:", err?.message);
+        authError = err?.message;
+      }
+    }
+
+    res.json({
+      success: true,
+      uid: authUid,
+      email,
+      name: displayName,
+      role,
+      password: userPassword,
+      createdInAuth,
+      updatedInAuth,
+      authError,
+      message: createdInAuth 
+        ? `Usuario creado y registrado en Authentication con contraseña: ${userPassword}`
+        : `Usuario sincronizado en Authentication`
+    });
+  });
+
+  // API Route for syncing all Firestore users to Firebase Auth
+  app.post("/api/sync-all-users", async (req, res) => {
+    const { users } = req.body;
+    if (!users || !Array.isArray(users)) {
+      return res.status(400).json({ error: "Se requiere un arreglo de usuarios." });
+    }
+
+    if (!admin.apps.length) {
+      return res.status(500).json({ error: "Firebase Admin no está inicializado." });
+    }
+
+    const results: any[] = [];
+    for (const u of users) {
+      if (!u.email) continue;
+      const cleanEmail = u.email.toLowerCase().trim();
+      const displayName = u.name?.trim() || cleanEmail.split('@')[0];
+      const userRole = (u.role || 'TEACHER').toUpperCase();
+      const userPassword = u.password && u.password.length >= 6 ? u.password : (userRole === 'ADMIN' ? 'qwerty1' : 'dunor2024');
+
+      try {
+        let userRecord;
+        try {
+          userRecord = await admin.auth().getUserByEmail(cleanEmail);
+          const updateData: any = { displayName };
+          if (u.password && u.password.length >= 6) {
+            updateData.password = u.password;
+          }
+          await admin.auth().updateUser(userRecord.uid, updateData);
+          results.push({ email: cleanEmail, status: 'updated', uid: userRecord.uid });
+        } catch (e: any) {
+          if (e.code === 'auth/user-not-found') {
+            userRecord = await admin.auth().createUser({
+              email: cleanEmail,
+              password: userPassword,
+              displayName,
+              emailVerified: true
+            });
+            results.push({ email: cleanEmail, status: 'created', uid: userRecord.uid });
+          } else {
+            results.push({ email: cleanEmail, status: 'error', error: e.message });
+          }
+        }
+
+        if (userRecord?.uid) {
+          await admin.auth().setCustomUserClaims(userRecord.uid, {
+            role: userRole,
+            admin: userRole === 'ADMIN'
+          }).catch(() => {});
+        }
+      } catch (itemErr: any) {
+        results.push({ email: cleanEmail, status: 'error', error: itemErr.message });
+      }
+    }
+
+    res.json({ success: true, count: results.length, details: results });
   });
 
   // API Route for deleting a user from Firebase Auth
