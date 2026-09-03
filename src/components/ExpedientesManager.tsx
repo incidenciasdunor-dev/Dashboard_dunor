@@ -47,7 +47,7 @@ interface ExpedientesManagerProps {
   psychologists?: UserProfile[];
   admins?: UserProfile[];
   addLog: (action: string, details?: string) => Promise<void>;
-  sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean) => Promise<void>;
+  sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>;
   canManageExpedientes?: boolean;
   preselectedReferral?: Referral | null;
   onClearPreselectedReferral?: () => void;
@@ -134,7 +134,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     attachmentData: string;
     psychologyFollowUp: string;
     latestProgress: string;
-    status: 'EN_PROCESO' | 'CASO_CONCLUIDO';
+    status: 'EN_PROCESO' | 'CASO_CONCLUIDO' | 'CONCLUIDO' | 'DERIVADO_EXTERNO';
   }>({
     studentName: '',
     gradeGroup: '',
@@ -529,6 +529,29 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         editingExpedienteId ? 'Actualización de Expediente' : 'Nuevo Expediente Psicopedagógico',
         `Se ${editingExpedienteId ? 'actualizó' : 'creó'} la ficha psicopedagógica para ${payload.studentName}.`
       );
+
+      // Send in-app and email notifications (Requirement 3)
+      if (sendNotification) {
+        const targetRecipients: string[] = [];
+        if (profile.uid) targetRecipients.push(profile.uid);
+        if (selectedLinkedReferralId) {
+          const linkedRef = referrals.find(r => r.id === selectedLinkedReferralId);
+          if (linkedRef) {
+            if (linkedRef.teacherId) targetRecipients.push(linkedRef.teacherId);
+            else if (linkedRef.teacherEmail) targetRecipients.push(linkedRef.teacherEmail);
+            if (linkedRef.coordinatorId) targetRecipients.push(linkedRef.coordinatorId);
+            else if (linkedRef.coordinatorEmail) targetRecipients.push(linkedRef.coordinatorEmail);
+          }
+        }
+        await sendNotification(
+          targetRecipients,
+          editingExpedienteId ? `Actualización de Expediente: ${payload.studentName}` : `Nuevo Expediente Psicopedagógico: ${payload.studentName}`,
+          `El área de psicología ha ${editingExpedienteId ? 'actualizado' : 'registrado'} el expediente psicopedagógico para el estudiante "${payload.studentName}" (${payload.gradeGroup}).`,
+          id,
+          false,
+          { expedienteId: id, type: 'expediente' }
+        );
+      }
 
       setSaveSuccessMessage(true);
       setTimeout(() => setSaveSuccessMessage(false), 4000);

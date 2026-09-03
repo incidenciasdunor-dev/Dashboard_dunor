@@ -23,19 +23,20 @@ import { SystemModal, SystemModalState } from './components/SystemModal';
 import confetti from 'canvas-confetti';
 
 const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
-  const defaultLogo = "/logo.svg";
-  const [imgSrc, setImgSrc] = useState(logoUrl || defaultLogo);
+  const defaultLogo: string = "/logo.svg";
+  const [imgSrc, setImgSrc] = useState<string>(logoUrl || defaultLogo);
 
   useEffect(() => {
     setImgSrc(logoUrl || defaultLogo);
   }, [logoUrl]);
 
   const handleError = () => {
-    if (imgSrc !== defaultLogo) {
+    const current: any = imgSrc;
+    if (current !== defaultLogo) {
       setImgSrc(defaultLogo);
-    } else if (imgSrc !== "/logo_dunor.svg") {
+    } else if (current !== "/logo_dunor.svg") {
       setImgSrc("/logo_dunor.svg");
-    } else if (imgSrc !== "/logo_dunor.png") {
+    } else if (current !== "/logo_dunor.png") {
       setImgSrc("/logo_dunor.png");
     }
   };
@@ -136,8 +137,8 @@ const isSuperAdminEmail = (email?: string | null): boolean => {
   return SUPER_ADMIN_EMAILS.includes(clean) || clean.includes('incidencias.dunor');
 };
 
-class ErrorBoundary extends (Component as any) {
-  constructor(props: any) {
+class ErrorBoundary extends Component<{ children?: React.ReactNode }, { hasError: boolean; error: any }> {
+  constructor(props: { children?: React.ReactNode }) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -1083,7 +1084,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       if (snapshot && snapshot.exists()) {
         const userData = snapshot.data() as UserProfile;
         setPreProfile({ ...userData, uid: snapshot.id });
-        if (userData.isRegistered) {
+        if (userData.isRegistered && userData.password) {
           setStep('login');
         } else {
           setStep('register');
@@ -2410,7 +2411,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
 
     // 2. Directives (always receive all notifications generated across the school)
-    const schoolDirectives = allUsers.filter(u => u.role === 'DIRECTIVE');
+    const schoolDirectives = allUsers.filter(u => normalizeUserRole(u.role) === 'DIRECTIVE');
     schoolDirectives.forEach(d => {
       if (d.uid) addTargetUser(d.uid);
       else if (d.email) addTargetUser(d.email);
@@ -2418,7 +2419,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     // 3. Admins & SuperAdmin (unless skipAdmins is true)
     if (!skipAdmins) {
-      const schoolAdmins = allUsers.filter(u => u.role === 'ADMIN' || isSuperAdminEmail(u.email));
+      const schoolAdmins = allUsers.filter(u => normalizeUserRole(u.role) === 'ADMIN' || isSuperAdminEmail(u.email));
       schoolAdmins.forEach(a => {
         if (a.uid) addTargetUser(a.uid);
         else if (a.email) addTargetUser(a.email);
@@ -2563,14 +2564,23 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (incident.coordinatorId) {
       addTarget(incident.coordinatorId);
     }
+    if (incident.coordinatorEmail) {
+      addTarget(incident.coordinatorEmail);
+    }
 
-    // 3. Notified Teacher (Docente notificado si aplica)
+    // 3. Notified Teacher (Docente en copia si aplica)
     if (incident.notifiedTeacherId) {
       addTarget(incident.notifiedTeacherId);
     }
+    if (incident.notifiedTeacherEmail) {
+      addTarget(incident.notifiedTeacherEmail);
+    }
 
     // 4. Directives and Admins (Directivos y Administradores de la institución)
-    allUsers.filter(u => u.role === 'DIRECTIVE' || u.role === 'ADMIN' || isSuperAdminEmail(u.email)).forEach(u => {
+    allUsers.filter(u => {
+      const nr = normalizeUserRole(u.role);
+      return nr === 'DIRECTIVE' || nr === 'ADMIN' || isSuperAdminEmail(u.email);
+    }).forEach(u => {
       addTarget(u.uid);
       addTarget(u.email);
     });
@@ -2602,6 +2612,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Lugar / Espacio:</strong> ${incident.place || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Alumno(s):</strong> ${incident.students || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || 'Docente'}</p>
+              ${(incident.notifiedTeacherName || incident.notifiedTeacherId) ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente:</strong> ${incident.notifiedTeacherName || 'Docente seleccionado'}</p>` : ''}
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Estatus del Reporte:</strong> <span style="background-color: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">${statusLabel}</span></p>
               ${actionDetails ? `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #475569;">${actionDetails}</div>` : ''}
             </div>
@@ -2831,7 +2842,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (targetIds.length === 0) return;
 
     let q;
-    if (isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
+    if (isSuperAdmin || normRole === 'admin' || normRole === 'directive') {
       q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
     } else if (targetIds.length === 1) {
       q = query(collection(db, 'notifications'), where('userId', '==', targetIds[0]));
@@ -3109,52 +3120,65 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   useEffect(() => {
     if (!profile) return;
 
-    let q;
-    if (isSuperAdmin || isSuperAdminEmail(profile.email) || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
-      q = query(collection(db, 'incidents'), orderBy('createdAt', 'desc'));
-    } else if (profile.role === 'COORDINATOR') {
-      q = query(
-        collection(db, 'incidents'), 
-        or(
-          where('coordinatorId', '==', profile.uid),
-          where('coordinatorIds', 'array-contains', profile.uid)
-        ),
-        orderBy('createdAt', 'desc')
-      );
-    } else if (profile.role === 'PSYCHOLOGIST') {
-      q = query(
-        collection(db, 'incidents'),
-        or(
-          where('suggestReferral', '==', true),
-          where('reporterId', '==', profile.uid),
-          where('reporterEmail', '==', profile.email.toLowerCase()),
-          where('notifiedTeacherId', '==', profile.uid)
-        )
-      );
-    } else {
-      q = query(
-        collection(db, 'incidents'), 
-        or(
-          where('reporterId', '==', profile.uid),
-          where('notifiedTeacherId', '==', profile.uid)
-        ),
-        orderBy('createdAt', 'desc')
-      );
-    }
+    const normRole = normalizeUserRole(profile.role);
+    const userEmail = (profile.email || '').toLowerCase().trim();
+    const userUid = profile.uid;
+
+    const q = query(collection(db, 'incidents'), orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Incident));
       
-      // Manual sort for psychologist as we don't have composite indexes for all OR branches
-      if (profile.role === 'PSYCHOLOGIST') {
-        docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+      // 1. Directives, Admins, SuperAdmin: Full access to all incidents
+      if (isSuperAdmin || isSuperAdminEmail(userEmail) || normRole === 'ADMIN' || normRole === 'DIRECTIVE') {
+        setIncidents(docs);
+        return;
       }
-      
-      // Filter out soft-deleted incidents for coordinators
-      if (profile.role === 'COORDINATOR') {
-        docs = docs.filter(doc => !doc.deletedByCoordinators?.includes(profile.uid));
+
+      // 2. Coordinators: only incidents assigned to them (or in coordinatorIds) and not soft-deleted
+      if (normRole === 'COORDINATOR') {
+        docs = docs.filter(doc => {
+          if (doc.deletedByCoordinators?.includes(userUid)) return false;
+          const isAssigned = 
+            doc.coordinatorId === userUid || 
+            (doc.coordinatorIds && doc.coordinatorIds.includes(userUid)) ||
+            (doc.coordinatorEmail && doc.coordinatorEmail.toLowerCase() === userEmail);
+          return Boolean(isAssigned);
+        });
+        setIncidents(docs);
+        return;
       }
-      
+
+      // 3. Psychologists: incidents with suggestReferral or where they are directly involved
+      if (normRole === 'PSYCHOLOGIST') {
+        docs = docs.filter(doc => Boolean(
+          doc.suggestReferral ||
+          doc.reporterId === userUid ||
+          (doc.reporterEmail && doc.reporterEmail.toLowerCase() === userEmail) ||
+          doc.notifiedTeacherId === userUid ||
+          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail)
+        ));
+        setIncidents(docs);
+        return;
+      }
+
+      // 4. TEACHERS (Docentes) - STRICT ACCESS CONTROL (User Request):
+      // "Cuando un docente registre una incidencia, esta solo deberá ser visible para el docente que la registro, el coordinador asignado, el directivo y el administrador... ningún otro docente debe de poder visualizar los registros de otro docente, a menos que este como copia a docente"
+      docs = docs.filter(doc => {
+        const isAuthor = 
+          (doc.reporterId && doc.reporterId === userUid) ||
+          (doc.reporterEmail && doc.reporterEmail.toLowerCase() === userEmail);
+
+        const isCopied = 
+          (doc.notifiedTeacherId && doc.notifiedTeacherId === userUid) ||
+          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+          (doc.coordinatorIds && doc.coordinatorIds.includes(userUid));
+
+        return Boolean(isAuthor || isCopied);
+      });
+
       setIncidents(docs);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'incidents');
@@ -4371,6 +4395,30 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
                 {(() => {
                   const filteredIncidents = incidents.filter(incident => {
+                    const normRole = normalizeUserRole(profile.role);
+                    const userEmail = (profile.email || '').toLowerCase().trim();
+                    const userUid = profile.uid;
+
+                    // Enforce teacher privacy: only own records or if in copy
+                    if (!isSuperAdmin && !isSuperAdminEmail(userEmail) && normRole !== 'ADMIN' && normRole !== 'DIRECTIVE') {
+                      if (normRole === 'TEACHER') {
+                        const isAuthor = 
+                          (incident.reporterId && incident.reporterId === userUid) ||
+                          (incident.reporterEmail && incident.reporterEmail.toLowerCase() === userEmail);
+                        const isCopied = 
+                          (incident.notifiedTeacherId && incident.notifiedTeacherId === userUid) ||
+                          (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+                          (incident.coordinatorIds && incident.coordinatorIds.includes(userUid));
+                        if (!isAuthor && !isCopied) return false;
+                      } else if (normRole === 'COORDINATOR') {
+                        const isAssigned = 
+                          incident.coordinatorId === userUid || 
+                          (incident.coordinatorIds && incident.coordinatorIds.includes(userUid)) ||
+                          (incident.coordinatorEmail && incident.coordinatorEmail.toLowerCase() === userEmail);
+                        if (!isAssigned) return false;
+                      }
+                    }
+
                     if (!searchTerm.trim()) return true;
                     const term = searchTerm.toLowerCase().trim();
                     const studentsMatch = incident.students?.toLowerCase().includes(term);
@@ -4574,6 +4622,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 canAssignPsychologist={can('canAssignPsychologist')}
                 systemSettings={effectiveSystemSettings}
                 firestoreRolePermissions={firestoreRolePermissions}
+                sendNotification={sendNotification}
+                sendEmail={sendEmail}
               />
             </motion.div>
           )}
@@ -4617,6 +4667,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 teachers={teachers}
                 psychologists={psychologists}
                 directives={directives}
+                admins={admins}
                 onSuccess={() => setActiveTab('incidents')}
                 onCancel={() => setActiveTab('incidents')}
                 sendNotification={sendNotification}
@@ -5197,6 +5248,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 psychologists={psychologists}
                 directives={directives}
                 teachers={teachers}
+                admins={admins}
                 addLog={addLog}
                 isSuperAdmin={isSuperAdmin}
                 canCreateReferral={can('canCreateReferral')}
@@ -5825,9 +5877,9 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               <div className="mt-1">
                 <p className="text-sm text-slate-800 font-bold">
                   Reporta: {incident.reporterName}
-                  {incident.notifiedTeacherId === profile?.uid && incident.reporterId !== profile?.uid && (
-                    <span className="ml-2 text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full font-bold border border-blue-100">
-                      Copia Informativa
+                  {((incident.notifiedTeacherId === profile?.uid) || (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && incident.reporterId !== profile?.uid && incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
+                    <span className="ml-2 text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200 shadow-xs">
+                      En Copia
                     </span>
                   )}
                 </p>
@@ -6037,7 +6089,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                         return (
                           <span className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm flex items-center gap-1">
                             <UserIcon className="w-3 h-3" />
-                            {teacher?.name || 'Cargando...'}
+                            {teacher?.name || incident.notifiedTeacherName || 'Docente notificado'}
                           </span>
                         );
                       })()}
@@ -6197,12 +6249,13 @@ const DetailSection = ({ label, content }: { label: string, content: string }) =
   </div>
 );
 
-const IncidentForm = ({ profile, coordinators, teachers, psychologists, directives = [], onSuccess, onCancel, sendNotification, notifyIncidentInvolvedUsers, sendEmail, systemSettings, addLog }: { 
+const IncidentForm = ({ profile, coordinators, teachers, psychologists, directives = [], admins = [], onSuccess, onCancel, sendNotification, notifyIncidentInvolvedUsers, sendEmail, systemSettings, addLog }: { 
   profile: UserProfile, 
   coordinators: UserProfile[],
   teachers: UserProfile[], 
   psychologists: UserProfile[],
   directives?: UserProfile[],
+  admins?: UserProfile[],
   onSuccess: () => void, 
   onCancel: () => void, 
   sendNotification: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>, 
@@ -6322,9 +6375,16 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     setError(null);
     try {
       const now = new Date();
+      const selectedCoord = coordinators.find(c => c.uid === (formData.coordinatorIds[0] || ''));
+      const selectedTeacher = teachers.find(t => t.uid === formData.notifiedTeacherId);
+
       const newIncident: any = {
         ...formData,
         coordinatorId: formData.coordinatorIds[0] || '', // Main coordinator
+        coordinatorName: selectedCoord?.name || '',
+        coordinatorEmail: selectedCoord?.email || '',
+        notifiedTeacherName: selectedTeacher?.name || '',
+        notifiedTeacherEmail: selectedTeacher?.email || '',
         date: format(now, "dd/MM/yyyy HH:mm"),
         reporterName: profile.name,
         reporterId: profile.uid,
@@ -6367,6 +6427,18 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         });
       }
 
+      // Dedicated notification for the teacher added in copy
+      if (formData.notifiedTeacherId && formData.notifiedTeacherId !== profile.uid) {
+        await sendNotification(
+          formData.notifiedTeacherId,
+          'Copia de Incidencia Registrada',
+          `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por el docente ${profile.name}.`,
+          docRef.id,
+          true,
+          { skipEmail: true }
+        );
+      }
+
       // Direct in-app notification and confirmation email for the reporting teacher/user
       if (profile.uid) {
         await sendNotification(
@@ -6402,9 +6474,12 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         }
       }
 
-      // Notification for Psychologists
+      // Notification for Psychologists & Auto Referral
       if (formData.suggestReferral) {
         const refId = `ref_inc_${docRef.id}`;
+        const targetCoord = coordinators.find(c => formData.coordinatorIds.includes(c.uid) || formData.coordinatorIds.includes(c.email)) || coordinators[0];
+        const targetPsych = psychologists[0];
+
         const refDoc: Referral = {
           id: refId,
           incidentId: docRef.id,
@@ -6413,12 +6488,12 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           teacherId: profile.uid,
           teacherName: profile.name,
           teacherEmail: profile.email,
-          coordinatorId: formData.coordinatorIds[0] || '',
-          coordinatorName: 'Coordinador General',
-          coordinatorEmail: '',
-          psychologistId: '',
-          psychologistName: 'Psicólogo Escolar',
-          psychologistEmail: '',
+          coordinatorId: targetCoord?.uid || (formData.coordinatorIds[0] || ''),
+          coordinatorName: targetCoord?.name || 'Coordinador General',
+          coordinatorEmail: targetCoord?.email || '',
+          psychologistId: targetPsych?.uid || '',
+          psychologistName: targetPsych?.name || 'Psicólogo Escolar',
+          psychologistEmail: targetPsych?.email || '',
           reasonAndBackground: `Sugerencia de canalización generada desde incidencia en "${formData.place}". Alumno(s): ${formData.students}. Motivo/Hechos: ${formData.description}`,
           teacherStrategies: formData.disciplinaryMeasures || formData.followUp || '',
           psychologistComment: '',
@@ -6431,39 +6506,51 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           console.error("Error creating auto referral document:", refErr);
         }
 
-        const psychUids = psychologists.map(p => p.uid);
+        const notifyUids: string[] = [];
+        if (profile.uid) notifyUids.push(profile.uid);
+        if (targetCoord?.uid) notifyUids.push(targetCoord.uid);
+        psychologists.forEach(p => { if (p.uid) notifyUids.push(p.uid); });
+
         await sendNotification(
-          psychUids,
-          'Sugerencia de Canalización',
-          `Se ha sugerido una canalización para una incidencia en "${formData.place}" por ${profile.name}.`,
+          notifyUids,
+          'Sugerencia de Canalización Psicopedagógica',
+          `Se ha registrado una canalización para "${formData.students}" desde incidencia en "${formData.place}" por ${profile.name}.`,
           docRef.id,
-          true, // Skip admin broadcast
+          false, // Include directives and admins
           { referralId: refId, type: 'referral' }
         );
 
-        for (const psycho of psychologists) {
-          if (systemSettings.emailNotificationsEnabled !== false && psycho.email && sendEmail) {
+        const emailRecipients = new Set<string>();
+        if (profile.email) emailRecipients.add(profile.email.toLowerCase());
+        if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
+        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
+        directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
+        admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
+
+        for (const targetEmail of emailRecipients) {
+          if (systemSettings.emailNotificationsEnabled !== false && sendEmail) {
             await sendEmail(
-              psycho.email,
-              `Sugerencia de Canalización: ${formData.place}`,
+              targetEmail,
+              `Sugerencia de Canalización: ${formData.students}`,
               `
                 <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                  <div style="background-color: #ec4899; padding: 24px; text-align: center;">
-                    <h1 style="color: white; margin: 0; font-size: 24px;">Sugerencia de Canalización</h1>
+                  <div style="background: linear-gradient(135deg, #ec4899 0%, #db2777 100%); padding: 24px; text-align: center;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">Sugerencia de Canalización</h1>
+                    <p style="color: #fbcfe8; margin: 4px 0 0 0; font-size: 12px; text-transform: uppercase;">DASHBOARD DUNOR</p>
                   </div>
                   <div style="padding: 24px;">
-                    <p style="font-size: 16px; margin-bottom: 20px;">Se ha registrado una incidencia con sugerencia de canalización psicológica.</p>
-                    <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                      <p style="margin: 0 0 8px 0;"><strong>Reportado por:</strong> ${profile.name}</p>
+                    <p style="font-size: 15px; margin-bottom: 16px;">Se ha registrado una incidencia con sugerencia de canalización al departamento de psicología.</p>
+                    <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0;">
+                      <p style="margin: 0 0 8px 0;"><strong>Reportado por:</strong> ${profile.name} (${profile.email})</p>
                       <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${formData.place}</p>
                       <p style="margin: 0 0 8px 0;"><strong>Alumnos:</strong> ${formData.students}</p>
                       <p style="margin: 0;"><strong>Descripción:</strong> ${formData.description}</p>
                     </div>
-                    <p style="font-size: 14px; color: #64748b;">Por favor, ingresa al sistema para revisar los detalles completos.</p>
+                    <p style="font-size: 13px; color: #64748b;">Ingresa a la plataforma para revisar los detalles y dar seguimiento.</p>
                   </div>
                 </div>
               `
-            );
+            ).catch(err => console.warn("Email notice error:", err));
           }
         }
       }
@@ -7875,7 +7962,7 @@ const TaskManager = ({
   );
 };
 
-const UserManagement = ({ profile, coordinators, teachers, psychologists, directives = [], admins, addLog, canManageUsers = true, canAssignPsychologist = true, systemSettings, firestoreRolePermissions }: { 
+const UserManagement = ({ profile, coordinators, teachers, psychologists, directives = [], admins, addLog, canManageUsers = true, canAssignPsychologist = true, systemSettings, firestoreRolePermissions, sendNotification, sendEmail }: { 
   profile: UserProfile, 
   coordinators: UserProfile[], 
   teachers: UserProfile[], 
@@ -7886,7 +7973,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
   systemSettings: SystemSettings,
-  firestoreRolePermissions?: Partial<RolePermissionsMap>
+  firestoreRolePermissions?: Partial<RolePermissionsMap>,
+  sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>,
+  sendEmail?: (to: string, subject: string, html: string) => Promise<any>
 }) => {
   const [sysModal, setSysModal] = useState<SystemModalState>({
     isOpen: false,
@@ -7927,7 +8016,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       ? 'DIRECTIVE'
       : 'COORDINATOR'
   );
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '', password: '' });
+  const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [isSyncingAuth, setIsSyncingAuth] = useState(false);
 
@@ -7972,41 +8061,13 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     setLoading(true);
     try {
       const emailId = formData.email.toLowerCase().trim();
-      const defaultPassword = newUserRole === 'ADMIN' ? 'qwerty1' : 'dunor2024';
-      const userPassword = formData.password && formData.password.trim().length >= 6 ? formData.password.trim() : defaultPassword;
-
-      let authUid = emailId;
-      let createdInAuth = false;
-      try {
-        const apiRes = await fetch('/api/create-or-update-auth-user', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: emailId,
-            password: userPassword,
-            name: formData.name.trim(),
-            role: newUserRole,
-            phone: formData.phone.trim(),
-            educationLevel: newUserRole === 'TEACHER' ? educationLevel : undefined
-          })
-        });
-        const apiData = await apiRes.json();
-        if (apiData?.uid) {
-          authUid = apiData.uid;
-          createdInAuth = true;
-        }
-      } catch (authApiErr) {
-        console.warn("Could not call create-or-update-auth-user API:", authApiErr);
-      }
 
       const newUserData: any = {
         name: formData.name.trim(),
         email: emailId,
-        phone: formData.phone.trim(),
         role: newUserRole,
-        uid: authUid,
-        isRegistered: true,
-        password: userPassword,
+        uid: emailId,
+        isRegistered: false,
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -8025,14 +8086,83 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       await setDoc(doc(db, 'users', emailId), newUserData, { merge: true });
       await addLog('Creó un usuario', `Nombre: ${formData.name}, Email: ${emailId}, Rol: ${newUserRole}`);
 
+      // In-app notification for the newly created user
+      if (sendNotification) {
+        await sendNotification(
+          emailId,
+          'Bienvenido/a a DASHBOARD DUNOR',
+          `Felicidades tu registro al Dashboard DUNOR fue exitosa, visita el siguiente enlace para poder acceder: https://dashboard-dunor.vercel.app/, recuerda generar tu contraseña para obtener el acceso.`,
+          '',
+          true,
+          { skipEmail: true }
+        );
+      }
+
+      // Send registration confirmation email with the access link and welcome message
+      const accessUrl = "https://dashboard-dunor.vercel.app/";
+      const emailSubject = "Felicidades tu registro al Dashboard DUNOR fue exitosa";
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 28px 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;">Dashboard DUNOR</h1>
+            <p style="color: #c7d2fe; margin: 6px 0 0 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Confirmación de Registro</p>
+          </div>
+          <div style="padding: 28px 24px; background-color: #ffffff;">
+            <p style="font-size: 16px; color: #1e293b; margin-top: 0;">Hola <strong>${formData.name.trim()}</strong>,</p>
+            
+            <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px 20px; border-radius: 8px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 15px; color: #166534; font-weight: 700; line-height: 1.5;">
+                Felicidades tu registro al Dashboard DUNOR fue exitosa, visita el siguiente enlace para poder acceder, recuerda generar tu contraseña para obtener el acceso.
+              </p>
+            </div>
+
+            <div style="background-color: #f8fafc; padding: 18px; border-radius: 12px; border: 1px solid #e2e8f0; margin: 20px 0;">
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #334155;"><strong>Tu correo de acceso:</strong> <span style="color: #4f46e5; font-weight: 600;">${emailId}</span></p>
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #334155;"><strong>Rol asignado:</strong> ${newUserRole}</p>
+              <p style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.5;">
+                Al ser tu primer ingreso, escribe tu correo y el sistema detectará que es tu primer acceso para guiarte en la generación de tu contraseña personal.
+              </p>
+            </div>
+
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="${accessUrl}" target="_blank" rel="noopener noreferrer" style="background-color: #4f46e5; color: #ffffff; padding: 14px 32px; font-size: 15px; font-weight: 700; text-decoration: none; border-radius: 10px; display: inline-block; box-shadow: 0 4px 10px rgba(79, 70, 229, 0.3);">
+                Acceder al Dashboard DUNOR
+              </a>
+            </div>
+
+            <p style="font-size: 13px; color: #64748b; line-height: 1.6; text-align: center; margin: 20px 0 0 0;">
+              O accede directamente mediante este enlace:<br />
+              <a href="${accessUrl}" target="_blank" rel="noopener noreferrer" style="color: #4f46e5; font-weight: 600; word-break: break-all;">${accessUrl}</a>
+            </p>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 14px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8; font-weight: 500;">Notificación automática del Sistema DASHBOARD DUNOR.</p>
+          </div>
+        </div>
+      `;
+
+      try {
+        if (sendEmail) {
+          await sendEmail(emailId, emailSubject, emailHtml);
+        } else {
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: emailId, subject: emailSubject, html: emailHtml })
+          });
+        }
+      } catch (emailErr) {
+        console.warn("Welcome email error:", emailErr);
+      }
+
       showSystemPopup(
-        "Usuario Creado y Agregado a Authentication",
-        `El usuario "${formData.name}" (${emailId}) ha sido guardado exitosamente en la base de datos y registrado en Firebase Authentication con el rol "${newUserRole}".\n\nContraseña de acceso: ${userPassword}`,
+        "Usuario Registrado Exitosamente",
+        `El usuario "${formData.name}" (${emailId}) ha sido registrado exitosamente.\n\nSe ha enviado un correo de confirmación de registro a ${emailId} con el enlace de acceso (https://dashboard-dunor.vercel.app/) y la indicación para generar su contraseña.`,
         "success"
       );
 
       setShowAddModal(false);
-      setFormData({ name: '', email: '', phone: '', password: '' });
+      setFormData({ name: '', email: '', password: '' });
     } catch (error: any) {
       console.error("Error adding user:", error);
       showSystemPopup(
@@ -8479,26 +8609,15 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all"
                   />
                 </InputGroup>
-                <InputGroup label="Teléfono">
-                  <input
-                    type="tel"
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all"
-                  />
-                </InputGroup>
-                <InputGroup label="Contraseña Inicial de Acceso (Opcional)">
-                  <input
-                    type="text"
-                    value={formData.password}
-                    placeholder={newUserRole === 'ADMIN' ? 'Por defecto: qwerty1' : 'Por defecto: dunor2024'}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono"
-                  />
-                  <span className="text-[11px] text-slate-400 mt-1 block">
-                    Se creará y registrará automáticamente en Firebase Authentication con esta contraseña.
-                  </span>
-                </InputGroup>
+                <div className="p-3.5 bg-indigo-50/80 border border-indigo-100 rounded-xl flex items-start gap-3">
+                  <div className="p-1.5 bg-indigo-100 rounded-lg text-indigo-700 shrink-0 mt-0.5">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div className="text-xs text-indigo-950 leading-relaxed">
+                    <span className="font-bold block text-indigo-900 mb-0.5">Sin contraseña por defecto</span>
+                    No se requiere asignar contraseña. Cuando el usuario ingrese con su correo por primera vez al sistema, se verificará automáticamente y se le solicitará crear su propia contraseña de acceso personal.
+                  </div>
+                </div>
 
                 <div className="flex gap-3 pt-4">
                   <button

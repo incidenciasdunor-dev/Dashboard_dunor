@@ -4,7 +4,7 @@ import { CheckCircle2, AlertTriangle, Info, X, HelpCircle, Trash2 } from 'lucide
 
 export interface SystemModalState {
   isOpen: boolean;
-  type: 'success' | 'error' | 'info' | 'confirm' | 'danger';
+  type: 'success' | 'error' | 'info' | 'confirm' | 'danger' | 'warning';
   title: string;
   message: string;
   confirmText?: string;
@@ -46,6 +46,8 @@ export const SystemModal: React.FC<SystemModalProps> = ({ modal, state, onClose 
         return <Trash2 className="w-10 h-10 text-rose-500" />;
       case 'info':
         return <Info className="w-10 h-10 text-indigo-500" />;
+      case 'warning':
+        return <AlertTriangle className="w-10 h-10 text-amber-500" />;
       case 'confirm':
         return <HelpCircle className="w-10 h-10 text-amber-500" />;
       default:

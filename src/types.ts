@@ -302,7 +302,11 @@ export interface Incident {
   reporterEmail?: string;
   coordinatorId: string;
   coordinatorIds?: string[];
+  coordinatorName?: string;
+  coordinatorEmail?: string;
   notifiedTeacherId?: string;
+  notifiedTeacherName?: string;
+  notifiedTeacherEmail?: string;
   suggestReferral?: boolean;
   referralStatus?: 'SUGGESTED' | 'IN_PROGRESS';
   referralComments?: string;
@@ -344,6 +348,9 @@ export interface Referral {
   reasonAndBackground: string;
   teacherStrategies: string;
   psychologistComment?: string;
+  referredByName?: string;
+  referredBy?: string;
+  referredByRole?: string;
   additionalRecipients?: { uid?: string; email: string; name: string; role: string }[];
   status?: 'PENDIENTE' | 'EN_VALORACION' | 'ATENDIDO';
   createdAt: number;
@@ -370,7 +377,7 @@ export interface Expediente {
   psychologistId: string;
   psychologistName: string;
   psychologistEmail: string;
-  status?: 'EN_PROCESO' | 'CASO_CONCLUIDO';
+  status?: 'EN_PROCESO' | 'CASO_CONCLUIDO' | 'CONCLUIDO' | 'DERIVADO_EXTERNO';
   createdAt: number;
   updatedAt: number;
 }

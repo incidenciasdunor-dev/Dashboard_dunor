@@ -214,7 +214,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
     // By status
     const enProceso = filteredExpedientes.filter(e => !e.status || e.status === 'EN_PROCESO').length;
-    const concluidos = filteredExpedientes.filter(e => e.status === 'CONCLUIDO').length;
+    const concluidos = filteredExpedientes.filter(e => e.status === 'CONCLUIDO' || e.status === 'CASO_CONCLUIDO').length;
     const derivados = filteredExpedientes.filter(e => e.status === 'DERIVADO_EXTERNO').length;
 
     // By Grade
@@ -355,7 +355,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
             ${idx + 1}. ${exp.studentName} <span style="font-size:11px; color:#475569; background:#e2e8f0; padding:2px 8px; border-radius:12px;">Grado/Grupo: ${exp.gradeGroup || 'S/G'}</span>
           </div>
           <div style="font-size:11px; color:#334155; margin-bottom:6px;">
-            <strong>Estatus:</strong> ${exp.status === 'CONCLUIDO' ? 'Caso Concluido' : 'En Proceso'} | <strong>Psicólogo:</strong> ${exp.psychologistName || 'Asignado'}
+            <strong>Estatus:</strong> ${exp.status === 'CONCLUIDO' || exp.status === 'CASO_CONCLUIDO' ? 'Caso Concluido' : exp.status === 'DERIVADO_EXTERNO' ? 'Derivado Externo' : 'En Proceso'} | <strong>Psicólogo:</strong> ${exp.psychologistName || 'Asignado'}
           </div>
           ${exp.reasonAndBackground ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Motivo / Antecedentes:</strong> ${exp.reasonAndBackground}</div>` : ''}
           ${exp.psychologicalEvaluation ? `<div style="font-size:11px; color:#475569; margin-top:4px;"><strong>Evaluación Psicopedagógica:</strong> ${exp.psychologicalEvaluation}</div>` : ''}
