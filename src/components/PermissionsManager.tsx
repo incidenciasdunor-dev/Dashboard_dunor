@@ -10,7 +10,13 @@ import { doc, setDoc, getDocs, collection, deleteField, updateDoc } from 'fireba
 
 interface PermissionsManagerProps {
   firestoreRolePermissions?: Partial<RolePermissionsMap>;
-  addLog: (action: string, details?: string) => Promise<void>;
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+  }) => Promise<void>;
   isSuperAdmin: boolean;
 }
 
@@ -96,6 +102,7 @@ export const PERMISSION_GROUPS: {
     description: 'Funciones para atención psicopedagógica y asignación operativa.',
     items: [
       { key: 'canCreateReferral', label: 'Sugerir / Crear Canalización', description: 'Enviar solicitudes de atención dirigida a psicología.', icon: <Brain className="w-4 h-4 text-teal-600" /> },
+      { key: 'canDeleteReferrals', label: 'Eliminar Canalizaciones', description: 'Permite a psicología o administradores eliminar canalizaciones.', icon: <Trash2 className="w-4 h-4 text-rose-600" /> },
       { key: 'canManageExpedientes', label: 'Crear y Gestionar Expedientes', description: 'Abrir, actualizar y gestionar expedientes de alumnos.', icon: <GraduationCap className="w-4 h-4 text-emerald-600" /> },
       { key: 'canCreateTask', label: 'Crear / Asignar Tareas', description: 'Asignar tareas de seguimiento a docentes o coordinadores.', icon: <CheckSquare className="w-4 h-4 text-purple-600" /> },
     ]
@@ -230,7 +237,8 @@ export const RolePermissionsManager: React.FC<PermissionsManagerProps> = ({
         try {
           await addLog(
             `Actualizó permiso en colección 'permisos'`,
-            `Rol: ${ROLE_LABELS[role].name} (${role}) | Función: ${key} = ${newValue ? 'Permitido (true)' : 'Denegado (false)'}`
+            `Rol: ${ROLE_LABELS[role].name} (${role}) | Función: ${key} = ${newValue ? 'Permitido (true)' : 'Denegado (false)'}`,
+            { module: 'Permisos' }
           );
         } catch (err) {
           console.warn("Log creation notice:", err);
@@ -310,7 +318,8 @@ export const RolePermissionsManager: React.FC<PermissionsManagerProps> = ({
         try {
           await addLog(
             `Actualización masiva de permisos en 'permisos'`,
-            `Rol: ${ROLE_LABELS[role].name} | Todos los permisos = ${targetValue ? 'ACTIVADOS (true)' : 'DESACTIVADOS (false)'}`
+            `Rol: ${ROLE_LABELS[role].name} | Todos los permisos = ${targetValue ? 'ACTIVADOS (true)' : 'DESACTIVADOS (false)'}`,
+            { module: 'Permisos' }
           );
         } catch (e) {}
       }, 20);
@@ -359,7 +368,8 @@ export const RolePermissionsManager: React.FC<PermissionsManagerProps> = ({
         try {
           await addLog(
             `Restableció permisos predeterminados en 'permisos'`,
-            `Rol: ${ROLE_LABELS[role].name}`
+            `Rol: ${ROLE_LABELS[role].name}`,
+            { module: 'Permisos' }
           );
         } catch (e) {}
       }, 20);
@@ -403,7 +413,8 @@ export const RolePermissionsManager: React.FC<PermissionsManagerProps> = ({
 
       await addLog(
         `Sincronizó permisos del rol a usuarios`,
-        `Rol: ${ROLE_LABELS[role].name} (${role}) | Sobreescrituras limpiadas en ${updatedCount} usuario(s)`
+        `Rol: ${ROLE_LABELS[role].name} (${role}) | Sobreescrituras limpiadas en ${updatedCount} usuario(s)`,
+        { module: 'Permisos' }
       ).catch(() => {});
 
       setLastSavedMessage(`Sincronización completada: ${updatedCount} usuario(s) limpios y alineados al rol ${ROLE_LABELS[role].name}.`);

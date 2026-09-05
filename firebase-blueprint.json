@@ -87,6 +87,12 @@
         "action": { "type": "string", "description": "Description of the action performed" },
         "userEmail": { "type": "string", "description": "Email of the user who performed the action" },
         "userName": { "type": "string", "description": "Name of the user who performed the action" },
+        "userRole": { "type": "string", "description": "Role of the user who performed the action" },
+        "creatorName": { "type": "string", "description": "Name of the creator of the record" },
+        "creatorEmail": { "type": "string", "description": "Email of the creator of the record" },
+        "creatorRole": { "type": "string", "description": "Role of the creator of the record" },
+        "module": { "type": "string", "description": "Module or entity type related to the log" },
+        "recordId": { "type": "string", "description": "Optional ID of the related record" },
         "timestamp": { "type": "number", "description": "Timestamp of the action" },
         "details": { "type": "string", "description": "Optional additional details" }
       },

@@ -47,6 +47,7 @@ export interface RolePermissions {
   // Acciones y Funciones Específicas
   canEditIncidents: boolean;
   canDeleteIncidents: boolean;
+  canDeleteReferrals?: boolean;
   canChangeStatus: boolean;
   canAssignPsychologist: boolean;
   canAddFollowUp: boolean;
@@ -76,6 +77,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: true,
     canDeleteIncidents: true,
+    canDeleteReferrals: true,
     canChangeStatus: true,
     canAssignPsychologist: true,
     canAddFollowUp: true,
@@ -89,7 +91,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canViewIncidents: true,
     canCreateIncident: true,
     canViewTasks: true,
-    canCreateTask: false,
+    canCreateTask: true,
     canViewUsers: true,
     canViewLogs: false,
     canViewSettings: true,
@@ -101,11 +103,12 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: true,
     canDeleteIncidents: false,
+    canDeleteReferrals: false,
     canChangeStatus: true,
     canAssignPsychologist: true,
     canAddFollowUp: true,
     canExportReports: true,
-    canSendCongratulations: false,
+    canSendCongratulations: true,
     canManageUsers: true,
     canSendMassMessages: false,
   },
@@ -126,6 +129,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
+    canDeleteReferrals: false,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: false,
@@ -151,6 +155,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
+    canDeleteReferrals: false,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,
@@ -176,6 +181,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
+    canDeleteReferrals: true,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,
@@ -300,6 +306,11 @@ export interface Incident {
   reporterName: string;
   reporterId: string;
   reporterEmail?: string;
+  reporterRole?: string;
+  creatorName?: string;
+  creatorEmail?: string;
+  creatorRole?: string;
+  creatorId?: string;
   coordinatorId: string;
   coordinatorIds?: string[];
   coordinatorName?: string;
@@ -327,6 +338,12 @@ export interface Log {
   action: string;
   userEmail: string;
   userName: string;
+  userRole?: string;
+  creatorName?: string;
+  creatorEmail?: string;
+  creatorRole?: string;
+  module?: string;
+  recordId?: string;
   timestamp: number;
   details?: string;
 }
@@ -351,11 +368,25 @@ export interface Referral {
   referredByName?: string;
   referredBy?: string;
   referredByRole?: string;
+  createdByName?: string;
+  createdByEmail?: string;
+  createdByRole?: string;
   additionalRecipients?: { uid?: string; email: string; name: string; role: string }[];
   status?: 'PENDIENTE' | 'EN_VALORACION' | 'ATENDIDO';
   createdAt: number;
   updatedAt?: number;
 }
+
+export const SUPER_ADMIN_EMAILS = [
+  'mi_yorch@hotmail.com',
+  'incidencias.dunor@gmail.com'
+];
+
+export const isSuperAdminEmail = (email?: string | null): boolean => {
+  if (!email) return false;
+  const clean = email.toLowerCase().trim();
+  return SUPER_ADMIN_EMAILS.includes(clean) || clean.includes('incidencias.dunor') || clean.includes('yorch');
+};
 
 export interface Expediente {
   id: string;

@@ -12,7 +12,8 @@ import {
   Send,
   X,
   CheckCircle2,
-  BrainCircuit
+  BrainCircuit,
+  Trash2
 } from 'lucide-react';
 import {
   Referral,
@@ -20,7 +21,7 @@ import {
   normalizeUserRole
 } from '../types';
 import { SystemModal, SystemModalState } from './SystemModal';
-import { doc, setDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, addDoc, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
 
@@ -35,6 +36,7 @@ interface CanalizacionesManagerProps {
   addLog: (action: string, details?: string) => Promise<void>;
   isSuperAdmin?: boolean;
   canCreateReferral?: boolean;
+  canDeleteReferral?: boolean;
   canManageExpedientes?: boolean;
   canAddFollowUp?: boolean;
   onOpenExpedienteFromReferral?: (referral: Referral) => void;
@@ -53,6 +55,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   addLog,
   isSuperAdmin,
   canCreateReferral = true,
+  canDeleteReferral,
   canManageExpedientes = true,
   canAddFollowUp = true,
   onOpenExpedienteFromReferral,
@@ -63,6 +66,16 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
 
+  const normRole = normalizeUserRole(profile.role);
+  const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
+  const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
+  const canDeleteReferralActual = Boolean(
+    canDeleteReferral || 
+    isPsychologistUser || 
+    isSuperAdmin || 
+    normRole === 'ADMIN'
+  );
+
   const [sysModal, setSysModal] = useState<SystemModalState>({
     isOpen: false,
     title: '',
@@ -72,6 +85,16 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
   const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
     setSysModal({ isOpen: true, title, message, type });
+  };
+
+  const showConfirm = (
+    title: string,
+    message: string,
+    onConfirm: () => void,
+    type: 'confirm' | 'danger' = 'confirm',
+    confirmText = 'Confirmar'
+  ) => {
+    setSysModal({ isOpen: true, type, title, message, onConfirm, confirmText });
   };
 
   // Effect to auto-expand and scroll to highlighted referral when redirected from notifications
@@ -124,7 +147,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     gradeGroup: '',
     coordinatorEmail: getLinkedCoordinatorEmail(),
     additionalRecipients: [] as { uid?: string; email: string; name: string; role: string }[],
-    psychologistEmail: profile.assignedPsychologistEmail || (psychologists[0]?.email || ''),
+    psychologistEmail: isPsychologistUser ? (profile.email || '') : (profile.assignedPsychologistEmail || (psychologists[0]?.email || '')),
     reasonAndBackground: '',
     teacherStrategies: ''
   });
@@ -133,14 +156,14 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   useEffect(() => {
     if (isModalOpen) {
       const defaultCoord = getLinkedCoordinatorEmail();
-      const defaultPsych = profile.assignedPsychologistEmail || (psychologists[0]?.email || '');
+      const defaultPsych = isPsychologistUser ? (profile.email || '') : (profile.assignedPsychologistEmail || (psychologists[0]?.email || ''));
       setFormData(prev => ({
         ...prev,
         coordinatorEmail: prev.coordinatorEmail || defaultCoord,
-        psychologistEmail: prev.psychologistEmail || defaultPsych
+        psychologistEmail: isPsychologistUser ? (profile.email || '') : (prev.psychologistEmail || defaultPsych)
       }));
     }
-  }, [isModalOpen, profile, coordinators, psychologists]);
+  }, [isModalOpen, profile, coordinators, psychologists, isPsychologistUser]);
 
   // Toggle card details
   const toggleDetails = (id: string) => {
@@ -224,6 +247,42 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     return Boolean(isAuthor || isCc);
   });
 
+  // Handle delete referral (Psychologist / Admin)
+  const handleDeleteReferral = (ref: Referral) => {
+    showConfirm(
+      'Eliminar Canalización',
+      `¿Estás seguro de que deseas eliminar permanentemente la canalización del alumno "${ref.studentName}" (${ref.gradeGroup || 'S/G'})? Esta acción no se puede deshacer.`,
+      async () => {
+        try {
+          await deleteDoc(doc(db, 'referrals', ref.id));
+
+          // Si la canalización provenía de una incidencia escolar vinculada, restablecemos el estatus de canalización
+          if (ref.incidentId) {
+            try {
+              await updateDoc(doc(db, 'incidents', ref.incidentId), {
+                referralStatus: null
+              });
+            } catch (incErr) {
+              console.warn("No se pudo actualizar el estatus de la incidencia vinculada:", incErr);
+            }
+          }
+
+          await addLog(
+            'Eliminación de Canalización',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Canalización del alumno: ${ref.studentName} (${ref.gradeGroup || 'S/G'}) | Remitente original: ${ref.createdByName || ref.teacherName || 'Docente'}`
+          );
+
+          showAlert('Canalización Eliminada', `La canalización de "${ref.studentName}" ha sido eliminada exitosamente.`, 'success');
+        } catch (err) {
+          console.error("Error deleting referral:", err);
+          showAlert('Error', 'Ocurrió un error al intentar eliminar la canalización. Por favor inténtalo de nuevo.', 'error');
+        }
+      },
+      'danger',
+      'Eliminar'
+    );
+  };
+
   // Handle create referral
   const handleCreateReferral = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -236,21 +295,31 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     try {
       const id = 'ref_' + Date.now();
       const selectedCoord = coordinators.find(c => c.email === formData.coordinatorEmail);
-      const selectedPsych = psychologists.find(p => p.email === formData.psychologistEmail);
+      const selectedPsych = isPsychologistUser 
+        ? { uid: profile.uid, name: profile.name, email: profile.email }
+        : psychologists.find(p => p.email === formData.psychologistEmail);
+
+      const creatorRoleName = isPsychologistUser ? 'Psicólogo' : (profile.role === 'TEACHER' ? 'Docente' : (profile.role || 'Usuario'));
 
       const newRef: Referral = {
         id,
         studentName: formData.studentName.trim(),
         gradeGroup: formData.gradeGroup.trim() || 'S/G',
         teacherId: profile.uid || profile.email,
-        teacherName: profile.name || 'Docente',
+        teacherName: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
         teacherEmail: profile.email,
+        createdByName: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
+        createdByEmail: profile.email,
+        createdByRole: isPsychologistUser ? 'PSYCHOLOGIST' : (profile.role || 'TEACHER'),
+        referredByName: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
+        referredBy: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
+        referredByRole: isPsychologistUser ? 'PSYCHOLOGIST' : (profile.role || 'TEACHER'),
         coordinatorId: selectedCoord?.uid,
         coordinatorName: selectedCoord?.name || 'Coordinador General',
         coordinatorEmail: selectedCoord?.email || formData.coordinatorEmail,
-        psychologistId: selectedPsych?.uid,
-        psychologistName: selectedPsych?.name || (psychologists[0]?.name || 'Psicólogo Escolar'),
-        psychologistEmail: selectedPsych?.email || (psychologists[0]?.email || formData.psychologistEmail),
+        psychologistId: isPsychologistUser ? (profile.uid || profile.email) : (selectedPsych?.uid || ''),
+        psychologistName: isPsychologistUser ? profile.name : (selectedPsych?.name || (psychologists[0]?.name || 'Psicólogo Escolar')),
+        psychologistEmail: isPsychologistUser ? profile.email : (selectedPsych?.email || (psychologists[0]?.email || formData.psychologistEmail)),
         reasonAndBackground: formData.reasonAndBackground.trim(),
         teacherStrategies: formData.teacherStrategies.trim(),
         psychologistComment: '',
@@ -260,7 +329,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       };
 
       await setDoc(doc(db, 'referrals', id), newRef);
-      await addLog('Nueva Canalización', `Se canalizó al alumno ${newRef.studentName} (${newRef.gradeGroup}) a Psicología.`);
+      await addLog(
+        'Nueva Canalización',
+        `Creado por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${newRef.studentName} (${newRef.gradeGroup}) | Creador/Responsable: ${newRef.createdByName || newRef.teacherName} | Psicólogo: ${newRef.psychologistName} | Coordinador: ${newRef.coordinatorName || 'General'}`
+      );
 
       // Send in-app and email notifications (Requirements 3 & 4):
       // Visible and notified to:
@@ -434,7 +506,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
       await addLog(
         'Respuesta de Psicología en Canalización',
-        `El psicólogo actualizó el comentario para la canalización de ${ref.studentName}: "${commentVal.slice(0, 50)}..."`
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${ref.studentName} (${ref.gradeGroup}) | Docente que canalizó: ${ref.teacherName} | Comentario: "${commentVal.slice(0, 100)}..."`
       );
 
       // Requirement 1: Notify the teacher who submitted referral and the assigned coordinator
@@ -529,10 +601,6 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     }
   };
 
-  const normRole = normalizeUserRole(profile.role);
-  const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
-  const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
-
   return (
     <div className="space-y-6">
       {/* Header Section */}
@@ -555,8 +623,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           <button
             type="button"
             onClick={() => {
-              // Pre-select only psychologist if only 1 exists
-              const defaultPsychEmail = profile.assignedPsychologistEmail || (psychologists.length === 1 ? psychologists[0].email : (psychologists[0]?.email || ''));
+              // Pre-select psychologist: self if psychologist user
+              const defaultPsychEmail = isPsychologistUser
+                ? (profile.email || '')
+                : (profile.assignedPsychologistEmail || (psychologists.length === 1 ? psychologists[0].email : (psychologists[0]?.email || '')));
               const defaultCoordEmail = profile.assignedCoordinatorEmail || (coordinators[0]?.email || '');
               setFormData(prev => ({
                 ...prev,
@@ -638,17 +708,29 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenExpedienteFromReferral(ref)}
-                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 dark:hover:bg-emerald-900/60"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         <span>Abrir / Vincular Expediente</span>
                       </button>
                     )}
 
+                    {canDeleteReferralActual && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteReferral(ref)}
+                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
+                        title="Eliminar canalización"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                        <span>Eliminar</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => toggleDetails(ref.id)}
-                      className="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-100 transition-all"
+                      className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
                     >
                       <span>{expanded ? 'Ocultar detalles' : 'Ver detalles'}</span>
                       {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -663,13 +745,17 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                   </h2>
                   <div className="text-xs text-slate-600 flex items-center gap-x-6 gap-y-1 flex-wrap font-medium">
                     <span>
-                      <strong className="text-slate-800">Docente:</strong> {ref.teacherName}
+                      <strong className="text-slate-800">
+                        {ref.createdByRole === 'PSYCHOLOGIST' || ref.referredByRole === 'PSYCHOLOGIST' || (ref.teacherEmail && psychologists.some(p => p.email?.toLowerCase() === ref.teacherEmail?.toLowerCase()))
+                          ? 'Psicólogo (Creador):'
+                          : 'Docente (Creador):'}
+                      </strong> {ref.createdByName || ref.referredByName || ref.teacherName}
                     </span>
                     <span>
                       <strong className="text-slate-800">Coordinador:</strong> {ref.coordinatorName || 'Coordinador General'}
                     </span>
                     <span>
-                      <strong className="text-slate-800">Psicólogo:</strong> {ref.psychologistName || 'Psicólogo Escolar'}
+                      <strong className="text-slate-800">Psicólogo Asignado:</strong> {ref.psychologistName || 'Psicólogo Escolar'}
                     </span>
                   </div>
                   {ref.additionalRecipients && ref.additionalRecipients.length > 0 && (
@@ -788,6 +874,13 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
             </div>
 
             <form onSubmit={handleCreateReferral} className="space-y-4">
+              <div className="flex items-center gap-2.5 p-3 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl text-xs text-indigo-950 font-medium">
+                <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                <span>
+                  <strong>Creador del registro:</strong> {profile.name} ({isPsychologistUser ? 'Psicólogo' : (profile.role === 'TEACHER' ? 'Docente' : (profile.role || 'Usuario'))} - {profile.email})
+                </span>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -850,21 +943,33 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                     Psicólogo Asignado *
                   </label>
-                  <select
-                    value={formData.psychologistEmail}
-                    onChange={(e) => setFormData({ ...formData, psychologistEmail: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    {psychologists.length === 0 ? (
-                      <option value="">Psicólogo Escolar</option>
-                    ) : (
-                      psychologists.map(p => (
-                        <option key={p.uid || p.email} value={p.email}>
-                          {p.name} ({p.email})
-                        </option>
-                      ))
-                    )}
-                  </select>
+                  {isPsychologistUser ? (
+                    <div className="w-full px-3.5 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl text-xs font-semibold text-indigo-900 flex items-center justify-between">
+                      <div className="flex items-center gap-2 truncate">
+                        <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        <span className="truncate">{profile.name} (Tú)</span>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 flex-shrink-0 ml-1">
+                        Creador
+                      </span>
+                    </div>
+                  ) : (
+                    <select
+                      value={formData.psychologistEmail}
+                      onChange={(e) => setFormData({ ...formData, psychologistEmail: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      {psychologists.length === 0 ? (
+                        <option value="">Psicólogo Escolar</option>
+                      ) : (
+                        psychologists.map(p => (
+                          <option key={p.uid || p.email} value={p.email}>
+                            {p.name} ({p.email})
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  )}
                 </div>
               </div>
 

@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -137,10 +137,11 @@ const isSuperAdminEmail = (email?: string | null): boolean => {
   return SUPER_ADMIN_EMAILS.includes(clean) || clean.includes('incidencias.dunor');
 };
 
-class ErrorBoundary extends Component<{ children?: React.ReactNode }, { hasError: boolean; error: any }> {
+class ErrorBoundary extends React.Component<{ children?: React.ReactNode }, { hasError: boolean; error: any }> {
+  state: { hasError: boolean; error: any } = { hasError: false, error: null };
+
   constructor(props: { children?: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false, error: null };
   }
 
   static getDerivedStateFromError(error: Error) {
@@ -200,6 +201,7 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
   const logoSrc = systemSettings?.appLogoUrl || "/logo.svg";
   const logoAppName = systemSettings?.appName || "DASHBOARD DUNOR";
   const isDirective = profile?.role === 'DIRECTIVE' || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email);
+  const canSeeSignatures = isDirective || profile?.role === 'COORDINATOR';
 
   const handlePrint = () => {
     const printContent = document.getElementById('printable-report');
@@ -651,7 +653,10 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
                 </div>
                 <div className="info-item">
                   <span className="label">Reportado por</span>
-                  <span className="content">{incident.reporterName}</span>
+                  <span className="content">
+                    {incident.reporterName || incident.creatorName || 'Personal Escolar'}
+                    {incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}
+                  </span>
                 </div>
                 <div className="info-item">
                   <span className="label">Estado Actual</span>
@@ -728,7 +733,7 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
               </div>
             )}
 
-            {isDirective && (
+            {canSeeSignatures && (
               <div className="section signatures-section">
                 <h3 className="section-title">Firmas de Conformidad y Seguimiento</h3>
                 <div className="signatures-grid">
@@ -2097,6 +2102,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [systemSettings]);
 
   const [logs, setLogs] = useState<Log[]>([]);
+  const [logSearchTerm, setLogSearchTerm] = useState<string>('');
+  const [logModuleFilter, setLogModuleFilter] = useState<string>('ALL');
+  const [logRoleFilter, setLogRoleFilter] = useState<string>('ALL');
+  const [selectedLogDetail, setSelectedLogDetail] = useState<Log | null>(null);
   const [galleryConfig, setGalleryConfig] = useState<{
     isOpen: boolean;
     images: string[];
@@ -2293,8 +2302,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [systemSettings.appName, systemSettings.appLogoUrl]);
 
   useEffect(() => {
-    if (isSuperAdmin) {
-      const q = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200));
+    if (isSuperAdmin || can('canViewLogs')) {
+      const q = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(300));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Log));
         setLogs(logsData);
@@ -2303,7 +2312,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       });
       return () => unsubscribe();
     }
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, profile]);
 
   const sendEmail = async (to: string, subject: string, html: string) => {
     if (!to || !to.includes('@')) return { error: 'Invalid email' };
@@ -2334,6 +2343,28 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     skipAdmins: boolean = false,
     extraData: Record<string, any> = {}
   ) => {
+    const titleLower = (title || '').toLowerCase();
+    const msgLower = (message || '').toLowerCase();
+
+    // Strictly eliminate welcome and new user registration notifications for all users
+    if (
+      titleLower.includes('bienvenid') ||
+      titleLower.includes('nuevo usuario') ||
+      titleLower.includes('registro de nuevo usuario') ||
+      titleLower.includes('usuario registrado') ||
+      titleLower.includes('usuario nuevo') ||
+      titleLower.includes('alta de usuario') ||
+      msgLower.includes('bienvenid') ||
+      msgLower.includes('bienvenido/a a dashboard dunor') ||
+      msgLower.includes('tu registro al dashboard dunor fue exitosa') ||
+      msgLower.includes('nuevo usuario') ||
+      msgLower.includes('usuario registrado') ||
+      msgLower.includes('cuenta creada') ||
+      (msgLower.includes('dashboard dunor') && (msgLower.includes('registro') || msgLower.includes('bienvenid')))
+    ) {
+      return;
+    }
+
     const notificationData = {
       title,
       message,
@@ -2410,23 +2441,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
-    // 2. Directives (always receive all notifications generated across the school)
-    const schoolDirectives = allUsers.filter(u => normalizeUserRole(u.role) === 'DIRECTIVE');
-    schoolDirectives.forEach(d => {
-      if (d.uid) addTargetUser(d.uid);
-      else if (d.email) addTargetUser(d.email);
+    // 2. SuperAdmin: ALL system notifications reach the superadmin in-app for auditing/monitoring (NO EMAILS)
+    SUPER_ADMIN_EMAILS.forEach(email => {
+      finalTargetUserIds.add(email.toLowerCase().trim());
+    });
+    allUsers.filter(u => isSuperAdminEmail(u.email)).forEach(sa => {
+      if (sa.uid) finalTargetUserIds.add(sa.uid);
+      if (sa.email) finalTargetUserIds.add(sa.email.toLowerCase().trim());
     });
 
-    // 3. Admins & SuperAdmin (unless skipAdmins is true)
-    if (!skipAdmins) {
-      const schoolAdmins = allUsers.filter(u => normalizeUserRole(u.role) === 'ADMIN' || isSuperAdminEmail(u.email));
-      schoolAdmins.forEach(a => {
-        if (a.uid) addTargetUser(a.uid);
-        else if (a.email) addTargetUser(a.email);
-      });
-    }
-
-    // 4. Create single notification document per unique target user ID/email
+    // 3. Create single notification document per unique target user ID/email
     for (const userId of finalTargetUserIds) {
       if (!userId) continue;
       try {
@@ -2439,8 +2463,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
-    // 5. Send Email Notification to all recipient emails (unless skipEmail is set)
-    if (systemSettings.emailNotificationsEnabled !== false && !extraData?.skipEmail && targetEmails.size > 0) {
+    // 6. Send Email Notification to all recipient emails (unless skipEmail is set)
+    // CRITICAL: SuperAdmin receives ONLY in-app notifications, NEVER notification emails ("solo notificaciones NO CORREOS, le lleguen al superadmin")
+    const filteredTargetEmails = Array.from(targetEmails).filter(email => !isSuperAdminEmail(email));
+
+    if (systemSettings.emailNotificationsEnabled !== false && !extraData?.skipEmail && filteredTargetEmails.length > 0) {
       const appTitle = systemSettings.appName || 'DASHBOARD DUNOR';
       const formattedMsg = message.replace(/\n/g, '<br/>');
 
@@ -2465,7 +2492,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         </div>
       `;
 
-      for (const targetEmail of targetEmails) {
+      for (const targetEmail of filteredTargetEmails) {
         if (targetEmail && targetEmail.includes('@')) {
           sendEmail(targetEmail, title, emailHtml).catch(err => {
             console.error("Error sending email notification to:", targetEmail, err);
@@ -2475,13 +2502,46 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   };
 
-  const addLog = async (action: string, details?: string) => {
+  const getModuleFromAction = (action: string, details: string = ''): string => {
+    const text = (action + ' ' + details).toLowerCase();
+    if (text.includes('incidencia')) return 'Incidencias';
+    if (text.includes('canaliz') || text.includes('referral') || text.includes('psicolog')) return 'Canalizaciones';
+    if (text.includes('expediente') || text.includes('psicopedagógic')) return 'Expedientes';
+    if (text.includes('informe')) return 'Informes';
+    if (text.includes('tarea') || text.includes('felicitación') || text.includes('felicitacion')) return 'Tareas / Felicitaciones';
+    if (text.includes('usuario') || text.includes('docente') || text.includes('coordinador')) return 'Usuarios';
+    if (text.includes('permiso') || text.includes('categoría') || text.includes('categoria') || text.includes('respaldo') || text.includes('logotipo')) return 'Configuración';
+    return 'General';
+  };
+
+  const addLog = async (
+    action: string, 
+    details?: string,
+    extra?: {
+      module?: string;
+      recordId?: string;
+      creatorName?: string;
+      creatorEmail?: string;
+      creatorRole?: string;
+    }
+  ) => {
     if (!profile) return;
     try {
+      const creatorName = extra?.creatorName || profile.name || 'Usuario';
+      const creatorEmail = extra?.creatorEmail || profile.email;
+      const creatorRole = extra?.creatorRole || profile.role || 'DOCENTE';
+      const moduleName = extra?.module || getModuleFromAction(action, details || '');
+
       await addDoc(collection(db, 'logs'), {
         action,
         userEmail: profile.email,
         userName: profile.name,
+        userRole: profile.role,
+        creatorName,
+        creatorEmail,
+        creatorRole,
+        module: moduleName,
+        recordId: extra?.recordId || '',
         timestamp: Date.now(),
         details: details || ''
       });
@@ -2585,6 +2645,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       addTarget(u.email);
     });
 
+    // Exclude SuperAdmin from routine incident email alerts ("solo notificaciones NO CORREOS, le lleguen al superadmin")
+    for (const email of Array.from(targetEmails)) {
+      if (isSuperAdminEmail(email)) {
+        targetEmails.delete(email);
+      }
+    }
+
     const finalTargetIds = Array.from(targetUserIds);
 
     // Send in-app notification in real-time (skipEmail: true since notifyIncidentInvolvedUsers handles the rich email below)
@@ -2611,7 +2678,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             <div style="background-color: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Lugar / Espacio:</strong> ${incident.place || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Alumno(s):</strong> ${incident.students || 'N/A'}</p>
-              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || 'Docente'}</p>
+              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || incident.creatorName || 'Personal Escolar'}${incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}</p>
               ${(incident.notifiedTeacherName || incident.notifiedTeacherId) ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente:</strong> ${incident.notifiedTeacherName || 'Docente seleccionado'}</p>` : ''}
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Estatus del Reporte:</strong> <span style="background-color: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">${statusLabel}</span></p>
               ${actionDetails ? `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #475569;">${actionDetails}</div>` : ''}
@@ -2842,7 +2909,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (targetIds.length === 0) return;
 
     let q;
-    if (isSuperAdmin || normRole === 'admin' || normRole === 'directive') {
+    if (isSuperAdmin) {
       q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
     } else if (targetIds.length === 1) {
       q = query(collection(db, 'notifications'), where('userId', '==', targetIds[0]));
@@ -2853,11 +2920,134 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rawDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
 
-      // Clean deduplication by document ID
+      const checkIsWelcomeOrRegistration = (d: any) => {
+        const titleLower = (d.title || '').toLowerCase();
+        const msgLower = (d.message || '').toLowerCase();
+        return (
+          titleLower.includes('bienvenid') ||
+          titleLower.includes('nuevo usuario') ||
+          titleLower.includes('registro de nuevo usuario') ||
+          titleLower.includes('usuario registrado') ||
+          titleLower.includes('usuario nuevo') ||
+          titleLower.includes('alta de usuario') ||
+          msgLower.includes('bienvenid') ||
+          msgLower.includes('bienvenido/a a dashboard dunor') ||
+          msgLower.includes('tu registro al dashboard dunor fue exitosa') ||
+          msgLower.includes('nuevo usuario') ||
+          msgLower.includes('usuario registrado') ||
+          msgLower.includes('cuenta creada') ||
+          (msgLower.includes('dashboard dunor') && (msgLower.includes('registro') || msgLower.includes('bienvenid')))
+        );
+      };
+
+      const checkIsNotificationRelevant = (d: any): boolean => {
+        if (!d) return false;
+        if (checkIsWelcomeOrRegistration(d)) return false;
+        if (isSuperAdmin) return true;
+
+        const role = normalizeUserRole(profile.role);
+        const uid = profile.uid;
+        const email = userEmail;
+        const targetId = (d.userId || '').toLowerCase().trim();
+        const isDirectTarget = targetId === uid.toLowerCase() || targetId === email;
+        const titleLower = (d.title || '').toLowerCase();
+
+        // 1. Incidents
+        if (d.incidentId) {
+          const inc = incidents.find(i => i.id === d.incidentId);
+          if (role === 'TEACHER') {
+            // Docente: ONLY incidents where they are reporter or in copy
+            if (inc) {
+              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
+              const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
+              return Boolean(isReporter || isNotified);
+            }
+            return isDirectTarget;
+          }
+
+          if (role === 'COORDINATOR') {
+            // Coordinador: ONLY incidents where assigned as coordinator, or reporter, or in copy
+            if (inc) {
+              const isAssigned = (inc.coordinatorIds && inc.coordinatorIds.includes(uid)) ||
+                inc.coordinatorId === uid ||
+                (inc.coordinatorEmail && inc.coordinatorEmail.toLowerCase() === email);
+              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
+              const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
+              return Boolean(isAssigned || isReporter || isNotified);
+            }
+            return isDirectTarget;
+          }
+
+          if (role === 'PSYCHOLOGIST') {
+            // Psicólogo: ONLY incident notifications with psychology referral / canalización
+            const isPsychRelated = d.type === 'referral' || d.referralId || titleLower.includes('canaliz') || titleLower.includes('psicol');
+            if (inc) {
+              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
+              const hasReferral = inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS' || (inc as any).psychologistId === uid;
+              return Boolean(isReporter || hasReferral || isPsychRelated);
+            }
+            return Boolean(isPsychRelated || (isDirectTarget && isPsychRelated));
+          }
+
+          if (role === 'DIRECTIVE' || role === 'ADMIN') {
+            return true;
+          }
+        }
+
+        // 2. Canalizaciones / Referrals
+        if (d.referralId || d.type === 'referral' || titleLower.includes('canaliz') || titleLower.includes('psicol')) {
+          if (role === 'TEACHER' || role === 'COORDINATOR') {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isCreator = ref.createdByEmail?.toLowerCase() === email || ref.referredByName === profile.name;
+              const isRecipient = ref.additionalRecipients?.some(r => r.uid === uid || r.email?.toLowerCase() === email);
+              return Boolean(isCreator || isRecipient || isDirectTarget);
+            }
+            return isDirectTarget;
+          }
+          // Psychologists, Directives, Admins receive canalizaciones
+          return true;
+        }
+
+        // 3. Tasks / Felicitaciones
+        if (d.taskId || d.type === 'task' || d.type === 'felicitacion' || titleLower.includes('tarea') || titleLower.includes('felicitaci')) {
+          if (role === 'TEACHER' || role === 'PSYCHOLOGIST') {
+            const task = tasks.find(t => t.id === d.taskId);
+            if (task) {
+              const isAssigned = task.assignedToEmail?.toLowerCase() === email;
+              const isCreator = task.createdByEmail?.toLowerCase() === email;
+              return Boolean(isAssigned || isCreator || isDirectTarget);
+            }
+            return isDirectTarget;
+          }
+          return true;
+        }
+
+        // 4. Expedientes & Informes
+        if (titleLower.includes('expediente') || titleLower.includes('informe')) {
+          if (role === 'PSYCHOLOGIST' || role === 'DIRECTIVE' || role === 'ADMIN') return true;
+          return isDirectTarget;
+        }
+
+        // Default: targeted directly or by role
+        if (isDirectTarget) return true;
+        if (targetId === role.toLowerCase() || targetId === profile.role?.toLowerCase()) return true;
+
+        return false;
+      };
+
+      // Clean deduplication and strictly exclude welcome, new user registration, and non-competent notifications
       const uniqueMap = new Map<string, any>();
       for (const d of rawDocs) {
         if (!d.id) continue;
-        uniqueMap.set(d.id, d);
+        if (!checkIsNotificationRelevant(d)) continue;
+
+        const eventKey = isSuperAdmin
+          ? (d.eventId || `${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${Math.floor((d.createdAt || 0) / 10000)}`)
+          : d.id;
+        if (!uniqueMap.has(eventKey)) {
+          uniqueMap.set(eventKey, d);
+        }
       }
 
       const finalDocs = Array.from(uniqueMap.values());
@@ -2866,8 +3056,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       snapshot.docChanges().forEach((change) => {
         if (change.type === "added") {
           const data = change.doc.data();
-          // Trigger instant real-time audio and visual alert for unread notifications added after load
-          if (!isInitialLoad && !data.read) {
+          // Trigger instant real-time audio and visual alert ONLY for relevant unread notifications
+          if (!isInitialLoad && !data.read && checkIsNotificationRelevant({ id: change.doc.id, ...data })) {
             playNotificationSound();
 
             setLiveToast({
@@ -2902,14 +3092,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     });
 
     return () => unsubscribe();
-  }, [user, profile, isSuperAdmin]);
+  }, [user, profile, isSuperAdmin, incidents, referrals, tasks]);
 
   useEffect(() => {
     if (!activeUser || !profile) return;
     const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qTasks, (snapshot) => {
       const allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin) {
+      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin) {
         setTasks(allDocs);
       } else {
         const myEmailLower = profile.email?.toLowerCase();
@@ -3392,6 +3582,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       await updateDoc(doc(db, 'incidents', incidentId), updates);
 
       if (updatedStatus === 'RECIBIDO' && incident.status !== 'RECIBIDO') {
+        await addLog(
+          'Recibió reporte de incidencia',
+          `Recibido por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Reportado originalmente por: ${incident.reporterName}`,
+          { module: 'Incidencias', recordId: incidentId }
+        );
+
         await notifyIncidentInvolvedUsers({
           incident: { ...incident, status: 'RECIBIDO' },
           title: 'Reporte Recibido por Coordinación',
@@ -3411,7 +3607,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (!can('canChangeStatus') && profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
     try {
       await updateDoc(doc(db, 'incidents', incident.id), { status });
-      await addLog('Actualizó estatus de incidencia', `Estatus: ${status}, Incidencia: ${incident.place}`);
+      await addLog(
+        'Actualizó estatus de incidencia',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Nuevo estatus: ${status} | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+        { module: 'Incidencias', recordId: incident.id }
+      );
 
       const statusLabels: Record<IncidentStatus, string> = {
         PENDIENTE: 'Pendiente',
@@ -3444,7 +3644,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       
       await updateDoc(doc(db, 'incidents', incident.id), updateData);
       
-      await addLog('Actualizó estatus de canalización', `Estatus: ${referralStatus === 'IN_PROGRESS' ? 'En Canalización' : 'Sugerencia'}, Incidencia: ${incident.place}`);
+      await addLog(
+        'Actualizó estatus de canalización',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Estatus: ${referralStatus === 'IN_PROGRESS' ? 'En Canalización' : 'Sugerencia'} | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+        { module: 'Canalizaciones', recordId: incident.id }
+      );
 
       if (referralStatus === 'SUGGESTED') {
         // Determine assigned psychologist
@@ -3538,7 +3742,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       await updateDoc(doc(db, 'incidents', incident.id), { 
         referralComments: comments 
       });
-      await addLog('Actualizó comentarios de canalización', `Incidencia: ${incident.place}`);
+      await addLog(
+        'Actualizó comentarios de canalización',
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName} | Comentarios: "${comments.slice(0, 100)}"`,
+        { module: 'Canalizaciones', recordId: incident.id }
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incident.id}`);
     }
@@ -3551,6 +3759,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         followUpHistory: history,
         isReceived: false // Mark as unread so coordinator sees it as "Pendiente"
       });
+
+      await addLog(
+        'Agregó seguimiento a incidencia',
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName} | Comentario: "${newCommentText.substring(0, 100)}"`,
+        { module: 'Incidencias', recordId: incident.id }
+      );
 
       await notifyIncidentInvolvedUsers({
         incident,
@@ -3577,6 +3791,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           await updateDoc(doc(db, 'incidents', incident.id), {
             deletedByCoordinators: arrayUnion(profile.uid)
           });
+          await addLog(
+            'Eliminó incidencia de panel',
+            `Eliminado de panel por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+            { module: 'Incidencias', recordId: incident.id }
+          );
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
           handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
@@ -3612,6 +3831,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         await updateDoc(doc(db, 'incidents', incident.id), {
           forwardedTo: arrayUnion(adminId)
         });
+
+        await addLog(
+          'Reenvió incidencia a directivo/administrador',
+          `Reenviado por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName} | Destinatario: ${admin.name} (${admin.email})`,
+          { module: 'Incidencias', recordId: incident.id }
+        );
 
         // Send email notification to the admin
         if (systemSettings.emailNotificationsEnabled !== false && admin.email) {
@@ -3656,6 +3881,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             batch.delete(doc(db, 'incidents', id));
           });
           await batch.commit();
+          await addLog(
+            'Eliminación múltiple de incidencias',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Cantidad: ${selectedIncidents.length} incidencias eliminadas de la base de datos`,
+            { module: 'Incidencias' }
+          );
           setSelectedIncidents([]);
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
@@ -5139,98 +5369,530 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+              {/* Header */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <h1 className="text-2xl font-bold text-slate-900">Logs del Sistema</h1>
-                  <p className="text-slate-500">Registro de actividades y modificaciones recientes</p>
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                      <History className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h1 className="text-2xl font-bold text-slate-900">Logs y Auditoría del Sistema</h1>
+                      <p className="text-xs sm:text-sm text-slate-500">
+                        Historial de actividad con autor de creación, canalizaciones y registros
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                {logs.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setConfirmModal({
-                        isOpen: true,
-                        title: 'Borrar Historial de Logs',
-                        message: '¿Estás seguro de que deseas eliminar todos los registros de actividad? Esta acción no se puede deshacer.',
-                        onConfirm: async () => {
-                          try {
-                            const batch = writeBatch(db);
-                            // Firestore batch limit is 500, but we fetch 200 in the listener
-                            logs.forEach((log) => {
-                              if (log.id) {
-                                batch.delete(doc(db, 'logs', log.id));
-                              }
-                            });
-                            await batch.commit();
-                            setConfirmModal(prev => ({ ...prev, isOpen: false }));
-                          } catch (error) {
-                            console.error("Error clearing logs:", error);
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {logs.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const csvRows: string[] = [];
+                        csvRows.push(['Fecha', 'Hora', 'Módulo', 'Acción', 'Creador/Responsable', 'Rol Creador', 'Usuario Actor', 'Rol Actor', 'Detalles'].join(','));
+                        logs.forEach(l => {
+                          const mod = l.module || getModuleFromAction(l.action);
+                          const crName = l.creatorName || l.userName;
+                          const crRole = l.creatorRole || l.userRole || '';
+                          const d = `"${(l.details || '').replace(/"/g, '""')}"`;
+                          csvRows.push([
+                            format(l.timestamp, "yyyy-MM-dd"),
+                            format(l.timestamp, "HH:mm:ss"),
+                            `"${mod}"`,
+                            `"${l.action.replace(/"/g, '""')}"`,
+                            `"${crName.replace(/"/g, '""')}"`,
+                            `"${crRole}"`,
+                            `"${l.userName.replace(/"/g, '""')}"`,
+                            `"${l.userRole || ''}"`,
+                            d
+                          ].join(','));
+                        });
+                        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.setAttribute('href', url);
+                        link.setAttribute('download', `auditoria_logs_${format(new Date(), 'yyyyMMdd_HHmm')}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                      className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 transition-all shadow-sm cursor-pointer"
+                      title="Exportar logs a CSV"
+                    >
+                      <Download className="w-3.5 h-3.5 text-slate-500" />
+                      Exportar CSV
+                    </button>
+                  )}
+
+                  {logs.length > 0 && isSuperAdmin && (
+                    <button
+                      onClick={() => {
+                        setConfirmModal({
+                          isOpen: true,
+                          title: 'Borrar Historial de Logs',
+                          message: '¿Estás seguro de que deseas eliminar todos los registros de actividad? Esta acción no se puede deshacer.',
+                          onConfirm: async () => {
+                            try {
+                              const batch = writeBatch(db);
+                              logs.forEach((log) => {
+                                if (log.id) {
+                                  batch.delete(doc(db, 'logs', log.id));
+                                }
+                              });
+                              await batch.commit();
+                              setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                            } catch (error) {
+                              console.error("Error clearing logs:", error);
+                            }
                           }
-                        }
-                      });
-                    }}
-                    className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl font-bold hover:bg-red-100 transition-all border border-red-100"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Borrar Historial
-                  </button>
-                )}
+                        });
+                      }}
+                      className="flex items-center gap-1.5 bg-red-50 text-red-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-all border border-red-100 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Borrar Historial
+                    </button>
+                  )}
+                </div>
               </div>
 
+              {/* Filter and Search Bar */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                  {/* Search Input */}
+                  <div className="sm:col-span-5 relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por creador, acción, detalle, alumno o usuario..."
+                      value={logSearchTerm}
+                      onChange={(e) => setLogSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-slate-50/50"
+                    />
+                    {logSearchTerm && (
+                      <button
+                        onClick={() => setLogSearchTerm('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Module Filter */}
+                  <div className="sm:col-span-3">
+                    <select
+                      value={logModuleFilter}
+                      onChange={(e) => setLogModuleFilter(e.target.value)}
+                      className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                    >
+                      <option value="ALL">📁 Todos los Módulos</option>
+                      <option value="Incidencias">🚨 Incidencias</option>
+                      <option value="Canalizaciones">🧠 Canalizaciones</option>
+                      <option value="Expedientes">📂 Expedientes</option>
+                      <option value="Informes">📊 Informes</option>
+                      <option value="Tareas / Felicitaciones">📋 Tareas / Felicitaciones</option>
+                      <option value="Usuarios">👥 Usuarios</option>
+                      <option value="Permisos">🛡️ Permisos</option>
+                      <option value="Configuración">⚙️ Configuración</option>
+                    </select>
+                  </div>
+
+                  {/* Role Filter */}
+                  <div className="sm:col-span-3">
+                    <select
+                      value={logRoleFilter}
+                      onChange={(e) => setLogRoleFilter(e.target.value)}
+                      className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                    >
+                      <option value="ALL">👤 Todos los Roles</option>
+                      <option value="ADMIN">Administrador</option>
+                      <option value="DIRECTIVE">Directivo</option>
+                      <option value="COORDINATOR">Coordinador</option>
+                      <option value="PSYCHOLOGIST">Psicólogo</option>
+                      <option value="TEACHER">Docente</option>
+                    </select>
+                  </div>
+
+                  {/* Clear button */}
+                  <div className="sm:col-span-1 flex items-center">
+                    {(logSearchTerm || logModuleFilter !== 'ALL' || logRoleFilter !== 'ALL') && (
+                      <button
+                        onClick={() => {
+                          setLogSearchTerm('');
+                          setLogModuleFilter('ALL');
+                          setLogRoleFilter('ALL');
+                        }}
+                        className="w-full py-2 px-2 text-xs font-semibold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all flex items-center justify-center gap-1"
+                        title="Restablecer filtros"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span className="sm:hidden">Limpiar</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Filter info badges */}
+                <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-100 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-700">
+                      Mostrando {
+                        logs.filter(log => {
+                          const mod = log.module || getModuleFromAction(log.action);
+                          if (logModuleFilter !== 'ALL' && mod !== logModuleFilter) return false;
+                          if (logRoleFilter !== 'ALL' && log.userRole !== logRoleFilter && log.creatorRole !== logRoleFilter) return false;
+                          if (logSearchTerm.trim()) {
+                            const q = logSearchTerm.toLowerCase();
+                            const match = (log.action || '').toLowerCase().includes(q) ||
+                              (log.details || '').toLowerCase().includes(q) ||
+                              (log.userName || '').toLowerCase().includes(q) ||
+                              (log.userEmail || '').toLowerCase().includes(q) ||
+                              (log.creatorName || '').toLowerCase().includes(q) ||
+                              (log.creatorEmail || '').toLowerCase().includes(q) ||
+                              (mod || '').toLowerCase().includes(q);
+                            if (!match) return false;
+                          }
+                          return true;
+                        }).length
+                      } de {logs.length} registros
+                    </span>
+                    {(logModuleFilter !== 'ALL' || logRoleFilter !== 'ALL' || logSearchTerm) && (
+                      <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-md text-[11px]">
+                        Filtro activo
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span> Creación / Registro
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span> Actualización
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span> Eliminación
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Logs Table */}
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-100">
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Fecha y Hora</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Usuario</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Acción</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Detalles</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Fecha / Hora</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Módulo</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Creador / Responsable</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Usuario Actor</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Acción Realizada</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Detalles del Registro</th>
+                        <th className="px-3 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Info</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {logs.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-6 py-10 text-center text-slate-400 italic">
-                            No hay registros de actividad disponibles.
-                          </td>
-                        </tr>
-                      ) : (
-                        logs.map((log) => (
-                          <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-slate-900">
-                                {format(log.timestamp, "dd/MM/yyyy")}
-                              </div>
-                              <div className="text-xs text-slate-500">
-                                {format(log.timestamp, "HH:mm:ss")}
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-bold text-slate-900">{log.userName}</div>
-                              <div className="text-xs text-slate-500">{log.userEmail}</div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={cn(
-                                "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold",
-                                log.action.includes('Eliminó') ? "bg-red-50 text-red-700" :
-                                log.action.includes('Creó') ? "bg-green-50 text-green-700" :
-                                "bg-blue-50 text-blue-700"
-                              )}>
-                                {log.action}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="text-sm text-slate-600 max-w-xs truncate" title={log.details}>
-                                {log.details || '-'}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
+                    <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
+                      {(() => {
+                        const displayedLogs = logs.filter(log => {
+                          const mod = log.module || getModuleFromAction(log.action);
+                          if (logModuleFilter !== 'ALL' && mod !== logModuleFilter) return false;
+                          if (logRoleFilter !== 'ALL' && log.userRole !== logRoleFilter && log.creatorRole !== logRoleFilter) return false;
+                          if (logSearchTerm.trim()) {
+                            const q = logSearchTerm.toLowerCase();
+                            const match = (log.action || '').toLowerCase().includes(q) ||
+                              (log.details || '').toLowerCase().includes(q) ||
+                              (log.userName || '').toLowerCase().includes(q) ||
+                              (log.userEmail || '').toLowerCase().includes(q) ||
+                              (log.creatorName || '').toLowerCase().includes(q) ||
+                              (log.creatorEmail || '').toLowerCase().includes(q) ||
+                              (mod || '').toLowerCase().includes(q);
+                            if (!match) return false;
+                          }
+                          return true;
+                        });
+
+                        if (displayedLogs.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={7} className="px-6 py-12 text-center text-slate-400 italic">
+                                <History className="w-8 h-8 text-slate-300 mx-auto mb-2 opacity-50" />
+                                No se encontraron registros de actividad con los filtros seleccionados.
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return displayedLogs.map((log) => {
+                          const mod = log.module || getModuleFromAction(log.action);
+                          const creatorName = log.creatorName || log.userName;
+                          const creatorEmail = log.creatorEmail || log.userEmail;
+                          const creatorRole = log.creatorRole || log.userRole;
+
+                          const isDeleteAction = log.action.includes('Eliminó') || log.action.includes('Eliminación');
+                          const isCreateAction = log.action.includes('Creó') || log.action.includes('Asignó') || log.action.includes('Envió') || log.action.includes('Generó');
+
+                          return (
+                            <tr
+                              key={log.id}
+                              className="hover:bg-slate-50/70 transition-colors cursor-pointer group"
+                              onClick={() => setSelectedLogDetail(log)}
+                            >
+                              {/* Date & Time */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="font-semibold text-slate-900 text-xs">
+                                  {format(log.timestamp, "dd/MM/yyyy")}
+                                </div>
+                                <div className="text-[11px] text-slate-400 font-mono">
+                                  {format(log.timestamp, "HH:mm:ss")}
+                                </div>
+                              </td>
+
+                              {/* Module */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <span className={cn(
+                                  "inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border",
+                                  mod === 'Incidencias' ? "bg-amber-50 text-amber-800 border-amber-200" :
+                                  mod === 'Canalizaciones' ? "bg-pink-50 text-pink-800 border-pink-200" :
+                                  mod === 'Expedientes' ? "bg-purple-50 text-purple-800 border-purple-200" :
+                                  mod === 'Informes' ? "bg-sky-50 text-sky-800 border-sky-200" :
+                                  mod === 'Tareas / Felicitaciones' ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
+                                  mod === 'Usuarios' ? "bg-indigo-50 text-indigo-800 border-indigo-200" :
+                                  mod === 'Permisos' ? "bg-violet-50 text-violet-800 border-violet-200" :
+                                  "bg-slate-100 text-slate-700 border-slate-200"
+                                )}>
+                                  {mod}
+                                </span>
+                              </td>
+
+                              {/* Creator / Responsible */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-[10px] shrink-0 border border-slate-200">
+                                    {creatorName ? creatorName.charAt(0).toUpperCase() : 'U'}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold text-slate-900 text-xs flex items-center gap-1">
+                                      {creatorName}
+                                      {creatorRole && (
+                                        <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
+                                          {creatorRole}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-slate-400 truncate max-w-[160px]">
+                                      {creatorEmail}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Acting User */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="text-xs font-semibold text-slate-700">
+                                  {log.userName}
+                                </div>
+                                <div className="text-[11px] text-slate-400 truncate max-w-[140px]">
+                                  {log.userRole ? `${log.userRole} • ` : ''}{log.userEmail}
+                                </div>
+                              </td>
+
+                              {/* Action */}
+                              <td className="px-4 py-3.5">
+                                <span className={cn(
+                                  "inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border",
+                                  isDeleteAction ? "bg-rose-50 text-rose-700 border-rose-200" :
+                                  isCreateAction ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                  "bg-blue-50 text-blue-700 border-blue-200"
+                                )}>
+                                  {log.action}
+                                </span>
+                              </td>
+
+                              {/* Details snippet */}
+                              <td className="px-4 py-3.5">
+                                <div className="text-xs text-slate-600 max-w-sm truncate" title={log.details}>
+                                  {log.details || '-'}
+                                </div>
+                              </td>
+
+                              {/* View button */}
+                              <td className="px-3 py-3.5 text-right whitespace-nowrap">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedLogDetail(log);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Ver detalle completo"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
                     </tbody>
                   </table>
                 </div>
               </div>
+
+              {/* Log Detail Modal */}
+              <AnimatePresence>
+                {selectedLogDetail && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full overflow-hidden"
+                    >
+                      {/* Modal Header */}
+                      <div className="p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-indigo-500/20 rounded-xl border border-indigo-400/30">
+                            <History className="w-5 h-5 text-indigo-300" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-base">Detalle de Actividad en Registro</h3>
+                            <p className="text-xs text-indigo-200">
+                              {format(selectedLogDetail.timestamp, "dd 'de' MMMM, yyyy - HH:mm:ss")}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setSelectedLogDetail(null)}
+                          className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      {/* Modal Content */}
+                      <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                        {/* Action and Module Header */}
+                        <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-slate-100">
+                          <div>
+                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Acción</span>
+                            <span className="text-sm font-bold text-slate-900">{selectedLogDetail.action}</span>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                            Módulo: {selectedLogDetail.module || getModuleFromAction(selectedLogDetail.action)}
+                          </span>
+                        </div>
+
+                        {/* Creator / Author details */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <UserCheck className="w-4 h-4 text-emerald-600" />
+                            Creador / Responsable del Registro
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Nombre:</span>
+                              <span className="font-bold text-slate-800">
+                                {selectedLogDetail.creatorName || selectedLogDetail.userName}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Rol:</span>
+                              <span className="font-semibold text-slate-700">
+                                {selectedLogDetail.creatorRole || selectedLogDetail.userRole || 'No especificado'}
+                              </span>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <span className="text-slate-400 block text-[11px]">Correo Electrónico:</span>
+                              <span className="font-mono text-slate-700 text-[11px]">
+                                {selectedLogDetail.creatorEmail || selectedLogDetail.userEmail}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Executing user details if distinct */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <UserIcon className="w-4 h-4 text-blue-600" />
+                            Usuario que ejecutó la operación (Actor)
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Usuario:</span>
+                              <span className="font-bold text-slate-800">{selectedLogDetail.userName}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Rol en el sistema:</span>
+                              <span className="font-semibold text-slate-700">{selectedLogDetail.userRole || 'Usuario'}</span>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <span className="text-slate-400 block text-[11px]">Correo:</span>
+                              <span className="font-mono text-slate-700 text-[11px]">{selectedLogDetail.userEmail}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Record ID if present */}
+                        {selectedLogDetail.recordId && (
+                          <div>
+                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                              ID del Registro
+                            </span>
+                            <div className="bg-slate-100 px-3 py-1.5 rounded-lg text-xs font-mono text-slate-700 break-all select-all">
+                              {selectedLogDetail.recordId}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Full details text */}
+                        <div>
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                            Contenido y Metadatos del Evento
+                          </span>
+                          <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-700 font-sans leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                            {selectedLogDetail.details ? (
+                              <div className="space-y-1.5">
+                                {selectedLogDetail.details.split(' | ').map((part, idx) => (
+                                  <div key={idx} className="flex items-start gap-1.5 py-0.5 border-b border-slate-100 last:border-b-0">
+                                    <span className="text-indigo-500 font-bold">•</span>
+                                    <span className="break-all">{part}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">Sin detalles adicionales registrados.</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Modal Footer */}
+                      <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+                        <button
+                          onClick={() => {
+                            const textToCopy = `Acción: ${selectedLogDetail.action}\nMódulo: ${selectedLogDetail.module || getModuleFromAction(selectedLogDetail.action)}\nCreador: ${selectedLogDetail.creatorName || selectedLogDetail.userName} (${selectedLogDetail.creatorRole || selectedLogDetail.userRole || ''})\nActor: ${selectedLogDetail.userName} (${selectedLogDetail.userEmail})\nFecha: ${format(selectedLogDetail.timestamp, "dd/MM/yyyy HH:mm:ss")}\nDetalles: ${selectedLogDetail.details || ''}`;
+                            navigator.clipboard.writeText(textToCopy);
+                            showSystemPopup("Copiado", "Los detalles del registro se han copiado al portapapeles.", "success");
+                          }}
+                          className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-100 px-3 py-2 rounded-xl transition-all shadow-sm"
+                        >
+                          <Copy className="w-3.5 h-3.5 text-slate-500" />
+                          Copiar Detalles
+                        </button>
+
+                        <button
+                          onClick={() => setSelectedLogDetail(null)}
+                          className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 transition-all cursor-pointer"
+                        >
+                          Cerrar
+                        </button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
 
@@ -5252,6 +5914,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 addLog={addLog}
                 isSuperAdmin={isSuperAdmin}
                 canCreateReferral={can('canCreateReferral')}
+                canDeleteReferral={can('canDeleteReferrals') || isSuperAdmin || profile?.role === 'ADMIN' || profile?.role === 'PSYCHOLOGIST' || (profile?.role && String(profile?.role).toLowerCase().includes('psico'))}
                 canManageExpedientes={can('canManageExpedientes')}
                 canAddFollowUp={can('canAddFollowUp')}
                 highlightedReferralId={highlightedReferralId}
@@ -5875,10 +6538,15 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                 </div>
               )}
               <div className="mt-1">
-                <p className="text-sm text-slate-800 font-bold">
-                  Reporta: {incident.reporterName}
+                <p className="text-sm text-slate-800 font-bold flex items-center flex-wrap gap-1.5">
+                  <span>Reporta: ({incident.reporterName || incident.creatorName || 'Personal Escolar'})</span>
+                  {incident.reporterRole && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                      {incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'PSYCHOLOGIST' ? 'Psicólogo' : incident.reporterRole}
+                    </span>
+                  )}
                   {((incident.notifiedTeacherId === profile?.uid) || (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && incident.reporterId !== profile?.uid && incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
-                    <span className="ml-2 text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200 shadow-xs">
+                    <span className="ml-1 text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200 shadow-xs">
                       En Copia
                     </span>
                   )}
@@ -6202,8 +6870,18 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-200">
                 <div className="space-y-3">
                   <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">Reportado por</p>
-                    <p className="text-sm font-medium text-slate-900">{incident.reporterName}</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">Reportado por (Creador del Registro)</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-bold text-slate-900">({incident.reporterName || incident.creatorName || 'Personal Escolar'})</p>
+                      {incident.reporterRole && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md font-extrabold uppercase bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'PSYCHOLOGIST' ? 'Psicólogo' : incident.reporterRole}
+                        </span>
+                      )}
+                    </div>
+                    {incident.reporterEmail && (
+                      <p className="text-xs text-slate-500 mt-0.5">{incident.reporterEmail}</p>
+                    )}
                   </div>
                   {incident.receivedByName && (
                     <div>
@@ -6262,7 +6940,13 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
   notifyIncidentInvolvedUsers?: (params: any) => Promise<void>,
   sendEmail?: (to: string, subject: string, html: string) => Promise<any>,
   systemSettings: SystemSettings,
-  addLog: (action: string, details?: string) => Promise<void>
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+  }) => Promise<void>
 }) => {
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
   const canCreateReferral = getRolePermission(profile?.role, 'canCreateReferral', systemSettings?.rolePermissions, isSuperAdmin, profile?.customPermissions);
@@ -6285,11 +6969,18 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
 
   useEffect(() => {
     if (coordinators.length > 0 && formData.coordinatorIds.length === 0) {
-      const defaultCoord = coordinators.find(c =>
-        (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
-        (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
-        (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
-      );
+      let defaultCoord: UserProfile | undefined;
+      // If the current user is a coordinator, default assigned coordinator to themselves
+      if (profile.role === 'COORDINATOR') {
+        defaultCoord = coordinators.find(c => c.uid === profile.uid || (c.email && c.email.toLowerCase() === profile.email?.toLowerCase()));
+      }
+      if (!defaultCoord) {
+        defaultCoord = coordinators.find(c =>
+          (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+          (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+          (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+        );
+      }
       if (defaultCoord) {
         setFormData(prev => ({ ...prev, coordinatorIds: [defaultCoord.uid] }));
       } else {
@@ -6378,6 +7069,8 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       const selectedCoord = coordinators.find(c => c.uid === (formData.coordinatorIds[0] || ''));
       const selectedTeacher = teachers.find(t => t.uid === formData.notifiedTeacherId);
 
+      const creatorDisplayName = (profile.name && profile.name.trim()) || profile.email || 'Personal Escolar';
+
       const newIncident: any = {
         ...formData,
         coordinatorId: formData.coordinatorIds[0] || '', // Main coordinator
@@ -6386,9 +7079,14 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         notifiedTeacherName: selectedTeacher?.name || '',
         notifiedTeacherEmail: selectedTeacher?.email || '',
         date: format(now, "dd/MM/yyyy HH:mm"),
-        reporterName: profile.name,
+        reporterName: creatorDisplayName,
         reporterId: profile.uid,
         reporterEmail: profile.email,
+        reporterRole: profile.role,
+        creatorName: creatorDisplayName,
+        creatorId: profile.uid,
+        creatorEmail: profile.email,
+        creatorRole: profile.role,
         isReceived: false,
         status: 'PENDIENTE',
         createdAt: Date.now(),
@@ -6412,7 +7110,11 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       const docRef = await addDoc(collection(db, 'incidents'), newIncident);
       const createdIncident = { id: docRef.id, ...newIncident } as Incident;
       
-      await addLog('Creó reporte de incidencia', `Lugar: ${formData.place}, Estudiantes: ${formData.students}`);
+      await addLog(
+        'Creó reporte de incidencia',
+        `Creado por: ${profile.name} (${profile.role} - ${profile.email}) | Lugar: ${formData.place} | Alumnos: ${formData.students} | Reportado por: ${newIncident.reporterName || profile.name} | Coordinador(es): ${coordinators.filter(c => formData.coordinatorIds.includes(c.uid)).map(c => c.name).join(', ') || 'General'}`,
+        { module: 'Incidencias', recordId: docRef.id }
+      );
       
       // Notify all involved users (coordinators, notified teacher, directives, admins) with real-time in-app notification & email
       if (notifyIncidentInvolvedUsers) {
@@ -6429,10 +7131,11 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
 
       // Dedicated notification for the teacher added in copy
       if (formData.notifiedTeacherId && formData.notifiedTeacherId !== profile.uid) {
+        const creatorRoleLabel = profile.role === 'ADMIN' ? 'el administrador' : profile.role === 'DIRECTIVE' ? 'el directivo' : profile.role === 'COORDINATOR' ? 'el coordinador' : 'el docente';
         await sendNotification(
           formData.notifiedTeacherId,
           'Copia de Incidencia Registrada',
-          `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por el docente ${profile.name}.`,
+          `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por ${creatorRoleLabel} ${creatorDisplayName}.`,
           docRef.id,
           true,
           { skipEmail: true }
@@ -6527,7 +7230,9 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
         admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
 
-        for (const targetEmail of emailRecipients) {
+        const filteredEmailRecipients = Array.from(emailRecipients).filter(e => !isSuperAdminEmail(e));
+
+        for (const targetEmail of filteredEmailRecipients) {
           if (systemSettings.emailNotificationsEnabled !== false && sendEmail) {
             await sendEmail(
               targetEmail,
@@ -6581,13 +7286,35 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         <div className="relative z-10">
           <h2 className="text-2xl font-bold flex items-center gap-3">
             <ClipboardList className="w-8 h-8" />
-            Reportar Incidencia
+            Registro de Nueva Incidencia ({profile.name || profile.email})
           </h2>
         </div>
         <div className="absolute top-0 right-0 w-32 h-full bg-white/10 -skew-x-12 translate-x-16"></div>
       </div>
 
       <form onSubmit={handleSubmit} className="p-6 md:p-8 space-y-8">
+        {/* Creator Identity Banner */}
+        <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-base shadow-sm">
+              {(profile.name || profile.email || 'U').charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Quien Registra el Incidente</span>
+                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-indigo-100 text-indigo-800 border border-indigo-200">
+                  {profile.role === 'ADMIN' ? 'Administrador' : profile.role === 'DIRECTIVE' ? 'Directivo' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
+                </span>
+              </div>
+              <p className="text-base font-bold text-slate-900 mt-0.5">({profile.name})</p>
+              <p className="text-xs text-slate-500">{profile.email}</p>
+            </div>
+          </div>
+          <div className="text-xs text-slate-700 bg-white border border-slate-200 px-3.5 py-2 rounded-xl shadow-2xs font-medium flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>El incidente se registrará oficialmente por: <strong>({profile.name})</strong></span>
+          </div>
+        </div>
         {/* Section 1: General Info */}
         <div className="space-y-6">
           <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
@@ -6997,7 +7724,13 @@ const TaskManager = ({
   psychologists: UserProfile[];
   directives: UserProfile[];
   admins: UserProfile[];
-  addLog: (action: string, details?: string) => Promise<void>;
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+  }) => Promise<void>;
   systemSettings: SystemSettings;
   sendNotification: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>;
   canCreateTask?: boolean;
@@ -7116,7 +7849,7 @@ const TaskManager = ({
   }, [tasks, profile, systemSettings]);
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
-  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin;
+  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin;
   const canDeleteRecords = canCreateTask || canSendCongratulations || isDirectiveOrAdmin || isSuperAdmin;
   const assignableUsers = [...coordinators, ...teachers, ...psychologists];
 
@@ -7129,7 +7862,11 @@ const TaskManager = ({
       async () => {
         try {
           await deleteDoc(doc(db, 'tasks', taskToDelete.id));
-          await addLog('Eliminó registro de tarea/felicitación', `Título: ${taskToDelete.title}, Asignado a: ${taskToDelete.assignedToName}`);
+          await addLog(
+            'Eliminó registro de tarea/felicitación',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Título: ${taskToDelete.title} | Asignado a: ${taskToDelete.assignedToName} (${taskToDelete.assignedToEmail}) | Creador original: ${taskToDelete.createdByName || 'N/A'}`,
+            { module: 'Tareas / Felicitaciones', recordId: taskToDelete.id }
+          );
           if (selectedTask?.id === taskToDelete.id) {
             setSelectedTask(null);
           }
@@ -7231,7 +7968,11 @@ const TaskManager = ({
         }
       }
 
-      await addLog('Asignó tarea(s)', `Título: ${taskFormData.title}, Destinatarios: ${recipientsToNotify.length}`);
+      await addLog(
+        'Asignó tarea(s)',
+        `Creado y asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Título: ${taskFormData.title} | Destinatarios (${recipientsToNotify.length}): ${recipientsToNotify.map(r => `${r.name} (${r.role})`).join(', ')} | Fecha límite: ${taskFormData.dueDate}`,
+        { module: 'Tareas / Felicitaciones' }
+      );
       setShowAssignModal(false);
       setTaskFormData({ title: '', description: '', dueDate: format(new Date(Date.now() + 7 * 86400000), 'yyyy-MM-dd'), targetType: 'SPECIFIC', selectedEmails: [] });
       showSystemPopup("Tarea asignada", "Tarea(s) asignada(s) correctamente.", "success");
@@ -7309,7 +8050,11 @@ const TaskManager = ({
         }
       }
 
-      await addLog('Envió mensaje de felicitación', `Título: ${congratFormData.title}, Destinatarios: ${recipientsToNotify.length}`);
+      await addLog(
+        'Envió mensaje de felicitación',
+        `Creado y enviado por: ${profile.name} (${profile.role} - ${profile.email}) | Título: ${congratFormData.title} | Destinatarios (${recipientsToNotify.length}): ${recipientsToNotify.map(r => `${r.name} (${r.role})`).join(', ')}`,
+        { module: 'Tareas / Felicitaciones' }
+      );
       setShowCongratulationModal(false);
       setCongratFormData({ targetType: 'SPECIFIC', selectedEmails: [], title: '¡Felicitaciones y Reconocimiento!', message: '' });
       showSystemPopup("Felicitación enviada", "Mensaje de felicitación enviado y registrado en Tareas correctamente.", "success");
@@ -7357,7 +8102,11 @@ const TaskManager = ({
         `${profile.name} ha entregado la evidencia para la tarea "${task.title}". Estatus cambiado a REALIZADA.`
       );
 
-      await addLog('Entregó evidencia de tarea', `Tarea: ${task.title}`);
+      await addLog(
+        'Entregó evidencia de tarea',
+        `Entregado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado originalmente a: ${task.assignedToName} | Creador de tarea: ${task.createdByName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
       setSelectedTask(null);
       setEvidenceText('');
       setEvidenceFile('');
@@ -7381,14 +8130,22 @@ const TaskManager = ({
           `✅ Tarea Aprobada: ${task.title}`,
           `Tu tarea "${task.title}" ha sido revisada y marcada como COMPLETADA por ${profile.name}.`
         );
-        await addLog('Aprobó tarea (COMPLETADA)', `Tarea: ${task.title}`);
+        await addLog(
+          'Aprobó tarea (COMPLETADA)',
+          `Revisado y aprobado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Realizado por: ${task.assignedToName}`,
+          { module: 'Tareas / Felicitaciones', recordId: task.id }
+        );
       } else if (newStatus === 'ASIGNADA') {
         await sendNotification(
           task.assignedToEmail,
           `⚠️ Tarea Reasignada para Corrección: ${task.title}`,
           `Tu tarea "${task.title}" ha sido cambiada a ASIGNADA: ${directiveFeedback.trim() || 'Revisa observaciones.'}`
         );
-        await addLog('Reasignó tarea (ASIGNADA)', `Tarea: ${task.title}`);
+        await addLog(
+          'Reasignó tarea (ASIGNADA)',
+          `Revisado y reasignado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Observaciones: "${directiveFeedback.trim() || 'Revisa observaciones.'}"`,
+          { module: 'Tareas / Felicitaciones', recordId: task.id }
+        );
       }
 
       setSelectedTask(null);
@@ -7969,7 +8726,13 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   psychologists: UserProfile[],
   directives?: UserProfile[],
   admins: UserProfile[],
-  addLog: (action: string, details?: string) => Promise<void>,
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+  }) => Promise<void>,
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
   systemSettings: SystemSettings,
@@ -8084,19 +8847,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       }
 
       await setDoc(doc(db, 'users', emailId), newUserData, { merge: true });
-      await addLog('Creó un usuario', `Nombre: ${formData.name}, Email: ${emailId}, Rol: ${newUserRole}`);
-
-      // In-app notification for the newly created user
-      if (sendNotification) {
-        await sendNotification(
-          emailId,
-          'Bienvenido/a a DASHBOARD DUNOR',
-          `Felicidades tu registro al Dashboard DUNOR fue exitosa, visita el siguiente enlace para poder acceder: https://dashboard-dunor.vercel.app/, recuerda generar tu contraseña para obtener el acceso.`,
-          '',
-          true,
-          { skipEmail: true }
-        );
-      }
+      await addLog(
+        'Creó un usuario',
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Nombre: ${formData.name.trim()} | Email: ${emailId} | Rol: ${newUserRole}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
 
       // Send registration confirmation email with the access link and welcome message
       const accessUrl = "https://dashboard-dunor.vercel.app/";
@@ -8208,7 +8963,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           }
 
           await deleteDoc(doc(db, 'users', emailId));
-          await addLog('Eliminó un usuario', `Nombre: ${userToDelete.name}, Email: ${userToDelete.email}`);
+          await addLog(
+            'Eliminó un usuario',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Nombre: ${userToDelete.name} | Email: ${userToDelete.email} | Rol: ${userToDelete.role}`,
+            { module: 'Usuarios', recordId: userToDelete.email }
+          );
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
           handleFirestoreError(error, OperationType.DELETE, `users/${userToDelete.email}`);
@@ -8234,7 +8993,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         })
       }).catch(e => console.warn("Failed to sync role to Auth:", e));
 
-      await addLog('Actualizó rol de usuario', `Usuario: ${userToUpdate.name}, Nuevo Rol: ${newRole}`);
+      await addLog(
+        'Actualizó rol de usuario',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email}) | Rol anterior: ${userToUpdate.role} | Nuevo rol: ${newRole}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
       showSystemPopup("Rol Actualizado", `El rol de ${userToUpdate.name} fue cambiado a ${newRole} y sincronizado con Authentication.`, "success");
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${userToUpdate.email}`);
@@ -8244,6 +9007,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   const updateAssignedCoordinator = async (userToUpdate: UserProfile, coordinatorUid: string) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
+      let coordinatorName = '';
       if (!coordinatorUid) {
         await updateDoc(doc(db, 'users', emailId), {
           assignedCoordinatorId: '',
@@ -8253,6 +9017,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       } else {
         const coord = coordinators.find(c => c.uid === coordinatorUid || c.email === coordinatorUid);
         if (coord) {
+          coordinatorName = coord.name;
           await updateDoc(doc(db, 'users', emailId), {
             assignedCoordinatorId: coord.uid,
             assignedCoordinatorEmail: coord.email,
@@ -8260,7 +9025,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           });
         }
       }
-      await addLog('Asignó coordinador a docente', `Docente: ${userToUpdate.name}`);
+      await addLog(
+        'Asignó coordinador a docente',
+        `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Coordinador: ${coordinatorName || 'Ninguno'}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
     } catch (error) {
       console.error("Error updating assigned coordinator:", error);
     }
@@ -8269,6 +9038,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   const updateAssignedPsychologist = async (userToUpdate: UserProfile, psychologistUid: string) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
+      let psychologistName = '';
       if (!psychologistUid) {
         await updateDoc(doc(db, 'users', emailId), {
           assignedPsychologistId: '',
@@ -8278,6 +9048,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       } else {
         const psycho = psychologists.find(p => p.uid === psychologistUid || p.email === psychologistUid);
         if (psycho) {
+          psychologistName = psycho.name;
           await updateDoc(doc(db, 'users', emailId), {
             assignedPsychologistId: psycho.uid,
             assignedPsychologistEmail: psycho.email,
@@ -8285,7 +9056,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           });
         }
       }
-      await addLog('Asignó psicólogo a docente', `Docente: ${userToUpdate.name}`);
+      await addLog(
+        'Asignó psicólogo a docente',
+        `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Psicólogo: ${psychologistName || 'Ninguno'}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
     } catch (error) {
       console.error("Error updating assigned psychologist:", error);
     }
@@ -8302,13 +9077,21 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         await updateDoc(doc(db, 'users', emailId), {
           customPermissions: deleteField()
         });
-        await addLog('Restableció permisos de usuario', `Usuario: ${userToUpdate.name} (${userToUpdate.email})`);
+        await addLog(
+          'Restableció permisos de usuario',
+          `Restablecido por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email})`,
+          { module: 'Permisos', recordId: emailId }
+        );
         showSystemPopup("Permisos restablecidos", `Permisos de ${userToUpdate.name} restablecidos a las preferencias por defecto de su rol.`, "success");
       } else {
         await updateDoc(doc(db, 'users', emailId), {
           customPermissions: newPermissions
         });
-        await addLog('Actualizó permisos individuales de usuario', `Usuario: ${userToUpdate.name} (${userToUpdate.email})`);
+        await addLog(
+          'Actualizó permisos individuales de usuario',
+          `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email})`,
+          { module: 'Permisos', recordId: emailId }
+        );
         showSystemPopup("Permisos guardados", `Permisos individuales de ${userToUpdate.name} guardados con éxito en la base de datos Firestore.`, "success");
       }
     } catch (error) {
