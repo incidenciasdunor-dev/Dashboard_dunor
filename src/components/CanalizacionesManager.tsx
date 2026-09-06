@@ -23,7 +23,7 @@ import {
 import { SystemModal, SystemModalState } from './SystemModal';
 import { doc, setDoc, updateDoc, addDoc, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { cn } from '../lib/utils';
+import { cn, getUserEducationLevel } from '../lib/utils';
 
 interface CanalizacionesManagerProps {
   referrals: Referral[];
@@ -152,6 +152,63 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     teacherStrategies: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Active educational level logic for referral registration:
+  // 1. First check if current user profile has a specific educational level (Preescolar, Primaria, Secundaria)
+  const profileLevel = getUserEducationLevel(profile, coordinators);
+
+  // 2. If the user doesn't have a fixed profile level (e.g., Admin, Psychologist, Directive),
+  // determine it from the assigned/selected coordinator for this referral:
+  const selectedCoordinator = coordinators.find(c =>
+    c.email?.toLowerCase() === formData.coordinatorEmail?.toLowerCase() ||
+    c.uid === formData.coordinatorEmail
+  );
+  const coordinatorLevel = selectedCoordinator ? getUserEducationLevel(selectedCoordinator, coordinators) : '';
+
+  // The active educational level that governs this referral registration:
+  const activeReferralLevel = profileLevel || coordinatorLevel;
+
+  // Filter teachers for copy:
+  // For psychologists (and global administrators), all teachers from all 3 levels (Preescolar, Primaria, Secundaria) appear.
+  // For other users (e.g. teachers), only teachers of their specific level appear.
+  const isAllLevelsViewer = isPsychologistUser || normRole === 'ADMIN' || isSuperAdmin;
+
+  const filteredTeachersForCopy = (teachers || []).filter(t => {
+    // Cannot copy oneself
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) {
+      return false;
+    }
+    if (isAllLevelsViewer) {
+      return true;
+    }
+    // Teacher's level
+    const tLevel = getUserEducationLevel(t, coordinators);
+    if (activeReferralLevel) {
+      return tLevel === activeReferralLevel;
+    }
+    return true;
+  });
+
+  // Categorized teachers for multi-level views (psychologists / admins)
+  const preescolarTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return getUserEducationLevel(t, coordinators) === 'Preescolar';
+  });
+
+  const primariaTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return getUserEducationLevel(t, coordinators) === 'Primaria';
+  });
+
+  const secundariaTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return getUserEducationLevel(t, coordinators) === 'Secundaria';
+  });
+
+  const otherTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return !getUserEducationLevel(t, coordinators);
+  });
 
   useEffect(() => {
     if (isModalOpen) {
@@ -916,27 +973,44 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                     Coordinador Asignado *
                   </label>
-                  {(() => {
-                    const activeCoord = coordinators.find(c => c.email === formData.coordinatorEmail) || coordinators.find(c =>
-                      (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
-                      (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
-                      (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
-                    ) || coordinators[0];
+                  {profile.assignedCoordinatorEmail || profile.assignedCoordinatorId ? (
+                    (() => {
+                      const activeCoord = coordinators.find(c => c.email?.toLowerCase() === formData.coordinatorEmail?.toLowerCase()) || coordinators.find(c =>
+                        (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+                        (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+                        (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+                      ) || coordinators[0];
 
-                    return (
-                      <div className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-800 flex items-center justify-between select-none cursor-not-allowed">
-                        <div className="flex items-center gap-2 truncate">
-                          <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
-                          <span className="truncate">
-                            {activeCoord?.name || 'Coordinación General'} {activeCoord?.email ? `(${activeCoord.email})` : ''}
+                      return (
+                        <div className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-800 flex items-center justify-between select-none cursor-not-allowed">
+                          <div className="flex items-center gap-2 truncate">
+                            <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                            <span className="truncate">
+                              {activeCoord?.name || 'Coordinación General'} {activeCoord?.email ? `(${activeCoord.email})` : ''}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-200 flex-shrink-0 ml-1">
+                            Predeterminado
                           </span>
                         </div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-200 flex-shrink-0 ml-1">
-                          Predeterminado
-                        </span>
-                      </div>
-                    );
-                  })()}
+                      );
+                    })()
+                  ) : (
+                    <select
+                      value={formData.coordinatorEmail}
+                      onChange={(e) => setFormData({ ...formData, coordinatorEmail: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      {coordinators.map(c => {
+                        const cLvl = getUserEducationLevel(c, coordinators);
+                        return (
+                          <option key={c.uid || c.email} value={c.email}>
+                            Coordinador: {c.name} {cLvl ? `(${cLvl})` : ''} ({c.email})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
                 </div>
 
                 <div>
@@ -1074,24 +1148,111 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                     </optgroup>
                   )}
 
-                  {teachers.length > 0 && (
-                    <optgroup label="Docentes">
-                      {teachers.map(t => (
-                        <option key={`teach::${t.uid || t.email}`} value={`teach::${t.uid || t.email}`}>
-                          Docente: {t.name} ({t.email})
+                  {isAllLevelsViewer ? (
+                    (teachers || []).length === 0 ? (
+                      <optgroup label="Docentes">
+                        <option disabled value="">
+                          No hay docentes registrados en el sistema
                         </option>
-                      ))}
-                    </optgroup>
-                  )}
+                      </optgroup>
+                    ) : (
+                      <>
+                        {preescolarTeachers.length > 0 && (
+                          <optgroup label="Docentes (Preescolar)">
+                            {preescolarTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
 
-                  {admins && admins.length > 0 && (
-                    <optgroup label="Administradores">
-                      {admins.map(a => (
-                        <option key={`admin::${a.uid || a.email}`} value={`admin::${a.uid || a.email}`}>
-                          Administrador: {a.name} ({a.email})
+                        {primariaTeachers.length > 0 && (
+                          <optgroup label="Docentes (Primaria)">
+                            {primariaTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+
+                        {secundariaTeachers.length > 0 && (
+                          <optgroup label="Docentes (Secundaria)">
+                            {secundariaTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+
+                        {otherTeachers.length > 0 && (
+                          <optgroup label={
+                            (preescolarTeachers.length > 0 || primariaTeachers.length > 0 || secundariaTeachers.length > 0)
+                              ? "Docentes (General / Otros)"
+                              : "Docentes Registrados"
+                          }>
+                            {otherTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+                      </>
+                    )
+                  ) : (
+                    filteredTeachersForCopy.length > 0 ? (
+                      <optgroup label={activeReferralLevel ? `Docentes (${activeReferralLevel})` : "Docentes"}>
+                        {filteredTeachersForCopy.map(t => {
+                          const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                          return (
+                            <option
+                              key={`teach::${t.uid || t.email}`}
+                              value={`teach::${t.uid || t.email}`}
+                              disabled={isAlreadyAdded}
+                            >
+                              Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    ) : activeReferralLevel ? (
+                      <optgroup label={`Docentes (${activeReferralLevel})`}>
+                        <option disabled value="">
+                          No hay docentes registrados en nivel {activeReferralLevel}
                         </option>
-                      ))}
-                    </optgroup>
+                      </optgroup>
+                    ) : null
                   )}
                 </select>
               </div>

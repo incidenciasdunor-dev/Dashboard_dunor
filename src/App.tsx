@@ -10,7 +10,7 @@ import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, ord
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
-import { cn } from './lib/utils';
+import { cn, getUserEducationLevel } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAppStructurePdf } from './lib/generateAppStructurePdf';
@@ -840,9 +840,9 @@ const ImageGallery = ({ isOpen, images, currentIndex, onClose }: { isOpen: boole
 };
 
 const LoadingScreen = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50">
+  <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950 p-4 transition-colors">
     <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-    <p className="mt-4 text-slate-600 font-medium">Cargando aplicación...</p>
+    <p className="mt-4 text-slate-600 dark:text-slate-300 font-medium">Cargando aplicación...</p>
   </div>
 );
 
@@ -1013,7 +1013,7 @@ const FirebaseSecretsModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: (
   );
 };
 
-const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userData: { uid: string; email: string; displayName?: string }) => void, systemSettings?: SystemSettings }) => {
+const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userData: { uid: string; email: string; displayName?: string }, fullProfile?: UserProfile) => void, systemSettings?: SystemSettings }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -1167,7 +1167,30 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
     // 1. Try standard Firebase Auth
     try {
-      await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const userCred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const authUid = userCred.user?.uid || uData?.uid || cleanEmail;
+      const fullProfile: UserProfile | null = uData ? { ...uData, uid: authUid, isRegistered: true } : (isSuper ? {
+        uid: authUid,
+        name: cleanEmail.includes('dunor') ? "Administrador DUNOR" : (cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+        email: cleanEmail,
+        role: "ADMIN" as UserRole,
+        isRegistered: true
+      } : null);
+
+      if (fullProfile) {
+        localStorage.setItem('app_user_profile', JSON.stringify(fullProfile));
+      }
+      localStorage.setItem('app_custom_user', JSON.stringify({
+        uid: authUid,
+        email: cleanEmail,
+        displayName: fullProfile?.name || cleanEmail.split('@')[0]
+      }));
+
+      onCustomLogin({
+        uid: authUid,
+        email: cleanEmail,
+        displayName: fullProfile?.name || cleanEmail.split('@')[0]
+      }, fullProfile || undefined);
       setLoading(false);
       return;
     } catch (err: any) {
@@ -1195,11 +1218,17 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           updatedAt: Date.now()
         };
         await setDoc(doc(db, 'users', cleanEmail), adminProfile, { merge: true }).catch(() => {});
+        localStorage.setItem('app_user_profile', JSON.stringify(adminProfile));
+        localStorage.setItem('app_custom_user', JSON.stringify({
+          uid: adminProfile.uid,
+          email: cleanEmail,
+          displayName: adminProfile.name
+        }));
         onCustomLogin({
           uid: adminProfile.uid,
           email: cleanEmail,
           displayName: adminProfile.name
-        });
+        }, adminProfile);
         setLoading(false);
         return;
       }
@@ -1232,11 +1261,17 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           })
         }).catch(err => console.warn("Background Auth sync warning:", err));
 
+        localStorage.setItem('app_user_profile', JSON.stringify(updatedProfile));
+        localStorage.setItem('app_custom_user', JSON.stringify({
+          uid: uData.uid || cleanEmail,
+          email: cleanEmail,
+          displayName: uData.name
+        }));
         onCustomLogin({
           uid: uData.uid || cleanEmail,
           email: cleanEmail,
           displayName: uData.name
-        });
+        }, updatedProfile);
         setLoading(false);
         return;
       }
@@ -1354,11 +1389,17 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       };
 
       await setDoc(doc(db, 'users', cleanEmail), newProfile, { merge: true });
+      localStorage.setItem('app_user_profile', JSON.stringify(newProfile));
+      localStorage.setItem('app_custom_user', JSON.stringify({
+        uid: authUid,
+        email: cleanEmail,
+        displayName: newProfile.name
+      }));
       onCustomLogin({
         uid: authUid,
         email: cleanEmail,
         displayName: newProfile.name
-      });
+      }, newProfile);
     } catch (err: any) {
       console.error(err);
       setError("Error al procesar el registro: " + (err.message || "Error desconocido"));
@@ -1754,11 +1795,15 @@ export default function App() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setAuthTimeout(true);
-    }, 3000);
+    }, 2000);
     return () => clearTimeout(timer);
   }, []);
 
-  const isAuthLoading = loading && !authTimeout;
+  const hasCachedUser = typeof window !== 'undefined' && Boolean(
+    localStorage.getItem('app_user_profile') || localStorage.getItem('app_custom_user')
+  );
+
+  const isAuthLoading = loading && !authTimeout && !hasCachedUser;
 
   return (
     <ErrorBoundary>
@@ -1777,11 +1822,31 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   });
 
-  const activeUser = (user && !user.isAnonymous) ? user : customUser;
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const isActuallyLoggedIn = Boolean((user && !user.isAnonymous) || customUser) && !isLoggingOut;
+  const activeUser = isActuallyLoggedIn ? ((user && !user.isAnonymous) ? user : customUser) : null;
+
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('app_user_profile');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.email || parsed.uid)) return parsed;
+      }
+    } catch (e) {}
+    return null;
+  });
+
   const [isProfileLoading, setIsProfileLoading] = useState(false);
-  const [hasCheckedProfile, setHasCheckedProfile] = useState(false);
+  const [hasCheckedProfile, setHasCheckedProfile] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('app_user_profile');
+      return Boolean(saved);
+    } catch {
+      return false;
+    }
+  });
   const [isSeeding, setIsSeeding] = useState(false);
   const [showAppSecretsModal, setShowAppSecretsModal] = useState(false);
 
@@ -1799,13 +1864,74 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   }, [isDarkMode]);
 
+  // Ensure network is restored on window focus or tab visibility change
+  useEffect(() => {
+    const handleWindowActive = () => {
+      if (document.visibilityState === 'visible') {
+        restoreFirestoreConnection().catch(() => {});
+        // If we already have a loaded profile, ensure loading state never traps the user
+        if (profile) {
+          setIsProfileLoading(false);
+          setHasCheckedProfile(true);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleWindowActive);
+    window.addEventListener('focus', handleWindowActive);
+    window.addEventListener('online', handleWindowActive);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleWindowActive);
+      window.removeEventListener('focus', handleWindowActive);
+      window.removeEventListener('online', handleWindowActive);
+    };
+  }, [profile]);
+
+  // Invisible auto-watchdog: automatically transitions user to panel if profile resolution takes more than 1s
+  useEffect(() => {
+    if (activeUser && (!profile || !hasCheckedProfile || isProfileLoading)) {
+      const autoTimer = setTimeout(() => {
+        try {
+          const saved = localStorage.getItem('app_user_profile');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && (parsed.email || parsed.uid)) {
+              setProfile(parsed);
+              setIsProfileLoading(false);
+              setHasCheckedProfile(true);
+              return;
+            }
+          }
+        } catch (e) {}
+
+        const emailId = (activeUser.email || (typeof window !== 'undefined' ? localStorage.getItem('last_user_email') : null) || '').toLowerCase().trim();
+        if (isSuperAdminEmail(emailId)) {
+          const autoAdmin: UserProfile = {
+            uid: activeUser.uid || emailId,
+            name: emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+            email: emailId,
+            role: "ADMIN",
+            isRegistered: true
+          };
+          setProfile(autoAdmin);
+          try { localStorage.setItem('app_user_profile', JSON.stringify(autoAdmin)); } catch (e) {}
+        }
+        setIsProfileLoading(false);
+        setHasCheckedProfile(true);
+      }, 1000);
+
+      return () => clearTimeout(autoTimer);
+    }
+  }, [activeUser, profile, hasCheckedProfile, isProfileLoading]);
+
   useEffect(() => {
     if (activeUser && !auth.currentUser) {
       signInAnonymously(auth).catch((err) => {
         console.warn("signInAnonymously session sync notice:", err);
       });
     }
-  }, [activeUser]);
+  }, [activeUser?.uid]);
 
   const [systemPopup, setSystemPopup] = useState<{
     isOpen: boolean;
@@ -3186,44 +3312,91 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
 
 
+  const activeUserEmailStr = (activeUser?.email || (activeUser ? localStorage.getItem('last_user_email') : null) || '').toLowerCase().trim();
+  const activeUserUidStr = activeUser?.uid || '';
+
   useEffect(() => {
-    const userEmail = activeUser?.email || (activeUser ? localStorage.getItem('last_user_email') : null);
-    if (activeUser && userEmail) {
-      setIsProfileLoading(true);
-      setHasCheckedProfile(false);
-      const emailId = userEmail.toLowerCase().trim();
+    if (activeUser && activeUserEmailStr) {
+      const emailId = activeUserEmailStr;
       let isMounted = true;
+
+      // Only display the full-screen loading spinner if we don't already have this user's profile cached in memory or localStorage
+      const hasCachedProfileInMemory = profile && (
+        profile.email?.toLowerCase().trim() === emailId || 
+        profile.uid === activeUserUidStr
+      );
+
+      if (!hasCachedProfileInMemory) {
+        try {
+          const saved = localStorage.getItem('app_user_profile');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && (parsed.email?.toLowerCase().trim() === emailId || parsed.uid === activeUserUidStr)) {
+              setProfile(parsed);
+              setIsProfileLoading(false);
+              setHasCheckedProfile(true);
+            } else {
+              setIsProfileLoading(true);
+              setHasCheckedProfile(false);
+            }
+          } else {
+            setIsProfileLoading(true);
+            setHasCheckedProfile(false);
+          }
+        } catch {
+          setIsProfileLoading(true);
+          setHasCheckedProfile(false);
+        }
+      }
 
       const fallbackTimer = setTimeout(() => {
         if (isMounted) {
           console.warn(`Profile load fallback timeout triggered for ${emailId}`);
+          try {
+            const saved = localStorage.getItem('app_user_profile');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed && (parsed.email?.toLowerCase().trim() === emailId || parsed.uid === activeUserUidStr)) {
+                setProfile(parsed);
+                setIsProfileLoading(false);
+                setHasCheckedProfile(true);
+                return;
+              }
+            }
+          } catch (e) {}
+
           if (isSuperAdminEmail(emailId)) {
-            setProfile({
-              uid: activeUser.uid,
+            const fallbackAdmin: UserProfile = {
+              uid: activeUserUidStr || emailId,
               name: emailId.includes('dunor') ? "Administrador DUNOR" : "Super Admin (Yorch)",
               email: emailId,
               role: "ADMIN",
               isRegistered: true
-            });
+            };
+            setProfile(fallbackAdmin);
+            try { localStorage.setItem('app_user_profile', JSON.stringify(fallbackAdmin)); } catch (e) {}
           }
           setIsProfileLoading(false);
           setHasCheckedProfile(true);
         }
-      }, 2500);
+      }, 1200);
 
       const unsubscribe = onSnapshot(doc(db, 'users', emailId), async (snapshot) => {
         clearTimeout(fallbackTimer);
         if (!isMounted) return;
         if (snapshot.exists()) {
           const data = snapshot.data() as UserProfile;
-          if (data.uid !== activeUser.uid) {
+          if (activeUserUidStr && data.uid !== activeUserUidStr) {
             try {
-              updateDoc(doc(db, 'users', emailId), { uid: activeUser.uid }).catch(e => console.error("Error updating UID:", e));
+              updateDoc(doc(db, 'users', emailId), { uid: activeUserUidStr }).catch(e => console.error("Error updating UID:", e));
             } catch (e) {
               console.error("Error updating UID:", e);
             }
           }
-          const profileWithUid = { ...data, uid: activeUser.uid };
+          const profileWithUid = { ...data, uid: activeUserUidStr || data.uid || emailId };
+          try {
+            localStorage.setItem('app_user_profile', JSON.stringify(profileWithUid));
+          } catch (e) {}
           setProfile(prev => {
             if (prev && 
                 prev.uid === profileWithUid.uid && 
@@ -3241,7 +3414,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           if (isSuper) {
             const adminName = emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial");
             const autoProfile: UserProfile = {
-              uid: activeUser.uid,
+              uid: activeUserUidStr || emailId,
               name: adminName,
               email: emailId,
               role: "ADMIN",
@@ -3250,6 +3423,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             };
             try {
               await setDoc(doc(db, 'users', emailId), autoProfile, { merge: true });
+              localStorage.setItem('app_user_profile', JSON.stringify(autoProfile));
             } catch (createErr) {
               console.error("Auto-creation of super admin user document failed:", createErr);
             }
@@ -3257,17 +3431,21 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           } else {
             // Check if user is registered with UID or case-insensitive query
             try {
-              const queryByUid = await getDocs(query(collection(db, 'users'), where('uid', '==', activeUser.uid)));
-              if (!queryByUid.empty) {
+              const queryByUid = await safeGetDocs(query(collection(db, 'users'), where('uid', '==', activeUserUidStr))).catch(() => null);
+              if (queryByUid && !queryByUid.empty) {
                 const foundData = queryByUid.docs[0].data() as UserProfile;
-                if (isMounted) setProfile({ ...foundData, uid: activeUser.uid });
+                const pData = { ...foundData, uid: activeUserUidStr };
+                try { localStorage.setItem('app_user_profile', JSON.stringify(pData)); } catch (e) {}
+                if (isMounted) setProfile(pData);
               } else {
                 console.warn(`User ${emailId} is not registered in the database. Access denied.`);
-                if (isMounted) setProfile(null);
+                if (isMounted) {
+                  const saved = localStorage.getItem('app_user_profile');
+                  if (!saved) setProfile(null);
+                }
               }
             } catch (qErr) {
               console.warn("Error checking secondary query for profile:", qErr);
-              if (isMounted) setProfile(null);
             }
           }
         }
@@ -3279,18 +3457,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         clearTimeout(fallbackTimer);
         if (!isMounted) return;
         console.warn(`Error loading profile for ${emailId}:`, error);
+        try {
+          const saved = localStorage.getItem('app_user_profile');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && (parsed.email?.toLowerCase().trim() === emailId || parsed.uid === activeUserUidStr)) {
+              setProfile(parsed);
+              setIsProfileLoading(false);
+              setHasCheckedProfile(true);
+              return;
+            }
+          }
+        } catch (e) {}
+
         const isSuper = isSuperAdminEmail(emailId);
         if (isSuper) {
           const fallbackProfile: UserProfile = {
-            uid: activeUser.uid,
+            uid: activeUserUidStr || emailId,
             name: emailId.includes('dunor') ? "Administrador DUNOR" : "Administrador",
             email: emailId,
             role: "ADMIN",
             isRegistered: true
           };
           setProfile(fallbackProfile);
-        } else {
-          setProfile(null);
         }
         setIsProfileLoading(false);
         setHasCheckedProfile(true);
@@ -3300,12 +3489,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         clearTimeout(fallbackTimer);
         unsubscribe();
       };
-    } else {
+    } else if (!activeUser) {
       setProfile(null);
       setIsProfileLoading(false);
       setHasCheckedProfile(true);
     }
-  }, [activeUser]);
+  }, [activeUserEmailStr, activeUserUidStr]);
 
   useEffect(() => {
     if (!profile) return;
@@ -3394,7 +3583,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [profile, isSuperAdmin]);
 
   useEffect(() => {
-    if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'DIRECTIVE' || isSuperAdmin) {
+    if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'DIRECTIVE' || profile?.role === 'COORDINATOR' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'TEACHER'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const users = snapshot.docs.map(doc => doc.data() as UserProfile);
@@ -3407,22 +3596,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       return () => unsubscribe();
     }
   }, [profile, isSuperAdmin]);
-
-  useEffect(() => {
-    if (profile?.role === 'COORDINATOR') {
-      const q = query(collection(db, 'users'), where('role', '==', 'TEACHER'), limit(100));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-        // Deduplicate by email
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
-          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
-        setTeachers(uniqueUsers);
-      }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'users (teachers-coordinator)');
-      });
-      return () => unsubscribe();
-    }
-  }, [profile]);
 
   useEffect(() => {
     if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'COORDINATOR' || profile?.role === 'PSYCHOLOGIST' || profile?.role === 'DIRECTIVE' || isSuperAdmin) {
@@ -3493,8 +3666,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, []);
 
   const handleLogout = async () => {
+    setIsLoggingOut(true);
     localStorage.removeItem('app_custom_user');
     localStorage.removeItem('last_user_email');
+    localStorage.removeItem('app_user_profile');
     setCustomUser(null);
     setProfile(null);
     setIsProfileLoading(false);
@@ -3520,9 +3695,47 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   };
 
-  if (loading || isProfileLoading || (activeUser && !hasCheckedProfile)) return <LoadingScreen />;
+  // If we already have a loaded profile, do not block the user with a full-screen loader
+  const shouldShowLoading = loading || (!profile && (isProfileLoading || (activeUser && !hasCheckedProfile)));
+
+  if (shouldShowLoading) {
+    return <LoadingScreen />;
+  }
   
-  if (!activeUser) return <ErrorBoundary><LoginScreen systemSettings={effectiveSystemSettings} onCustomLogin={(uData) => { setIsProfileLoading(true); setHasCheckedProfile(false); localStorage.setItem('app_custom_user', JSON.stringify(uData)); setCustomUser(uData); }} /></ErrorBoundary>;
+  if (!activeUser) {
+    return (
+      <ErrorBoundary>
+        <LoginScreen
+          systemSettings={effectiveSystemSettings}
+          onCustomLogin={(uData, fullProfile) => {
+            localStorage.setItem('app_custom_user', JSON.stringify(uData));
+            setCustomUser(uData);
+            if (fullProfile) {
+              localStorage.setItem('app_user_profile', JSON.stringify(fullProfile));
+              setProfile(fullProfile);
+              setHasCheckedProfile(true);
+              setIsProfileLoading(false);
+            } else {
+              try {
+                const saved = localStorage.getItem('app_user_profile');
+                if (saved) {
+                  const parsed = JSON.parse(saved);
+                  if (parsed && (parsed.email === uData.email || parsed.uid === uData.uid)) {
+                    setProfile(parsed);
+                    setHasCheckedProfile(true);
+                    setIsProfileLoading(false);
+                    return;
+                  }
+                }
+              } catch (e) {}
+              setIsProfileLoading(true);
+              setHasCheckedProfile(false);
+            }
+          }}
+        />
+      </ErrorBoundary>
+    );
+  }
   
   if (!profile) return (
     <ErrorBoundary>
@@ -6325,24 +6538,24 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-all">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
       >
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-base">
+          <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-base">
             <UserIcon className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="font-bold text-slate-900 text-base">{studentName}</h3>
-            <p className="text-xs text-slate-500 font-medium">
+            <h3 className="font-bold text-slate-900 dark:text-white text-base">{studentName}</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
               {incidents.length} {incidents.length === 1 ? 'incidencia registrada' : 'incidencias registradas'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
+          <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-3 py-1 rounded-full border border-indigo-100 dark:border-indigo-800/60">
             {incidents.length}
           </span>
           <ChevronDown className={cn("w-5 h-5 text-slate-400 transition-transform duration-200", isOpen && "rotate-180")} />
@@ -6350,7 +6563,7 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
       </button>
 
       {isOpen && (
-        <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 border-t border-slate-200">
+        <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 dark:bg-slate-950/40 border-t border-slate-200 dark:border-slate-800">
           {incidents.map((incident) => (
             <IncidentCard
               key={incident.id}
@@ -6607,7 +6820,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="border-t border-slate-100 bg-slate-50/50"
+            className="border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-transparent"
           >
             <div className="p-5 space-y-6">
               {role === 'PSYCHOLOGIST' && incident.suggestReferral && (
@@ -6922,8 +7135,8 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
 
 const DetailSection = ({ label, content }: { label: string, content: string }) => (
   <div>
-    <p className="text-xs font-bold text-slate-400 uppercase mb-1">{label}</p>
-    <p className="text-sm text-slate-700 whitespace-pre-wrap">{content || 'Sin información'}</p>
+    <p className="text-xs font-bold text-slate-400 dark:text-slate-400 uppercase mb-1">{label}</p>
+    <p className="text-sm text-slate-700 dark:text-slate-100 whitespace-pre-wrap">{content || 'Sin información'}</p>
   </div>
 );
 
@@ -7280,6 +7493,30 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     c.role !== 'ADMIN'
   );
 
+  const userLevel = getUserEducationLevel(profile, coordinators);
+  const isPsychologist = profile?.role === 'PSYCHOLOGIST' || (profile?.role && String(profile.role).toLowerCase().includes('psico'));
+  const isGlobalUser = (profile?.role === 'ADMIN' || profile?.role === 'DIRECTIVE' || isPsychologist || isSuperAdmin) && !userLevel;
+
+  // Determine active level from user profile or from selected coordinator in the incident form
+  const selectedCoord = coordinators.find(c => formData.coordinatorIds && formData.coordinatorIds.includes(c.uid));
+  const selectedCoordLevel = selectedCoord ? getUserEducationLevel(selectedCoord, coordinators) : '';
+  const activeIncidentLevel = userLevel || selectedCoordLevel;
+
+  const filteredTeachersForCopy = teachers.filter(t => {
+    // Cannot copy oneself
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) {
+      return false;
+    }
+    // Filter by the educational level (Preescolar, Primaria, Secundaria)
+    const tLevel = getUserEducationLevel(t, coordinators);
+    if (activeIncidentLevel) {
+      return tLevel === activeIncidentLevel;
+    }
+    // If global admin/directive with no specific level, show all teachers
+    if (isGlobalUser) return true;
+    return true;
+  });
+
   return (
     <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-100">
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 p-6 md:p-8 text-white relative">
@@ -7500,7 +7737,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                 )}
 
                 <div className="pt-1">
-                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador, Directivo o Docente (Opcional):</label>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador o Directivo (Opcional):</label>
                   <select
                     value=""
                     onChange={(e) => {
@@ -7511,7 +7748,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="">-- Selecciona destinatario para Copia --</option>
+                    <option value="">-- Selecciona destinatario para Copia (Directivo o Coordinador) --</option>
                     
                     <optgroup label="Coordinadores">
                       {filteredCoordinators.map((c) => (
@@ -7530,16 +7767,6 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                         ))}
                       </optgroup>
                     )}
-
-                    {teachers.length > 0 && (
-                      <optgroup label="Docentes">
-                        {teachers.map((t) => (
-                          <option key={t.uid} value={t.uid} disabled={formData.coordinatorIds.includes(t.uid) || t.uid === profile.uid}>
-                            Docente: {t.name} ({t.email})
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
                   </select>
                 </div>
               </div>
@@ -7551,13 +7778,23 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                 onChange={(e) => setFormData({ ...formData, notifiedTeacherId: e.target.value })}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
               >
-                <option value="">Selecciona docente opcional...</option>
-                {teachers
-                  .filter(t => t.uid !== profile.uid)
-                  .map((t) => (
-                    <option key={t.uid} value={t.uid}>{t.name}</option>
-                  ))
-                }
+                <option value="">
+                  {activeIncidentLevel ? `Selecciona docente opcional (${activeIncidentLevel})...` : 'Selecciona docente opcional...'}
+                </option>
+                {filteredTeachersForCopy.length > 0 ? (
+                  filteredTeachersForCopy.map((t) => {
+                    const tLvl = getUserEducationLevel(t, coordinators);
+                    return (
+                      <option key={t.uid} value={t.uid}>
+                        {t.name}{tLvl && !activeIncidentLevel ? ` (${tLvl})` : ''}
+                      </option>
+                    );
+                  })
+                ) : activeIncidentLevel ? (
+                  <option disabled value="">
+                    No hay docentes registrados en nivel {activeIncidentLevel}
+                  </option>
+                ) : null}
               </select>
             </InputGroup>
           </div>
@@ -9018,11 +9255,16 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         const coord = coordinators.find(c => c.uid === coordinatorUid || c.email === coordinatorUid);
         if (coord) {
           coordinatorName = coord.name;
-          await updateDoc(doc(db, 'users', emailId), {
+          const coordLvl = getUserEducationLevel(coord, coordinators);
+          const updateData: any = {
             assignedCoordinatorId: coord.uid,
             assignedCoordinatorEmail: coord.email,
             assignedCoordinatorName: coord.name,
-          });
+          };
+          if (coordLvl) {
+            updateData.educationLevel = coordLvl;
+          }
+          await updateDoc(doc(db, 'users', emailId), updateData);
         }
       }
       await addLog(
@@ -9032,6 +9274,21 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       );
     } catch (error) {
       console.error("Error updating assigned coordinator:", error);
+    }
+  };
+
+  const updateUserEducationLevel = async (userToUpdate: UserProfile, newLevel: string) => {
+    try {
+      const emailId = userToUpdate.email.toLowerCase().trim();
+      await updateDoc(doc(db, 'users', emailId), { educationLevel: newLevel });
+      await addLog(
+        'Actualizó nivel educativo',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Nuevo nivel: ${newLevel}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
+      showSystemPopup("Nivel Educativo Actualizado", `El nivel de ${userToUpdate.name} fue cambiado a ${newLevel}.`, "success");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${userToUpdate.email}`);
     }
   };
 
@@ -9274,6 +9531,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             psychologists={psychologists}
             onAssignCoordinator={updateAssignedCoordinator}
             onAssignPsychologist={updateAssignedPsychologist}
+            onUpdateEducationLevel={updateUserEducationLevel}
             profile={profile}
             canManageUsers={canManageUsers}
             canAssignPsychologist={canAssignPsychologist}
@@ -9462,6 +9720,7 @@ const UserList = ({
   psychologists = [],
   onAssignCoordinator,
   onAssignPsychologist,
+  onUpdateEducationLevel,
   profile,
   canManageUsers = true,
   canAssignPsychologist = true,
@@ -9478,6 +9737,7 @@ const UserList = ({
   psychologists?: UserProfile[],
   onAssignCoordinator?: (user: UserProfile, coordUid: string) => void,
   onAssignPsychologist?: (user: UserProfile, psychUid: string) => void,
+  onUpdateEducationLevel?: (user: UserProfile, level: string) => void,
   profile: UserProfile,
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
@@ -9605,6 +9865,20 @@ const UserList = ({
                             {coordinators.map(c => (
                               <option key={c.email} value={c.uid}>{c.name}</option>
                             ))}
+                          </select>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="font-semibold text-slate-500">Nivel:</span>
+                          <select
+                            value={u.educationLevel || getUserEducationLevel(u, coordinators) || ''}
+                            onChange={(e) => onUpdateEducationLevel && onUpdateEducationLevel(u, e.target.value)}
+                            className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                          >
+                            <option value="">-- Sin Nivel --</option>
+                            <option value="Preescolar">Preescolar</option>
+                            <option value="Primaria">Primaria</option>
+                            <option value="Secundaria">Secundaria</option>
                           </select>
                         </div>
 
