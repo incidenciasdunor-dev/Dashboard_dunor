@@ -43,12 +43,15 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        // Unregister any active service worker in preview/dev environment to prevent stale cache blank screens
-        navigator.serviceWorker.getRegistrations().then((registrations) => {
-          for (let registration of registrations) {
-            registration.unregister();
-          }
-        }).catch(() => {});
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then((reg) => {
+              console.log('DUNOR Service Worker active:', reg.scope);
+            })
+            .catch((err) => {
+              console.warn('Service Worker registration failed:', err);
+            });
+        });
       }
     </script>
   </body>

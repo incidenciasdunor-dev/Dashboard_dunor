@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn, getUserEducationLevel } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -20,6 +20,13 @@ import { InformeManager } from './components/InformeManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 import { SystemModal, SystemModalState } from './components/SystemModal';
+import {
+  isNotificationSupported,
+  getNotificationPermission,
+  requestSystemNotificationPermission,
+  showSystemNotification,
+  sendTestNotification,
+} from './lib/nativeNotifications';
 import confetti from 'canvas-confetti';
 
 const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
@@ -2989,6 +2996,47 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [systemNotificationPermission, setSystemNotificationPermission] = useState<NotificationPermission>(() => getNotificationPermission());
+
+  const handleRequestSystemNotifications = async () => {
+    const perm = await requestSystemNotificationPermission();
+    setSystemNotificationPermission(perm);
+    if (perm === 'granted') {
+      await sendTestNotification();
+      setLiveToast({
+        id: 'notif-perm-granted',
+        title: '¡Notificaciones del Sistema Activas!',
+        message: 'Aparecerán en la barra de notificaciones de tu celular o en tu PC.',
+        timestamp: Date.now()
+      });
+    } else if (perm === 'denied') {
+      setLiveToast({
+        id: 'notif-perm-denied',
+        title: 'Permiso Denegado',
+        message: 'Habilita las notificaciones en la barra de dirección de tu navegador para recibirlas.',
+        timestamp: Date.now()
+      });
+    }
+  };
+
+  const handleTestSystemNotification = async () => {
+    const ok = await sendTestNotification();
+    if (ok) {
+      setLiveToast({
+        id: 'notif-test-ok',
+        title: 'Prueba Enviada',
+        message: 'Revisa la barra de notificaciones de tu celular o la pantalla de tu PC.',
+        timestamp: Date.now()
+      });
+    } else {
+      setLiveToast({
+        id: 'notif-test-err',
+        title: 'Permiso Pendiente',
+        message: 'Debes conceder permisos de notificación para recibir avisos.',
+        timestamp: Date.now()
+      });
+    }
+  };
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
@@ -3005,10 +3053,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, []);
 
   useEffect(() => {
-    if (user && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
+    if (activeUser && isNotificationSupported()) {
+      setSystemNotificationPermission(getNotificationPermission());
     }
-  }, [user]);
+  }, [activeUser]);
 
   useEffect(() => {
     // PWA Install Prompt Logic
@@ -3196,17 +3244,19 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               taskId: data.taskId
             });
 
-            if ('Notification' in window && Notification.permission === 'granted') {
-              try {
-                new Notification(data.title || 'Aviso de Incidencia', {
-                  body: data.message || 'Tienes una nueva notificación',
-                  icon: '/favicon.ico',
-                  tag: change.doc.id
-                });
-              } catch (e) {
-                console.warn('Native notification alert exception:', e);
+            showSystemNotification(data.title || 'Aviso de Incidencia - DUNOR', {
+              body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
+              icon: '/logo_dunor.png',
+              badge: '/logo_dunor.png',
+              tag: change.doc.id,
+              data: {
+                incidentId: data.incidentId,
+                referralId: data.referralId,
+                taskId: data.taskId
               }
-            }
+            }).catch((e) => {
+              console.warn('Native system notification delivery error:', e);
+            });
           }
         }
       });
@@ -4991,6 +5041,81 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 )}
               </div>
 
+              {/* System Native Notifications Card (Celular y PC) */}
+              <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/20 relative overflow-hidden">
+                <div className="absolute right-0 top-0 translate-x-4 -translate-y-4 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-11 h-11 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center flex-shrink-0 text-indigo-300">
+                      {systemNotificationPermission === 'granted' ? (
+                        <BellRing className="w-5 h-5 text-emerald-400 animate-pulse" />
+                      ) : (
+                        <Bell className="w-5 h-5 text-indigo-300" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-bold text-white">
+                          Notificaciones en Celular y PC
+                        </h3>
+                        {systemNotificationPermission === 'granted' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            Activo
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                            No activado
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-300 mt-1 max-w-xl leading-relaxed">
+                        {systemNotificationPermission === 'granted'
+                          ? 'Recibirás avisos directos en la barra de notificación de tu celular o en la pantalla de tu computadora al recibir nuevas incidencias, canalizaciones o tareas.'
+                          : 'Permite que los avisos importantes aparezcan en la barra de notificaciones de tu celular o en el centro de avisos de tu PC aunque la app esté en segundo plano.'}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-slate-400">
+                        <span className="flex items-center gap-1">
+                          <Smartphone className="w-3.5 h-3.5 text-indigo-400" /> Barra de notificación móvil
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1">
+                          <Laptop className="w-3.5 h-3.5 text-indigo-400" /> Avisos de escritorio PC
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start md:self-center flex-shrink-0">
+                    {systemNotificationPermission === 'granted' ? (
+                      <button
+                        type="button"
+                        onClick={handleTestSystemNotification}
+                        className="px-4 py-2.5 bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-bold rounded-xl transition border border-white/20 shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <BellRing className="w-4 h-4 text-emerald-400" />
+                        Probar notificación
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleRequestSystemNotifications}
+                        className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Bell className="w-4 h-4" />
+                        Activar notificaciones
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {systemNotificationPermission === 'denied' && (
+                  <div className="mt-3 pt-3 border-t border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                    <span>Las notificaciones están bloqueadas en tu navegador. Toca el candado o icono de permisos en la barra de direcciones de tu navegador para permitirlas.</span>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-3">
                 {notifications.length === 0 ? (
                   <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center">
@@ -5411,6 +5536,65 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Notificaciones del Sistema en el Dispositivo (Móvil y PC) */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <div className="p-6 border-b border-slate-100 dark:border-slate-800">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Bell className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                        Notificaciones en Barra del Dispositivo (Celular y PC)
+                      </h2>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Controla los avisos nativos en la barra de notificaciones del celular o centro de notificaciones en PC.
+                      </p>
+                    </div>
+                    <div>
+                      {systemNotificationPermission === 'granted' ? (
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Activadas
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600" /> No activadas
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200">
+                      {systemNotificationPermission === 'granted'
+                        ? 'Tu dispositivo está configurado para recibir alertas visuales y con sonido.'
+                        : 'Permite las notificaciones para no perderte incidencias ni canalizaciones prioritarias.'}
+                    </p>
+                    <p className="text-slate-500">Funciona en Android (barra superior), iOS PWA y PC (Windows/Mac/Linux).</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {systemNotificationPermission === 'granted' ? (
+                      <button
+                        type="button"
+                        onClick={handleTestSystemNotification}
+                        className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl transition border border-indigo-200 shadow-sm flex items-center gap-2 cursor-pointer"
+                      >
+                        <BellRing className="w-4 h-4 text-indigo-600" />
+                        Probar notificación
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleRequestSystemNotifications}
+                        className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition shadow-md shadow-indigo-200 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Bell className="w-4 h-4" />
+                        Activar en este dispositivo
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
