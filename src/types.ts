@@ -159,7 +159,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,
-    canExportReports: true,
+    canExportReports: false,
     canSendCongratulations: false,
     canManageUsers: false,
     canSendMassMessages: false,

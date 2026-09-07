@@ -1831,6 +1831,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
+  useEffect(() => {
+    if (customUser) {
+      setIsLoggingOut(false);
+    }
+  }, [customUser]);
+
   const isActuallyLoggedIn = Boolean((user && !user.isAnonymous) || customUser) && !isLoggingOut;
   const activeUser = isActuallyLoggedIn ? ((user && !user.isAnonymous) ? user : customUser) : null;
 
@@ -2498,15 +2504,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       return;
     }
 
-    const notificationData = {
-      title,
-      message,
-      incidentId: incidentId || '',
-      read: false,
-      createdAt: Date.now(),
-      ...extraData
-    };
-
     let allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
     if (allUsers.length === 0) {
       try {
@@ -2517,6 +2514,44 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
+    // Identify creator / excluded users so they NEVER receive notification or email for their own creations
+    const excludedIdsAndEmails = new Set<string>();
+    if (extraData?.creatorUid) excludedIdsAndEmails.add(String(extraData.creatorUid).toLowerCase().trim());
+    if (extraData?.creatorEmail) excludedIdsAndEmails.add(String(extraData.creatorEmail).toLowerCase().trim());
+    if (extraData?.excludeUserId) excludedIdsAndEmails.add(String(extraData.excludeUserId).toLowerCase().trim());
+    if (extraData?.excludeUserEmail) excludedIdsAndEmails.add(String(extraData.excludeUserEmail).toLowerCase().trim());
+    if (Array.isArray(extraData?.excludeUserIds)) {
+      extraData.excludeUserIds.forEach((id: any) => {
+        if (id && typeof id === 'string') excludedIdsAndEmails.add(id.toLowerCase().trim());
+      });
+    }
+    if (extraData?.isCreationNotification && profile) {
+      if (profile.uid) excludedIdsAndEmails.add(profile.uid.toLowerCase().trim());
+      if (profile.email) excludedIdsAndEmails.add(profile.email.toLowerCase().trim());
+    }
+
+    // Expand exclusions to both uid and email if a matching user is found
+    allUsers.forEach(u => {
+      const uUid = u.uid ? u.uid.toLowerCase().trim() : '';
+      const uEmail = u.email ? u.email.toLowerCase().trim() : '';
+      if ((uUid && excludedIdsAndEmails.has(uUid)) || (uEmail && excludedIdsAndEmails.has(uEmail))) {
+        if (uUid) excludedIdsAndEmails.add(uUid);
+        if (uEmail) excludedIdsAndEmails.add(uEmail);
+      }
+    });
+
+    const notificationData = {
+      title,
+      message,
+      incidentId: incidentId || '',
+      read: false,
+      createdAt: Date.now(),
+      ...extraData,
+      creatorUid: extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification ? profile?.uid : undefined),
+      creatorEmail: extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification ? profile?.email : undefined),
+      isCreationNotification: Boolean(extraData?.isCreationNotification)
+    };
+
     const finalTargetUserIds = new Set<string>();
     const targetEmails = new Set<string>();
     const rawTargets: string[] = Array.isArray(userIdOrIds) ? userIdOrIds : [userIdOrIds];
@@ -2526,6 +2561,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const clean = str.trim();
       const cleanLower = clean.toLowerCase();
       if (cleanLower === 'jorge.villanueva@boletomovil.com') return;
+      if (excludedIdsAndEmails.has(cleanLower)) return;
 
       const matched = allUsers.find(u =>
         u.uid === clean ||
@@ -2533,6 +2569,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       );
 
       if (matched) {
+        const mUidLower = matched.uid ? matched.uid.toLowerCase().trim() : '';
+        const mEmailLower = matched.email ? matched.email.toLowerCase().trim() : '';
+        if (excludedIdsAndEmails.has(mUidLower) || excludedIdsAndEmails.has(mEmailLower)) {
+          return;
+        }
+
         const targetId = matched.uid || (matched.email ? matched.email.toLowerCase() : cleanLower);
         finalTargetUserIds.add(targetId);
         if (matched.email && matched.email.includes('@')) {
@@ -2574,14 +2616,39 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
-    // 2. SuperAdmin: ALL system notifications reach the superadmin in-app for auditing/monitoring (NO EMAILS)
-    SUPER_ADMIN_EMAILS.forEach(email => {
-      finalTargetUserIds.add(email.toLowerCase().trim());
-    });
-    allUsers.filter(u => isSuperAdminEmail(u.email)).forEach(sa => {
-      if (sa.uid) finalTargetUserIds.add(sa.uid);
-      if (sa.email) finalTargetUserIds.add(sa.email.toLowerCase().trim());
-    });
+    // 2. SuperAdmin: System notifications reach superadmin in-app for auditing (NO EMAILS), unless skipAdmins or creator is superadmin
+    if (!skipAdmins) {
+      SUPER_ADMIN_EMAILS.forEach(email => {
+        const eLower = email.toLowerCase().trim();
+        if (!excludedIdsAndEmails.has(eLower)) {
+          finalTargetUserIds.add(eLower);
+        }
+      });
+      allUsers.filter(u => isSuperAdminEmail(u.email)).forEach(sa => {
+        const saUid = sa.uid ? sa.uid.toLowerCase().trim() : '';
+        const saEmail = sa.email ? sa.email.toLowerCase().trim() : '';
+        if (sa.uid && !excludedIdsAndEmails.has(saUid) && !excludedIdsAndEmails.has(saEmail)) {
+          finalTargetUserIds.add(sa.uid);
+        }
+        if (sa.email && !excludedIdsAndEmails.has(saEmail) && !excludedIdsAndEmails.has(saUid)) {
+          finalTargetUserIds.add(sa.email.toLowerCase().trim());
+        }
+      });
+    }
+
+    // Double check that no excluded user ID or email slipped into finalTargetUserIds or targetEmails
+    if (excludedIdsAndEmails.size > 0) {
+      for (const id of Array.from(finalTargetUserIds)) {
+        if (excludedIdsAndEmails.has(id.toLowerCase().trim())) {
+          finalTargetUserIds.delete(id);
+        }
+      }
+      for (const email of Array.from(targetEmails)) {
+        if (excludedIdsAndEmails.has(email.toLowerCase().trim())) {
+          targetEmails.delete(email);
+        }
+      }
+    }
 
     // 3. Create single notification document per unique target user ID/email
     for (const userId of finalTargetUserIds) {
@@ -2691,6 +2758,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     emailHeaderTitle = 'Actualización de Incidencia',
     actionDetails,
     excludeUserId,
+    excludeUserEmail,
+    isCreation = false,
     extraData = {}
   }: {
     incident: Incident;
@@ -2700,6 +2769,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     emailHeaderTitle?: string;
     actionDetails?: string;
     excludeUserId?: string;
+    excludeUserEmail?: string;
+    isCreation?: boolean;
     extraData?: Record<string, any>;
   }) => {
     let allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
@@ -2715,14 +2786,33 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const targetUserIds = new Set<string>();
     const targetEmails = new Set<string>();
 
-    const excludeClean = excludeUserId ? excludeUserId.toLowerCase().trim() : '';
+    // Build comprehensive exclusion set for the user performing the action / creator of report
+    const excludeSet = new Set<string>();
+    if (excludeUserId) excludeSet.add(excludeUserId.toLowerCase().trim());
+    if (excludeUserEmail) excludeSet.add(excludeUserEmail.toLowerCase().trim());
+    if (profile?.uid) excludeSet.add(profile.uid.toLowerCase().trim());
+    if (profile?.email) excludeSet.add(profile.email.toLowerCase().trim());
+    if (isCreation) {
+      if (incident.reporterId) excludeSet.add(incident.reporterId.toLowerCase().trim());
+      if (incident.reporterEmail) excludeSet.add(incident.reporterEmail.toLowerCase().trim());
+    }
+
+    // Expand exclusions across all matching user records (both UID & email)
+    allUsers.forEach(u => {
+      const uUid = u.uid ? u.uid.toLowerCase().trim() : '';
+      const uEmail = u.email ? u.email.toLowerCase().trim() : '';
+      if ((uUid && excludeSet.has(uUid)) || (uEmail && excludeSet.has(uEmail))) {
+        if (uUid) excludeSet.add(uUid);
+        if (uEmail) excludeSet.add(uEmail);
+      }
+    });
 
     const addTarget = (uidOrEmail?: string) => {
       if (!uidOrEmail) return;
       const clean = uidOrEmail.trim();
       if (!clean) return;
       if (clean.toLowerCase() === 'jorge.villanueva@boletomovil.com') return;
-      if (clean.toLowerCase() === excludeClean) return;
+      if (excludeSet.has(clean.toLowerCase())) return;
 
       const matched = allUsers.find(u =>
         u.uid === clean ||
@@ -2730,10 +2820,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       );
 
       if (matched) {
-        if (matched.uid && matched.uid.toLowerCase() !== excludeClean) {
+        const mUid = matched.uid ? matched.uid.toLowerCase().trim() : '';
+        const mEmail = matched.email ? matched.email.toLowerCase().trim() : '';
+        if (excludeSet.has(mUid) || excludeSet.has(mEmail)) {
+          return;
+        }
+        if (matched.uid) {
           targetUserIds.add(matched.uid);
         }
-        if (matched.email && matched.email.toLowerCase() !== excludeClean) {
+        if (matched.email) {
           targetEmails.add(matched.email.toLowerCase());
         }
       } else {
@@ -2746,11 +2841,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     };
 
-    // 1. Reporter (Docente que levanta el reporte)
-    addTarget(incident.reporterId);
-    addTarget(incident.reporterEmail);
+    // 1. Reporter (Docente que levanta el reporte) - Only if NOT a creation event
+    if (!isCreation) {
+      addTarget(incident.reporterId);
+      addTarget(incident.reporterEmail);
+    }
 
-    // 2. Coordinators (Coordinadores asignados/seleccionados)
+    // 2. Coordinators (ÚNICAMENTE los coordinadores asignados al reporte o al docente que levantó el reporte)
     if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds)) {
       incident.coordinatorIds.forEach(id => addTarget(id));
     }
@@ -2759,6 +2856,26 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
     if (incident.coordinatorEmail) {
       addTarget(incident.coordinatorEmail);
+    }
+    // Coordinador asignado específicamente en el perfil del docente que levantó el reporte
+    const reportingTeacher = allUsers.find(u => 
+      (incident.reporterId && u.uid === incident.reporterId) || 
+      (incident.reporterEmail && u.email?.toLowerCase() === incident.reporterEmail.toLowerCase())
+    );
+    if (reportingTeacher) {
+      if (reportingTeacher.assignedCoordinatorId) {
+        addTarget(reportingTeacher.assignedCoordinatorId);
+      }
+      if (reportingTeacher.assignedCoordinatorEmail) {
+        addTarget(reportingTeacher.assignedCoordinatorEmail);
+      }
+      if (reportingTeacher.assignedCoordinatorName) {
+        const foundCoordByName = coordinators.find(c => c.name === reportingTeacher.assignedCoordinatorName);
+        if (foundCoordByName) {
+          addTarget(foundCoordByName.uid);
+          addTarget(foundCoordByName.email);
+        }
+      }
     }
 
     // 3. Notified Teacher (Docente en copia si aplica)
@@ -2785,11 +2902,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
+    // Prune target sets against excludeSet
+    for (const id of Array.from(targetUserIds)) {
+      if (excludeSet.has(id.toLowerCase().trim())) {
+        targetUserIds.delete(id);
+      }
+    }
+    for (const email of Array.from(targetEmails)) {
+      if (excludeSet.has(email.toLowerCase().trim())) {
+        targetEmails.delete(email);
+      }
+    }
+
     const finalTargetIds = Array.from(targetUserIds);
 
     // Send in-app notification in real-time (skipEmail: true since notifyIncidentInvolvedUsers handles the rich email below)
     if (finalTargetIds.length > 0) {
-      await sendNotification(finalTargetIds, title, message, incident.id, false, { ...extraData, skipEmail: true });
+      await sendNotification(finalTargetIds, title, message, incident.id, false, {
+        ...extraData,
+        skipEmail: true,
+        creatorUid: excludeUserId || profile?.uid,
+        creatorEmail: excludeUserEmail || profile?.email,
+        isCreationNotification: isCreation
+      });
     }
 
     // Send email notification to all involved users (default true unless explicitly false)
@@ -2997,12 +3132,23 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [systemNotificationPermission, setSystemNotificationPermission] = useState<NotificationPermission>(() => getNotificationPermission());
+  const [hideTestedNotificationCard, setHideTestedNotificationCard] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('dunor_hide_tested_notification_card') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const handleRequestSystemNotifications = async () => {
     const perm = await requestSystemNotificationPermission();
     setSystemNotificationPermission(perm);
     if (perm === 'granted') {
       await sendTestNotification();
+      setHideTestedNotificationCard(true);
+      try {
+        localStorage.setItem('dunor_hide_tested_notification_card', 'true');
+      } catch (e) {}
       setLiveToast({
         id: 'notif-perm-granted',
         title: '¡Notificaciones del Sistema Activas!',
@@ -3022,6 +3168,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const handleTestSystemNotification = async () => {
     const ok = await sendTestNotification();
     if (ok) {
+      setHideTestedNotificationCard(true);
+      try {
+        localStorage.setItem('dunor_hide_tested_notification_card', 'true');
+      } catch (e) {}
       setLiveToast({
         id: 'notif-test-ok',
         title: 'Prueba Enviada',
@@ -3117,20 +3267,165 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const checkIsNotificationRelevant = (d: any): boolean => {
         if (!d) return false;
         if (checkIsWelcomeOrRegistration(d)) return false;
-        if (isSuperAdmin) return true;
 
         const role = normalizeUserRole(profile.role);
-        const uid = profile.uid;
-        const email = userEmail;
+        const uid = (profile.uid || '').toLowerCase().trim();
+        const email = (userEmail || '').toLowerCase().trim();
         const targetId = (d.userId || '').toLowerCase().trim();
-        const isDirectTarget = targetId === uid.toLowerCase() || targetId === email;
+        const isDirectTarget = targetId === uid || targetId === email;
         const titleLower = (d.title || '').toLowerCase();
+        const msgLower = (d.message || '').toLowerCase();
 
-        // 1. Incidents
-        if (d.incidentId) {
-          const inc = incidents.find(i => i.id === d.incidentId);
-          if (role === 'TEACHER') {
-            // Docente: ONLY incidents where they are reporter or in copy
+        // 0. EXCLUSIÓN DE CREACIÓN PARA EL CREADOR (Incidencias, Canalizaciones, Expedientes, Tareas o Felicitaciones)
+        // El usuario que crea el registro NUNCA debe recibir la notificación de creación en la barra, audio ni lista.
+        const isCreatorDirect =
+          (d.creatorUid && String(d.creatorUid).toLowerCase().trim() === uid) ||
+          (d.creatorEmail && String(d.creatorEmail).toLowerCase().trim() === email) ||
+          (d.excludeUserId && String(d.excludeUserId).toLowerCase().trim() === uid) ||
+          (d.excludeUserEmail && String(d.excludeUserEmail).toLowerCase().trim() === email);
+
+        if (isCreatorDirect) {
+          return false;
+        }
+
+        // Descartar confirmaciones personales de creación
+        if (
+          titleLower.includes('reporte registrado exitosamente') ||
+          titleLower.includes('confirmación de reporte') ||
+          msgLower.includes('has creado y enviado el reporte')
+        ) {
+          return false;
+        }
+
+        // Si es una notificación de creación, verificar que el usuario actual no sea el autor del registro
+        const isCreationType = 
+          d.isCreationNotification ||
+          titleLower.includes('nueva incidencia') ||
+          titleLower.includes('nuevo reporte') ||
+          titleLower.includes('reporte registrado') ||
+          titleLower.includes('nueva canalización') ||
+          titleLower.includes('nueva canalizacion') ||
+          titleLower.includes('nuevo expediente') ||
+          titleLower.includes('nueva tarea') ||
+          titleLower.includes('felicitac') ||
+          titleLower.includes('reconocimiento') ||
+          titleLower.includes('sugerencia de canaliz');
+
+        if (isCreationType) {
+          // Incidencias
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isReporter = (inc.reporterId && inc.reporterId.toLowerCase().trim() === uid) ||
+                                (inc.reporterEmail && inc.reporterEmail.toLowerCase().trim() === email);
+              if (isReporter) return false;
+            }
+          }
+
+          // Canalizaciones
+          if (d.referralId || d.type === 'referral') {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isRefCreator = (ref.teacherId && ref.teacherId.toLowerCase().trim() === uid) ||
+                                  (ref.teacherEmail && ref.teacherEmail.toLowerCase().trim() === email) ||
+                                  (ref.createdByEmail && ref.createdByEmail.toLowerCase().trim() === email);
+              if (isRefCreator) return false;
+            }
+          }
+
+          // Tareas y Felicitaciones
+          if (d.taskId || d.type === 'task' || d.type === 'felicitacion') {
+            const task = tasks.find(t => t.id === d.taskId);
+            if (task) {
+              const isTaskCreator = task.createdByEmail && task.createdByEmail.toLowerCase().trim() === email;
+              if (isTaskCreator) return false;
+            }
+          }
+        }
+
+        if (isSuperAdmin) return true;
+
+        // 1. DIRECTIVOS Y ADMINISTRADORES: Por default les llegan todas las notificaciones
+        if (role === 'DIRECTIVE' || role === 'ADMIN' || isSuperAdmin) {
+          return true;
+        }
+
+        // 2. COORDINADORES: ÚNICAMENTE si son el coordinador asignado al reporte o al docente que levantó el reporte
+        if (role === 'COORDINATOR') {
+          // Incidencias
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isAssignedToIncident = 
+                inc.coordinatorId === uid ||
+                (inc.coordinatorIds && inc.coordinatorIds.includes(uid)) ||
+                (inc.coordinatorEmail && inc.coordinatorEmail.toLowerCase() === email);
+              if (isAssignedToIncident) return true;
+
+              const reportingTeacher = teachers.find(t => 
+                (inc.reporterId && t.uid === inc.reporterId) || 
+                (inc.reporterEmail && t.email?.toLowerCase() === inc.reporterEmail.toLowerCase())
+              );
+              if (reportingTeacher) {
+                const isAssignedToTeacher = 
+                  reportingTeacher.assignedCoordinatorId === uid ||
+                  (reportingTeacher.assignedCoordinatorEmail && reportingTeacher.assignedCoordinatorEmail.toLowerCase() === email) ||
+                  (reportingTeacher.assignedCoordinatorName && profile.name && reportingTeacher.assignedCoordinatorName.toLowerCase() === profile.name.toLowerCase());
+                if (isAssignedToTeacher) return true;
+              }
+
+              // No asignado a esta incidencia ni al docente: no mostrar en barra ni lista
+              return false;
+            }
+            return isDirectTarget;
+          }
+
+          // Canalizaciones
+          if (d.referralId || d.type === 'referral' || titleLower.includes('canaliz') || titleLower.includes('psicol')) {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isAssignedToRef = 
+                ref.coordinatorId === uid ||
+                (ref.coordinatorEmail && ref.coordinatorEmail.toLowerCase() === email);
+              if (isAssignedToRef) return true;
+
+              const refTeacher = teachers.find(t =>
+                (ref.teacherId && t.uid === ref.teacherId) ||
+                (ref.teacherEmail && t.email?.toLowerCase() === ref.teacherEmail.toLowerCase()) ||
+                (ref.createdByEmail && t.email?.toLowerCase() === ref.createdByEmail.toLowerCase())
+              );
+              if (refTeacher) {
+                const isAssignedToTeacher = 
+                  refTeacher.assignedCoordinatorId === uid ||
+                  (refTeacher.assignedCoordinatorEmail && refTeacher.assignedCoordinatorEmail.toLowerCase() === email) ||
+                  (refTeacher.assignedCoordinatorName && profile.name && refTeacher.assignedCoordinatorName.toLowerCase() === profile.name.toLowerCase());
+                if (isAssignedToTeacher) return true;
+              }
+
+              const inRecipients = ref.additionalRecipients?.some(r => r.uid === uid || r.email?.toLowerCase() === email);
+              if (inRecipients) return true;
+
+              return false;
+            }
+            return isDirectTarget;
+          }
+
+          // Tareas
+          if (d.taskId || d.type === 'task' || titleLower.includes('tarea')) {
+            const task = tasks.find(t => t.id === d.taskId);
+            if (task) {
+              return task.assignedToEmail?.toLowerCase() === email || isDirectTarget;
+            }
+            return isDirectTarget;
+          }
+
+          return isDirectTarget;
+        }
+
+        // 3. DOCENTES: Solo sus reportes o en copia
+        if (role === 'TEACHER') {
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
             if (inc) {
               const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
               const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
@@ -3139,38 +3434,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             return isDirectTarget;
           }
 
-          if (role === 'COORDINATOR') {
-            // Coordinador: ONLY incidents where assigned as coordinator, or reporter, or in copy
-            if (inc) {
-              const isAssigned = (inc.coordinatorIds && inc.coordinatorIds.includes(uid)) ||
-                inc.coordinatorId === uid ||
-                (inc.coordinatorEmail && inc.coordinatorEmail.toLowerCase() === email);
-              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
-              const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
-              return Boolean(isAssigned || isReporter || isNotified);
-            }
-            return isDirectTarget;
-          }
-
-          if (role === 'PSYCHOLOGIST') {
-            // Psicólogo: ONLY incident notifications with psychology referral / canalización
-            const isPsychRelated = d.type === 'referral' || d.referralId || titleLower.includes('canaliz') || titleLower.includes('psicol');
-            if (inc) {
-              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
-              const hasReferral = inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS' || (inc as any).psychologistId === uid;
-              return Boolean(isReporter || hasReferral || isPsychRelated);
-            }
-            return Boolean(isPsychRelated || (isDirectTarget && isPsychRelated));
-          }
-
-          if (role === 'DIRECTIVE' || role === 'ADMIN') {
-            return true;
-          }
-        }
-
-        // 2. Canalizaciones / Referrals
-        if (d.referralId || d.type === 'referral' || titleLower.includes('canaliz') || titleLower.includes('psicol')) {
-          if (role === 'TEACHER' || role === 'COORDINATOR') {
+          if (d.referralId || d.type === 'referral' || titleLower.includes('canaliz') || titleLower.includes('psicol')) {
             const ref = referrals.find(r => r.id === d.referralId);
             if (ref) {
               const isCreator = ref.createdByEmail?.toLowerCase() === email || ref.referredByName === profile.name;
@@ -3179,22 +3443,34 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             }
             return isDirectTarget;
           }
-          // Psychologists, Directives, Admins receive canalizaciones
-          return true;
-        }
 
-        // 3. Tasks / Felicitaciones
-        if (d.taskId || d.type === 'task' || d.type === 'felicitacion' || titleLower.includes('tarea') || titleLower.includes('felicitaci')) {
-          if (role === 'TEACHER' || role === 'PSYCHOLOGIST') {
+          if (d.taskId || d.type === 'task' || d.type === 'felicitacion' || titleLower.includes('tarea') || titleLower.includes('felicitaci')) {
             const task = tasks.find(t => t.id === d.taskId);
             if (task) {
               const isAssigned = task.assignedToEmail?.toLowerCase() === email;
-              const isCreator = task.createdByEmail?.toLowerCase() === email;
-              return Boolean(isAssigned || isCreator || isDirectTarget);
+              return Boolean(isAssigned || isDirectTarget);
             }
             return isDirectTarget;
           }
-          return true;
+
+          return isDirectTarget;
+        }
+
+        // 4. PSICÓLOGOS
+        if (role === 'PSYCHOLOGIST') {
+          const isPsychRelated = d.type === 'referral' || d.referralId || titleLower.includes('canaliz') || titleLower.includes('psicol');
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
+              const hasReferral = inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS' || (inc as any).psychologistId === uid;
+              return Boolean(isReporter || hasReferral || isPsychRelated);
+            }
+            return Boolean(isPsychRelated || (isDirectTarget && isPsychRelated));
+          }
+          if (isPsychRelated) return true;
+          if (titleLower.includes('expediente') || titleLower.includes('informe')) return true;
+          return isDirectTarget;
         }
 
         // 4. Expedientes & Informes
@@ -3205,7 +3481,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
         // Default: targeted directly or by role
         if (isDirectTarget) return true;
-        if (targetId === role.toLowerCase() || targetId === profile.role?.toLowerCase()) return true;
+        if (profile.role && targetId === String(profile.role).toLowerCase()) return true;
 
         return false;
       };
@@ -3268,7 +3544,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     });
 
     return () => unsubscribe();
-  }, [user, profile, isSuperAdmin, incidents, referrals, tasks]);
+  }, [user, profile, isSuperAdmin, incidents, referrals, tasks, teachers, coordinators]);
 
   useEffect(() => {
     if (!activeUser || !profile) return;
@@ -3742,6 +4018,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     } catch (e: any) {
       console.warn("Logout notice:", e?.message || e);
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
@@ -3758,6 +4036,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         <LoginScreen
           systemSettings={effectiveSystemSettings}
           onCustomLogin={(uData, fullProfile) => {
+            setIsLoggingOut(false);
             localStorage.setItem('app_custom_user', JSON.stringify(uData));
             setCustomUser(uData);
             if (fullProfile) {
@@ -4044,27 +4323,57 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   };
 
   const deleteIncident = async (incident: Incident) => {
-    if (profile.role !== 'COORDINATOR' || incident.status !== 'CERRADO') return;
-    setConfirmModal({
-      isOpen: true,
-      title: 'Eliminar Incidencia',
-      message: '¿Estás seguro de eliminar esta incidencia de tu panel? El docente que la creó aún podrá verla.',
-      onConfirm: async () => {
-        try {
-          await updateDoc(doc(db, 'incidents', incident.id), {
-            deletedByCoordinators: arrayUnion(profile.uid)
-          });
-          await addLog(
-            'Eliminó incidencia de panel',
-            `Eliminado de panel por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
-            { module: 'Incidencias', recordId: incident.id }
-          );
-          setConfirmModal(prev => ({ ...prev, isOpen: false }));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
+    if (!profile) return;
+    const canPermDelete = Boolean(isSuperAdmin || can('canDeleteIncidents') || profile.role === 'ADMIN');
+    const isCoordDelete = profile.role === 'COORDINATOR' && incident.status === 'CERRADO';
+
+    if (!canPermDelete && !isCoordDelete) {
+      showSystemPopup('Acción no permitida', 'No tienes permisos para eliminar este registro de incidencia.', 'warning');
+      return;
+    }
+
+    if (canPermDelete) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Eliminar Registro de Incidencia',
+        message: `¿Estás seguro de eliminar permanentemente el registro de incidencia en "${incident.place}" (Alumnos: ${incident.students})? Esta acción borrará el registro de la base de datos de manera definitiva e irreversible.`,
+        onConfirm: async () => {
+          try {
+            await deleteDoc(doc(db, 'incidents', incident.id));
+            await addLog(
+              'Eliminó incidencia permanentemente',
+              `Incidencia eliminada permanentemente por: ${profile.name} (${profile.role} - ${profile.email}) | ID: ${incident.id} | Alumno(s): ${incident.students} | Lugar: ${incident.place}`,
+              { module: 'Incidencias', recordId: incident.id }
+            );
+            setConfirmModal(prev => ({ ...prev, isOpen: false }));
+            showSystemPopup('Registro Eliminado', 'La incidencia ha sido eliminada permanentemente del sistema.', 'success');
+          } catch (error) {
+            handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
+          }
         }
-      }
-    });
+      });
+    } else if (isCoordDelete) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Eliminar Incidencia de Panel',
+        message: '¿Estás seguro de eliminar esta incidencia de tu panel? El docente que la creó aún podrá verla.',
+        onConfirm: async () => {
+          try {
+            await updateDoc(doc(db, 'incidents', incident.id), {
+              deletedByCoordinators: arrayUnion(profile.uid)
+            });
+            await addLog(
+              'Eliminó incidencia de panel',
+              `Eliminado de panel por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+              { module: 'Incidencias', recordId: incident.id }
+            );
+            setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          } catch (error) {
+            handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
+          }
+        }
+      });
+    }
   };
 
   const handleInstallClick = async () => {
@@ -5041,80 +5350,93 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 )}
               </div>
 
-              {/* System Native Notifications Card (Celular y PC) */}
-              <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/20 relative overflow-hidden">
-                <div className="absolute right-0 top-0 translate-x-4 -translate-y-4 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-11 h-11 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center flex-shrink-0 text-indigo-300">
-                      {systemNotificationPermission === 'granted' ? (
-                        <BellRing className="w-5 h-5 text-emerald-400 animate-pulse" />
-                      ) : (
-                        <Bell className="w-5 h-5 text-indigo-300" />
-                      )}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-base font-bold text-white">
-                          Notificaciones en Celular y PC
-                        </h3>
+              {/* System Native Notifications Card (Celular y PC) - Ocultable una vez aceptado y probado */}
+              {!(systemNotificationPermission === 'granted' && hideTestedNotificationCard) && (
+                <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/20 relative overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHideTestedNotificationCard(true);
+                      try { localStorage.setItem('dunor_hide_tested_notification_card', 'true'); } catch (e) {}
+                    }}
+                    className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors z-20 cursor-pointer"
+                    title="Ocultar aviso"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                  <div className="absolute right-0 top-0 translate-x-4 -translate-y-4 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-11 h-11 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center flex-shrink-0 text-indigo-300">
                         {systemNotificationPermission === 'granted' ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                            Activo
-                          </span>
+                          <BellRing className="w-5 h-5 text-emerald-400 animate-pulse" />
                         ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                            No activado
-                          </span>
+                          <Bell className="w-5 h-5 text-indigo-300" />
                         )}
                       </div>
-                      <p className="text-xs text-slate-300 mt-1 max-w-xl leading-relaxed">
-                        {systemNotificationPermission === 'granted'
-                          ? 'Recibirás avisos directos en la barra de notificación de tu celular o en la pantalla de tu computadora al recibir nuevas incidencias, canalizaciones o tareas.'
-                          : 'Permite que los avisos importantes aparezcan en la barra de notificaciones de tu celular o en el centro de avisos de tu PC aunque la app esté en segundo plano.'}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-slate-400">
-                        <span className="flex items-center gap-1">
-                          <Smartphone className="w-3.5 h-3.5 text-indigo-400" /> Barra de notificación móvil
-                        </span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1">
-                          <Laptop className="w-3.5 h-3.5 text-indigo-400" /> Avisos de escritorio PC
-                        </span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-bold text-white">
+                            Notificaciones en Celular y PC
+                          </h3>
+                          {systemNotificationPermission === 'granted' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              Activo
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              No activado
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-300 mt-1 max-w-xl leading-relaxed">
+                          {systemNotificationPermission === 'granted'
+                            ? 'Recibirás avisos directos en la barra de notificación de tu celular o en la pantalla de tu computadora al recibir nuevas incidencias, canalizaciones o tareas.'
+                            : 'Permite que los avisos importantes aparezcan en la barra de notificaciones de tu celular o en el centro de avisos de tu PC aunque la app esté en segundo plano.'}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-slate-400">
+                          <span className="flex items-center gap-1">
+                            <Smartphone className="w-3.5 h-3.5 text-indigo-400" /> Barra de notificación móvil
+                          </span>
+                          <span>•</span>
+                          <span className="flex items-center gap-1">
+                            <Laptop className="w-3.5 h-3.5 text-indigo-400" /> Avisos de escritorio PC
+                          </span>
+                        </div>
                       </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-start md:self-center flex-shrink-0">
+                      {systemNotificationPermission === 'granted' ? (
+                        <button
+                          type="button"
+                          onClick={handleTestSystemNotification}
+                          className="px-4 py-2.5 bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-bold rounded-xl transition border border-white/20 shadow-sm flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <BellRing className="w-4 h-4 text-emerald-400" />
+                          Probar notificación
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleRequestSystemNotifications}
+                          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Bell className="w-4 h-4" />
+                          Activar notificaciones
+                        </button>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 self-start md:self-center flex-shrink-0">
-                    {systemNotificationPermission === 'granted' ? (
-                      <button
-                        type="button"
-                        onClick={handleTestSystemNotification}
-                        className="px-4 py-2.5 bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-bold rounded-xl transition border border-white/20 shadow-sm flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <BellRing className="w-4 h-4 text-emerald-400" />
-                        Probar notificación
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleRequestSystemNotifications}
-                        className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Bell className="w-4 h-4" />
-                        Activar notificaciones
-                      </button>
-                    )}
-                  </div>
+                  {systemNotificationPermission === 'denied' && (
+                    <div className="mt-3 pt-3 border-t border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                      <span>Las notificaciones están bloqueadas en tu navegador. Toca el candado o icono de permisos en la barra de direcciones de tu navegador para permitirlas.</span>
+                    </div>
+                  )}
                 </div>
-
-                {systemNotificationPermission === 'denied' && (
-                  <div className="mt-3 pt-3 border-t border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
-                    <span>Las notificaciones están bloqueadas en tu navegador. Toca el candado o icono de permisos en la barra de direcciones de tu navegador para permitirlas.</span>
-                  </div>
-                )}
-              </div>
+              )}
 
               <div className="space-y-3">
                 {notifications.length === 0 ? (
@@ -6992,7 +7314,22 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                 </div>
               )}
             </div>
-            <ChevronRight className={cn("w-5 h-5 text-slate-400 transition-transform", isExpanded && "rotate-90")} />
+            <div className="flex items-center gap-1">
+              {(isSuperAdmin || can('canDeleteIncidents') || profile?.role === 'ADMIN') && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                  title="Eliminar incidencia"
+                >
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                </button>
+              )}
+              <ChevronRight className={cn("w-5 h-5 text-slate-400 transition-transform", isExpanded && "rotate-90")} />
+            </div>
           </div>
         </div>
       </div>
@@ -7288,7 +7625,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                   )}
                 </div>
                 <div className="flex justify-end items-end gap-2">
-                  {can('canExportReports') && (
+                  {can('canExportReports') && profile?.role !== 'TEACHER' && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onPrint(incident); }}
                       className="flex items-center gap-2 text-slate-600 hover:bg-slate-100 px-3 py-2 rounded-lg transition-all text-sm font-bold cursor-pointer"
@@ -7297,7 +7634,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                       Imprimir
                     </button>
                   )}
-                  {can('canDeleteIncidents') && incident.status === 'CERRADO' && (
+                  {(isSuperAdmin || can('canDeleteIncidents') || profile?.role === 'ADMIN' || (profile?.role === 'COORDINATOR' && incident.status === 'CERRADO')) && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onDelete(); }}
                       className="flex items-center gap-2 text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-all text-sm font-bold cursor-pointer"
@@ -7522,11 +7859,13 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           emailSubject: `Nueva Incidencia Registrada: ${formData.place}`,
           emailHeaderTitle: 'Nueva Incidencia Registrada',
           actionDetails: `<strong>Lugar:</strong> ${formData.place}<br/><strong>Alumnos:</strong> ${formData.students}<br/><strong>Descripción:</strong> ${formData.description}`,
-          excludeUserId: profile.uid
+          excludeUserId: profile.uid,
+          excludeUserEmail: profile.email,
+          isCreation: true
         });
       }
 
-      // Dedicated notification for the teacher added in copy
+      // Dedicated notification for the teacher added in copy (if not the creator)
       if (formData.notifiedTeacherId && formData.notifiedTeacherId !== profile.uid) {
         const creatorRoleLabel = profile.role === 'ADMIN' ? 'el administrador' : profile.role === 'DIRECTIVE' ? 'el directivo' : profile.role === 'COORDINATOR' ? 'el coordinador' : 'el docente';
         await sendNotification(
@@ -7535,43 +7874,8 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por ${creatorRoleLabel} ${creatorDisplayName}.`,
           docRef.id,
           true,
-          { skipEmail: true }
+          { skipEmail: true, creatorUid: profile.uid, creatorEmail: profile.email }
         );
-      }
-
-      // Direct in-app notification and confirmation email for the reporting teacher/user
-      if (profile.uid) {
-        await sendNotification(
-          profile.uid,
-          'Reporte Registrado Exitosamente',
-          `Has creado y enviado el reporte de incidencia en "${formData.place}".`,
-          docRef.id,
-          true, // skipAdmins = true (personal confirmation only for the reporter)
-          { skipEmail: true } // skip email in sendNotification since we send the rich confirmation email below
-        );
-
-        if (systemSettings.emailNotificationsEnabled !== false && profile.email && sendEmail) {
-          await sendEmail(
-            profile.email,
-            `Confirmación de Reporte Registrado: ${formData.place}`,
-            `
-              <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                <div style="background-color: #059669; padding: 24px; text-align: center;">
-                  <h1 style="color: white; margin: 0; font-size: 24px;">Reporte Registrado Exitosamente</h1>
-                </div>
-                <div style="padding: 24px;">
-                  <p style="font-size: 16px; margin-bottom: 20px;">Estimado/a <strong>${profile.name}</strong>, tu reporte de incidencia ha sido registrado correctamente en el sistema.</p>
-                  <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                    <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${formData.place}</p>
-                    <p style="margin: 0 0 8px 0;"><strong>Alumnos:</strong> ${formData.students}</p>
-                    <p style="margin: 0;"><strong>Descripción:</strong> ${formData.description}</p>
-                  </div>
-                  <p style="font-size: 14px; color: #64748b;">Recibirás notificaciones en tiempo real y por correo electrónico cuando la coordinación actualice el estatus de este reporte.</p>
-                </div>
-              </div>
-            `
-          );
-        }
       }
 
       // Notification for Psychologists & Auto Referral
@@ -7606,10 +7910,10 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           console.error("Error creating auto referral document:", refErr);
         }
 
+        // Target uids excluding the creator
         const notifyUids: string[] = [];
-        if (profile.uid) notifyUids.push(profile.uid);
-        if (targetCoord?.uid) notifyUids.push(targetCoord.uid);
-        psychologists.forEach(p => { if (p.uid) notifyUids.push(p.uid); });
+        if (targetCoord?.uid && targetCoord.uid !== profile.uid) notifyUids.push(targetCoord.uid);
+        psychologists.forEach(p => { if (p.uid && p.uid !== profile.uid) notifyUids.push(p.uid); });
 
         await sendNotification(
           notifyUids,
@@ -7617,11 +7921,23 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           `Se ha registrado una canalización para "${formData.students}" desde incidencia en "${formData.place}" por ${profile.name}.`,
           docRef.id,
           false, // Include directives and admins
-          { referralId: refId, type: 'referral' }
+          { 
+            referralId: refId, 
+            type: 'referral',
+            creatorUid: profile.uid,
+            creatorEmail: profile.email,
+            isCreationNotification: true
+          }
         );
 
         const emailRecipients = new Set<string>();
-        if (profile.email) emailRecipients.add(profile.email.toLowerCase());
+        if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
+        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
+        directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
+        admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
+
+        // Exclude the reporting user from receiving email
+        if (profile.email) emailRecipients.delete(profile.email.toLowerCase());
         if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
         psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
         directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
@@ -8352,39 +8668,54 @@ const TaskManager = ({
           status: 'ASIGNADA',
         };
 
-        await addDoc(collection(db, 'tasks'), newTaskDoc);
+        const newTaskRef = await addDoc(collection(db, 'tasks'), newTaskDoc);
 
-        await sendNotification(
-          recipient.email,
-          `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
-          `Se te ha asignado la tarea "${newTaskDoc.title}" con fecha límite ${newTaskDoc.dueDate}. Asignada por ${profile.name}.`
-        );
+        // Do not notify or send email to the user who created/assigned the task
+        const isSelf = recipient.email.toLowerCase() === profile.email.toLowerCase() ||
+                       (recipient.uid && recipient.uid === profile.uid);
 
-        if (systemSettings.emailNotificationsEnabled && recipient.email) {
-          try {
-            await fetch('/api/send-email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                to: recipient.email,
-                subject: `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
-                html: `
-                  <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
-                    <h2 style="color: #4f46e5; margin-top: 0;">Nueva Tarea Asignada</h2>
-                    <p>Estimado/a <strong>${recipient.name}</strong>,</p>
-                    <p>Se te ha asignado una nueva tarea en el sistema:</p>
-                    <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; margin: 16px 0; border-radius: 4px;">
-                      <h3 style="margin: 0 0 8px 0; color: #0f172a;">${newTaskDoc.title}</h3>
-                      <p style="margin: 0 0 8px 0; color: #475569;">${newTaskDoc.description}</p>
-                      <p style="margin: 0; font-size: 13px; font-weight: bold; color: #e11d48;">Fecha Límite: ${newTaskDoc.dueDate}</p>
+        if (!isSelf) {
+          await sendNotification(
+            recipient.email,
+            `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
+            `Se te ha asignado la tarea "${newTaskDoc.title}" con fecha límite ${newTaskDoc.dueDate}. Asignada por ${profile.name}.`,
+            '',
+            false,
+            {
+              taskId: newTaskRef.id,
+              type: 'task',
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: true
+            }
+          );
+
+          if (systemSettings.emailNotificationsEnabled && recipient.email) {
+            try {
+              await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: recipient.email,
+                  subject: `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
+                  html: `
+                    <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
+                      <h2 style="color: #4f46e5; margin-top: 0;">Nueva Tarea Asignada</h2>
+                      <p>Estimado/a <strong>${recipient.name}</strong>,</p>
+                      <p>Se te ha asignado una nueva tarea en el sistema:</p>
+                      <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; margin: 16px 0; border-radius: 4px;">
+                        <h3 style="margin: 0 0 8px 0; color: #0f172a;">${newTaskDoc.title}</h3>
+                        <p style="margin: 0 0 8px 0; color: #475569;">${newTaskDoc.description}</p>
+                        <p style="margin: 0; font-size: 13px; font-weight: bold; color: #e11d48;">Fecha Límite: ${newTaskDoc.dueDate}</p>
+                      </div>
+                      <p style="font-size: 12px; color: #94a3b8;">Asignado por: ${profile.name} (${profile.role})</p>
                     </div>
-                    <p style="font-size: 12px; color: #94a3b8;">Asignado por: ${profile.name} (${profile.role})</p>
-                  </div>
-                `
-              })
-            });
-          } catch (err) {
-            console.error("Task email error:", err);
+                  `
+                })
+              });
+            } catch (err) {
+              console.error("Task email error:", err);
+            }
           }
         }
       }
@@ -8436,37 +8767,49 @@ const TaskManager = ({
 
         const newTaskRef = await addDoc(collection(db, 'tasks'), congratTaskDoc);
 
-        await sendNotification(
-          rec.email,
-          `🎉 ${congratFormData.title}`,
-          `${congratFormData.message}\n\n- Mensaje enviado por ${profile.name} (${profile.role})`,
-          '',
-          false,
-          { type: 'felicitacion', taskId: newTaskRef.id }
-        );
+        // Do not notify or send email to the user who created/sent the congratulation
+        const isSelf = rec.email.toLowerCase() === profile.email.toLowerCase() ||
+                       (rec.uid && rec.uid === profile.uid);
 
-        if (systemSettings.emailNotificationsEnabled && rec.email) {
-          try {
-            await fetch('/api/send-email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                to: rec.email,
-                subject: `🎉 ${congratFormData.title}`,
-                html: `
-                  <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #bbf7d0; border-radius: 12px; padding: 24px; background-color: #f0fdf4;">
-                    <h2 style="color: #166534; margin-top: 0;">🎉 ${congratFormData.title}</h2>
-                    <p>Estimado/a <strong>${rec.name}</strong>,</p>
-                    <div style="background-color: #ffffff; border: 1px solid #86efac; padding: 16px; margin: 16px 0; border-radius: 8px;">
-                      <p style="margin: 0; font-size: 15px; color: #15803d; line-height: 1.6;">${congratFormData.message.replace(/\n/g, '<br/>')}</p>
+        if (!isSelf) {
+          await sendNotification(
+            rec.email,
+            `🎉 ${congratFormData.title}`,
+            `${congratFormData.message}\n\n- Mensaje enviado por ${profile.name} (${profile.role})`,
+            '',
+            false,
+            {
+              type: 'felicitacion',
+              taskId: newTaskRef.id,
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: true
+            }
+          );
+
+          if (systemSettings.emailNotificationsEnabled && rec.email) {
+            try {
+              await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: rec.email,
+                  subject: `🎉 ${congratFormData.title}`,
+                  html: `
+                    <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #bbf7d0; border-radius: 12px; padding: 24px; background-color: #f0fdf4;">
+                      <h2 style="color: #166534; margin-top: 0;">🎉 ${congratFormData.title}</h2>
+                      <p>Estimado/a <strong>${rec.name}</strong>,</p>
+                      <div style="background-color: #ffffff; border: 1px solid #86efac; padding: 16px; margin: 16px 0; border-radius: 8px;">
+                        <p style="margin: 0; font-size: 15px; color: #15803d; line-height: 1.6;">${congratFormData.message.replace(/\n/g, '<br/>')}</p>
+                      </div>
+                      <p style="font-size: 12px; color: #166534; font-weight: bold;">Enviado por: ${profile.name} (${profile.role})</p>
                     </div>
-                    <p style="font-size: 12px; color: #166534; font-weight: bold;">Enviado por: ${profile.name} (${profile.role})</p>
-                  </div>
-                `
-              })
-            });
-          } catch (err) {
-            console.error("Congratulation email error:", err);
+                  `
+                })
+              });
+            } catch (err) {
+              console.error("Congratulation email error:", err);
+            }
           }
         }
       }

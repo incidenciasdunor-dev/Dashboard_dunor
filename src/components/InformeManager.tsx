@@ -620,18 +620,24 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
 
       await setDoc(doc(db, 'shared_reports', sharedReportId), payload, { merge: true });
 
-      // Notify recipients
+      // Notify recipients (excluding the current user who generated/shared the report)
       if (sendNotification) {
-        const recipientUids = selectedUsersData.map(u => u.uid).filter(Boolean) as string[];
-        const recipientEmails = selectedUsersData.map(u => u.email);
+        const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+        const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+        const recipientUids = selectedUsersData.map(u => u.uid).filter(u => u && u.toLowerCase().trim() !== myUid) as string[];
+        const recipientEmails = selectedUsersData.map(u => u.email).filter(e => e && e.toLowerCase().trim() !== myEmail);
         const targets = recipientUids.length > 0 ? recipientUids : recipientEmails;
 
-        await sendNotification(
-          targets,
-          `📊 Nuevo Informe Psicológico Compartido`,
-          `${profile.name} te ha compartido un Informe de Canalizaciones y Seguimiento Psicopedagógico.`,
-          sharedReportId
-        );
+        if (targets.length > 0) {
+          await sendNotification(
+            targets,
+            `📊 Nuevo Informe Psicológico Compartido`,
+            `${profile.name} te ha compartido un Informe de Canalizaciones y Seguimiento Psicopedagógico.`,
+            sharedReportId,
+            false,
+            { creatorUid: profile.uid, creatorEmail: profile.email, isCreationNotification: true }
+          );
+        }
       }
 
       if (addLog) {

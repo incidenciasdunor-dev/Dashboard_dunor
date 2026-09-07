@@ -67,12 +67,18 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
 
   const normRole = normalizeUserRole(profile.role);
+  const isSuperUser = Boolean(
+    isSuperAdmin || 
+    normRole === 'ADMIN' || 
+    (profile?.email && (profile.email.toLowerCase().includes('dunor') || profile.email.toLowerCase() === 'mi_yorch@hotmail.com'))
+  );
   const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
   const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
   const canDeleteReferralActual = Boolean(
     canDeleteReferral || 
-    isPsychologistUser || 
+    isSuperUser ||
     isSuperAdmin || 
+    isPsychologistUser || 
     normRole === 'ADMIN'
   );
 
@@ -403,28 +409,38 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       const targetRecipients: string[] = [];
       const recipientEmails = new Set<string>();
 
-      // 1. Teacher who registered
-      if (profile.uid) targetRecipients.push(profile.uid);
-      if (profile.email) {
-        targetRecipients.push(profile.email.toLowerCase());
-        recipientEmails.add(profile.email.toLowerCase());
-      }
+      // Note: The teacher/user who creates the referral is strictly excluded from receiving creation notifications and emails.
 
-      // 2. Assigned Coordinator
+      // 1. Coordinador Asignado (ÚNICAMENTE al coordinador asignado al docente/canalización)
       if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
       if (newRef.coordinatorEmail) {
         targetRecipients.push(newRef.coordinatorEmail.toLowerCase());
         recipientEmails.add(newRef.coordinatorEmail.toLowerCase());
       }
+      if (profile.assignedCoordinatorId) {
+        targetRecipients.push(profile.assignedCoordinatorId);
+      }
+      if (profile.assignedCoordinatorEmail) {
+        targetRecipients.push(profile.assignedCoordinatorEmail.toLowerCase());
+        recipientEmails.add(profile.assignedCoordinatorEmail.toLowerCase());
+      }
+      if (profile.assignedCoordinatorName) {
+        const cByName = coordinators.find(c => c.name === profile.assignedCoordinatorName);
+        if (cByName?.uid) targetRecipients.push(cByName.uid);
+        if (cByName?.email) {
+          targetRecipients.push(cByName.email.toLowerCase());
+          recipientEmails.add(cByName.email.toLowerCase());
+        }
+      }
 
-      // 3. Assigned Psychologist
+      // 2. Assigned Psychologist
       if (selectedPsych?.uid) targetRecipients.push(selectedPsych.uid);
       if (newRef.psychologistEmail) {
         targetRecipients.push(newRef.psychologistEmail.toLowerCase());
         recipientEmails.add(newRef.psychologistEmail.toLowerCase());
       }
 
-      // 4. Directives
+      // 3. Directives
       directives.forEach(d => {
         if (d.uid) targetRecipients.push(d.uid);
         if (d.email) {
@@ -433,7 +449,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         }
       });
 
-      // 5. Administrators
+      // 4. Administrators
       admins.forEach(a => {
         if (a.uid) targetRecipients.push(a.uid);
         if (a.email) {
@@ -442,7 +458,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         }
       });
 
-      // 6. Additional recipients (Copia a docente / directivo)
+      // 5. Additional recipients (Copia a docente / directivo)
       formData.additionalRecipients.forEach(r => {
         if (r.uid) targetRecipients.push(r.uid);
         if (r.email) {
@@ -451,9 +467,21 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         }
       });
 
-      if (sendNotification) {
+      // Strictly exclude creator from notification recipients & emails
+      const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+      const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+
+      const filteredRecipients = targetRecipients.filter(t => {
+        const clean = t.toLowerCase().trim();
+        return clean !== myUid && clean !== myEmail;
+      });
+
+      if (myEmail) recipientEmails.delete(myEmail);
+      if (myUid) recipientEmails.delete(myUid);
+
+      if (sendNotification && filteredRecipients.length > 0) {
         await sendNotification(
-          targetRecipients,
+          filteredRecipients,
           'Nueva Canalización Psicopedagógica',
           `Se ha registrado una canalización para el estudiante "${newRef.studentName}" (${newRef.gradeGroup}) por ${profile.name}.`,
           '',
@@ -461,6 +489,9 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           { 
             referralId: id, 
             type: 'referral',
+            creatorUid: profile.uid,
+            creatorEmail: profile.email,
+            isCreationNotification: true,
             detailsHtml: `<strong>Estudiante:</strong> ${newRef.studentName} (${newRef.gradeGroup})<br/><strong>Remitido por:</strong> ${profile.name}<br/><strong>Motivo:</strong> ${newRef.reasonAndBackground}`
           }
         );
@@ -583,6 +614,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         if (cObj?.uid) recipientUids.add(cObj.uid);
       }
 
+      // Exclude psychologist from receiving their own comment notification
+      if (profile.uid) recipientUids.delete(profile.uid);
+      if (profile.email) recipientUids.delete(profile.email.toLowerCase());
+
       const notifTitle = 'Comentario del Psicólogo en Canalización';
       const notifMessage = `El área de Psicología (${profile.name}) ha publicado un comentario para la canalización del alumno "${ref.studentName}": "${commentVal.slice(0, 80)}${commentVal.length > 80 ? '...' : ''}"`;
 
@@ -593,7 +628,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           notifMessage,
           ref.incidentId || '',
           false, // skipAdmins = false so directives & admins receive it too
-          { referralId: ref.id, type: 'referral' }
+          { referralId: ref.id, type: 'referral', creatorUid: profile.uid, creatorEmail: profile.email }
         );
       } else {
         for (const uid of recipientUids) {
@@ -899,6 +934,20 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                         </div>
                       )}
                     </div>
+
+                    {canDeleteReferralActual && (
+                      <div className="flex justify-end pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteReferral(ref)}
+                          className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
+                          title="Eliminar canalización permanentemente"
+                        >
+                          <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                          <span>Eliminar Canalización</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

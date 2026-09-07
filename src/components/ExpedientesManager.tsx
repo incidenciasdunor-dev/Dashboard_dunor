@@ -544,7 +544,6 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       // Send in-app and email notifications (Requirement 3)
       if (sendNotification) {
         const targetRecipients: string[] = [];
-        if (profile.uid) targetRecipients.push(profile.uid);
         if (selectedLinkedReferralId) {
           const linkedRef = referrals.find(r => r.id === selectedLinkedReferralId);
           if (linkedRef) {
@@ -554,14 +553,31 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
             else if (linkedRef.coordinatorEmail) targetRecipients.push(linkedRef.coordinatorEmail);
           }
         }
-        await sendNotification(
-          targetRecipients,
-          editingExpedienteId ? `Actualización de Expediente: ${payload.studentName}` : `Nuevo Expediente Psicopedagógico: ${payload.studentName}`,
-          `El área de psicología ha ${editingExpedienteId ? 'actualizado' : 'registrado'} el expediente psicopedagógico para el estudiante "${payload.studentName}" (${payload.gradeGroup}).`,
-          id,
-          false,
-          { expedienteId: id, type: 'expediente' }
-        );
+
+        // Strictly exclude the creator/editor from receiving this notification
+        const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+        const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+        const filteredRecipients = targetRecipients.filter(t => {
+          const clean = t.toLowerCase().trim();
+          return clean !== myUid && clean !== myEmail;
+        });
+
+        if (filteredRecipients.length > 0) {
+          await sendNotification(
+            filteredRecipients,
+            editingExpedienteId ? `Actualización de Expediente: ${payload.studentName}` : `Nuevo Expediente Psicopedagógico: ${payload.studentName}`,
+            `El área de psicología ha ${editingExpedienteId ? 'actualizado' : 'registrado'} el expediente psicopedagógico para el estudiante "${payload.studentName}" (${payload.gradeGroup}).`,
+            id,
+            false,
+            { 
+              expedienteId: id, 
+              type: 'expediente',
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: !editingExpedienteId
+            }
+          );
+        }
       }
 
       setSaveSuccessMessage(true);
@@ -657,16 +673,22 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
       // 3. Send system notification to selected recipients
       if (sendNotification) {
-        const recipientUids = selectedUsersData.map(u => u.uid).filter(Boolean) as string[];
-        const recipientEmails = selectedUsersData.map(u => u.email);
+        const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+        const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+        const recipientUids = selectedUsersData.map(u => u.uid).filter(u => u && u.toLowerCase().trim() !== myUid) as string[];
+        const recipientEmails = selectedUsersData.map(u => u.email).filter(e => e && e.toLowerCase().trim() !== myEmail);
         const targets = recipientUids.length > 0 ? recipientUids : recipientEmails;
 
-        await sendNotification(
-          targets,
-          `📄 Ficha de Expediente Compartida: ${formData.studentName}`,
-          `${profile.name} te ha compartido los avances del expediente psicopedagógico de ${formData.studentName} (${formData.gradeGroup}).`,
-          id
-        );
+        if (targets.length > 0) {
+          await sendNotification(
+            targets,
+            `📄 Ficha de Expediente Compartida: ${formData.studentName}`,
+            `${profile.name} te ha compartido los avances del expediente psicopedagógico de ${formData.studentName} (${formData.gradeGroup}).`,
+            id,
+            false,
+            { creatorUid: profile.uid, creatorEmail: profile.email }
+          );
+        }
       }
 
       await addLog(
@@ -826,15 +848,22 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         if (coordinators) {
           coordinators.forEach(c => { if (c.email) recipients.add(c.email.toLowerCase()); });
         }
+
+        // Exclude current user from status change notification
+        if (profile.email) recipients.delete(profile.email.toLowerCase());
+        if (profile.uid) recipients.delete(profile.uid);
+
         const statusLabel = newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso';
-        await sendNotification(
-          Array.from(recipients),
-          `Estatus de Expediente Actualizado: ${exp.studentName}`,
-          `El expediente psicopedagógico del estudiante ${exp.studentName} (${exp.gradeGroup || ''}) ha cambiado a estatus "${statusLabel}" por ${profile.name}.`,
-          exp.id,
-          false,
-          { expedienteId: exp.id, type: 'expediente' }
-        );
+        if (recipients.size > 0) {
+          await sendNotification(
+            Array.from(recipients),
+            `Estatus de Expediente Actualizado: ${exp.studentName}`,
+            `El expediente psicopedagógico del estudiante ${exp.studentName} (${exp.gradeGroup || ''}) ha cambiado a estatus "${statusLabel}" por ${profile.name}.`,
+            exp.id,
+            false,
+            { expedienteId: exp.id, type: 'expediente', creatorUid: profile.uid, creatorEmail: profile.email }
+          );
+        }
       }
     } catch (err) {
       console.error("Error updating status:", err);
