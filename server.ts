@@ -5,8 +5,16 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
 import fs from "fs";
+import { patchFirestore } from "./scripts/patch-firestore.js";
 
 dotenv.config();
+
+// Ensure firestore assertion patches are applied
+try {
+  patchFirestore();
+} catch (e) {
+  console.warn("Notice patching firestore on startup:", e);
+}
 
 // Initialize Firebase Admin dynamically from config
 const initializeAdmin = () => {
@@ -132,6 +140,22 @@ async function startServer() {
           if (phone) docData.phone = phone;
           if (educationLevel) docData.educationLevel = educationLevel;
           await dbAdmin.collection('users').doc(email).set(docData, { merge: true });
+
+          if (createdInAuth) {
+            await dbAdmin.collection('logs').add({
+              action: 'Creó un usuario en Authentication',
+              userEmail: email,
+              userName: displayName,
+              userRole: role,
+              creatorName: req.body.creatorName || displayName,
+              creatorEmail: req.body.creatorEmail || email,
+              creatorRole: req.body.creatorRole || role,
+              module: 'Usuarios',
+              recordId: email,
+              timestamp: Date.now(),
+              details: `Usuario dado de alta y registrado en Authentication. Rol: ${role}`
+            }).catch(() => {});
+          }
         } catch (dbErr) {
           console.warn("Firestore sync in create-auth notice:", dbErr);
         }

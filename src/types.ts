@@ -1,4 +1,4 @@
-export type UserRole = 'ADMIN' | 'COORDINATOR' | 'TEACHER' | 'PSYCHOLOGIST' | 'DIRECTIVE';
+export type UserRole = 'ADMIN' | 'COORDINATOR' | 'TEACHER' | 'PSYCHOLOGIST' | 'DIRECTIVE' | 'BLOQUEADO';
 export type IncidentStatus = 'PENDIENTE' | 'RECIBIDO' | 'EN_SEGUIMIENTO' | 'CERRADO';
 export type TaskStatus = 'ASIGNADA' | 'RECIBIDA' | 'REALIZADA' | 'COMPLETADA';
 
@@ -190,11 +190,39 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canManageUsers: false,
     canSendMassMessages: false,
   },
+  BLOQUEADO: {
+    canViewNotifications: false,
+    canViewIncidents: false,
+    canCreateIncident: false,
+    canViewTasks: false,
+    canCreateTask: false,
+    canViewUsers: false,
+    canViewLogs: false,
+    canViewSettings: false,
+    canViewReferrals: false,
+    canCreateReferral: false,
+    canViewExpedientes: false,
+    canManageExpedientes: false,
+    canViewInformes: false,
+
+    canEditIncidents: false,
+    canDeleteIncidents: false,
+    canDeleteReferrals: false,
+    canChangeStatus: false,
+    canAssignPsychologist: false,
+    canAddFollowUp: false,
+    canExportReports: false,
+    canSendCongratulations: false,
+    canManageUsers: false,
+    canSendMassMessages: false,
+  },
 };
 
 export const normalizeUserRole = (roleStr?: string | null): UserRole | undefined => {
   if (!roleStr) return undefined;
   const rUpper = String(roleStr).toUpperCase().trim();
+  if (rUpper === 'BLOQUEADO' || rUpper === 'BLOCKED' || rUpper === 'BLOQUEADA' || rUpper === 'BLOQUEAR') return 'BLOQUEADO';
+  if (rUpper.includes('BLOQ') || rUpper.includes('BLOCK')) return 'BLOQUEADO';
   if (rUpper === 'ADMIN' || rUpper === 'ADMINISTRADOR' || rUpper === 'ADMINISTRADORA' || rUpper === 'ADMINISTRACION' || rUpper === 'ADMINISTRACIÓN') return 'ADMIN';
   if (rUpper === 'DIRECTIVE' || rUpper === 'DIRECTIVO' || rUpper === 'DIRECTIVA' || rUpper === 'DIRECCION' || rUpper === 'DIRECCIÓN' || rUpper === 'DIRECTOR' || rUpper === 'DIRECTORA') return 'DIRECTIVE';
   if (rUpper === 'COORDINATOR' || rUpper === 'COORDINADOR' || rUpper === 'COORDINADORA' || rUpper === 'COORDINACION' || rUpper === 'COORDINACIÓN') return 'COORDINATOR';
@@ -223,6 +251,9 @@ export const getRolePermission = (
   }
 
   const normRole = normalizeUserRole(role);
+  if (normRole === 'BLOQUEADO') {
+    return false;
+  }
   const effectiveRole: UserRole | undefined = normRole || (isSuperAdmin ? 'ADMIN' : undefined);
   const isAdminOrSuperWithoutRole = isSuperAdmin && (normRole === 'ADMIN' || !normRole);
 
@@ -385,7 +416,7 @@ export const SUPER_ADMIN_EMAILS = [
 export const isSuperAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
   const clean = email.toLowerCase().trim();
-  return SUPER_ADMIN_EMAILS.includes(clean) || clean.includes('incidencias.dunor') || clean.includes('yorch');
+  return SUPER_ADMIN_EMAILS.includes(clean);
 };
 
 export interface Expediente {

@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, Component, ReactNode } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Component, ReactNode } from 'react';
 import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetDoc, safeGetDocs, isFirestoreInternalAssertion } from './lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
 import { format } from 'date-fns';
-import { cn, getUserEducationLevel } from './lib/utils';
+import { cn, getUserEducationLevel, normalizeEducationLevel } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAppStructurePdf } from './lib/generateAppStructurePdf';
@@ -30,27 +30,35 @@ import {
 import confetti from 'canvas-confetti';
 
 const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
-  const defaultLogo: string = "/logo.svg";
-  const [imgSrc, setImgSrc] = useState<string>(logoUrl || defaultLogo);
-
-  useEffect(() => {
-    setImgSrc(logoUrl || defaultLogo);
+  const candidateList = useMemo(() => {
+    const list: string[] = [];
+    if (logoUrl && typeof logoUrl === 'string' && logoUrl.trim()) {
+      list.push(logoUrl.trim());
+    }
+    list.push('/logo_dunor.png', '/logo_dunor.svg', '/logo.svg');
+    return Array.from(new Set(list));
   }, [logoUrl]);
 
+  const [candidateIndex, setCandidateIndex] = useState(0);
+
+  useEffect(() => {
+    setCandidateIndex(0);
+  }, [candidateList]);
+
   const handleError = () => {
-    const current: any = imgSrc;
-    if (current !== defaultLogo) {
-      setImgSrc(defaultLogo);
-    } else if (current !== "/logo_dunor.svg") {
-      setImgSrc("/logo_dunor.svg");
-    } else if (current !== "/logo_dunor.png") {
-      setImgSrc("/logo_dunor.png");
-    }
+    setCandidateIndex(prev => {
+      if (prev + 1 < candidateList.length) {
+        return prev + 1;
+      }
+      return prev;
+    });
   };
+
+  const currentSrc = candidateList[candidateIndex] || '/logo_dunor.png';
 
   return (
     <img
-      src={imgSrc}
+      src={currentSrc}
       alt={appName || 'DASHBOARD DUNOR'}
       onError={handleError}
       className={cn("object-contain max-h-full max-w-full", className)}
@@ -141,7 +149,7 @@ const SUPER_ADMIN_EMAILS = [
 const isSuperAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
   const clean = email.toLowerCase().trim();
-  return SUPER_ADMIN_EMAILS.includes(clean) || clean.includes('incidencias.dunor');
+  return SUPER_ADMIN_EMAILS.includes(clean);
 };
 
 class ErrorBoundary extends React.Component<{ children?: React.ReactNode }, { hasError: boolean; error: any }> {
@@ -1044,6 +1052,12 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       // Clean up URL without refreshing
       window.history.replaceState({}, document.title, window.location.pathname);
     }
+
+    const blockedNotice = localStorage.getItem('blocked_account_notice');
+    if (blockedNotice) {
+      setError(blockedNotice);
+      localStorage.removeItem('blocked_account_notice');
+    }
   }, []);
 
   const checkEmail = async (e: React.FormEvent) => {
@@ -1054,7 +1068,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const isSuper = isSuperAdminEmail(emailId);
 
     if (isSuper) {
-      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
+      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador DUNOR";
       const adminProfile: UserProfile = {
         uid: emailId,
         name: adminName,
@@ -1095,6 +1109,16 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
       if (snapshot && snapshot.exists()) {
         const userData = snapshot.data() as UserProfile;
+        
+        // Check if user is blocked
+        if (userData.role === 'BLOQUEADO' || (userData as any).status === 'BLOQUEADO' || (userData as any).isBlocked) {
+          setError("Cuenta bloqueada contacta a Soporte Técnico");
+          setPreProfile(null);
+          setStep('email');
+          setLoading(false);
+          return;
+        }
+
         setPreProfile({ ...userData, uid: snapshot.id });
         if (userData.isRegistered && userData.password) {
           setStep('login');
@@ -1104,46 +1128,10 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         return;
       }
 
-      // If snapshot is null (network offline/failed to fetch from server or cache)
-      if (!snapshot) {
-        // Fallback: allow user to proceed to login step so Auth can authenticate them
-        const fallbackProfile: UserProfile = {
-          uid: emailId,
-          name: emailId.split('@')[0],
-          email: emailId,
-          role: "TEACHER",
-          isRegistered: true
-        };
-        setPreProfile(fallbackProfile);
-        setStep('login');
-        return;
-      }
-
-      // Snapshot exists but document was not found
-      let isDbEmpty = false;
-      try {
-        const usersCheck = await safeGetDocs(query(collection(db, 'users'), limit(1)));
-        if (usersCheck.empty) {
-          isDbEmpty = true;
-        }
-      } catch (checkErr) {
-        console.warn("Check users empty error:", checkErr);
-      }
-
-      if (isDbEmpty) {
-        const initAdminProfile: UserProfile = {
-          uid: emailId,
-          name: "Administrador Inicial",
-          email: emailId,
-          role: "ADMIN",
-          isRegistered: false
-        };
-        setPreProfile(initAdminProfile);
-        setStep('register');
-        return;
-      }
-
-      // Strictly deny access if user is not registered in the database
+      // If document does NOT exist in the users collection:
+      // Strictly deny access. Do not assign any role, do not allow auto-registration, and do not proceed to login/recovery.
+      setPreProfile(null);
+      setStep('email');
       setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos. Póngase en contacto con un administrador para registrar su cuenta.");
       setLoading(false);
       return;
@@ -1168,6 +1156,12 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
     if (!isSuper && !uData) {
       setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos. Póngase en contacto con un administrador.");
+      setLoading(false);
+      return;
+    }
+
+    if (uData && (uData.role === 'BLOQUEADO' || (uData as any).status === 'BLOQUEADO' || (uData as any).isBlocked)) {
+      setError("Cuenta bloqueada contacta a Soporte Técnico");
       setLoading(false);
       return;
     }
@@ -1304,6 +1298,22 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const cleanEmail = email.toLowerCase().trim();
     localStorage.setItem('last_user_email', cleanEmail);
 
+    const isSuper = isSuperAdminEmail(cleanEmail);
+    const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
+    const uData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
+
+    if (!isSuper && (!uData || !uData.isRegistered)) {
+      setError("Acceso denegado: El correo electrónico no se encuentra registrado en el sistema.");
+      setLoading(false);
+      return;
+    }
+
+    if (uData && (uData.role === 'BLOQUEADO' || (uData as any).status === 'BLOQUEADO' || (uData as any).isBlocked)) {
+      setError("Cuenta bloqueada contacta a Soporte Técnico");
+      setLoading(false);
+      return;
+    }
+
     let sent = false;
     try {
       await sendPasswordResetEmail(auth, cleanEmail);
@@ -1340,8 +1350,14 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
     const existingData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
 
-    if (!isSuper && !existingData && !preProfile) {
+    if (!isSuper && !existingData) {
       setError("Acceso denegado: Tu correo electrónico no está dado de alta en la base de datos.");
+      setLoading(false);
+      return;
+    }
+
+    if (existingData && (existingData.role === 'BLOQUEADO' || (existingData as any).status === 'BLOQUEADO' || (existingData as any).isBlocked)) {
+      setError("Cuenta bloqueada contacta a Soporte Técnico");
       setLoading(false);
       return;
     }
@@ -1396,6 +1412,25 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       };
 
       await setDoc(doc(db, 'users', cleanEmail), newProfile, { merge: true });
+
+      try {
+        await addDoc(collection(db, 'logs'), {
+          action: 'Activación de cuenta de usuario',
+          userEmail: cleanEmail,
+          userName: newProfile.name,
+          userRole: newProfile.role,
+          creatorName: newProfile.name,
+          creatorEmail: cleanEmail,
+          creatorRole: newProfile.role,
+          module: 'Usuarios',
+          recordId: cleanEmail,
+          timestamp: Date.now(),
+          details: `El usuario completó su registro inicial y activó su contraseña en el sistema. Nombre: ${newProfile.name} | Rol: ${newProfile.role}`
+        });
+      } catch (logErr) {
+        console.warn("Log write on user register notice:", logErr);
+      }
+
       localStorage.setItem('app_user_profile', JSON.stringify(newProfile));
       localStorage.setItem('app_custom_user', JSON.stringify({
         uid: authUid,
@@ -1447,6 +1482,18 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
         const existingData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
 
+        if (!isSuper && !existingData) {
+          setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos.");
+          setLoading(false);
+          return;
+        }
+
+        if (existingData && (existingData.role === 'BLOQUEADO' || (existingData as any).status === 'BLOQUEADO' || (existingData as any).isBlocked)) {
+          setError("Cuenta bloqueada contacta a Soporte Técnico");
+          setLoading(false);
+          return;
+        }
+
         let authUid = existingData?.uid || cleanEmail;
 
         // Sync with Firebase Authentication
@@ -1482,6 +1529,24 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         };
 
         await setDoc(doc(db, 'users', cleanEmail), updatedProfile, { merge: true });
+
+        try {
+          await addDoc(collection(db, 'logs'), {
+            action: 'Restablecimiento de contraseña',
+            userEmail: cleanEmail,
+            userName: updatedProfile.name,
+            userRole: updatedProfile.role,
+            creatorName: updatedProfile.name,
+            creatorEmail: cleanEmail,
+            creatorRole: updatedProfile.role,
+            module: 'Usuarios',
+            recordId: cleanEmail,
+            timestamp: Date.now(),
+            details: `El usuario ${updatedProfile.name} (${cleanEmail}) restableció su contraseña de acceso.`
+          });
+        } catch (logErr) {
+          console.warn("Log write on password reset notice:", logErr);
+        }
 
         // Directly log the user in!
         onCustomLogin({
@@ -2003,6 +2068,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [psychologists, setPsychologists] = useState<UserProfile[]>([]);
   const [directives, setDirectives] = useState<UserProfile[]>([]);
   const [admins, setAdmins] = useState<UserProfile[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [liveToast, setLiveToast] = useState<{
     id: string;
@@ -2235,10 +2301,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   useEffect(() => {
     if (systemSettings) {
-      if (systemSettings.appName) setAppNameInput(systemSettings.appName);
-      if (systemSettings.appLogoUrl) setAppLogoInput(systemSettings.appLogoUrl);
+      if (systemSettings.appName && systemSettings.appName !== appNameInput) setAppNameInput(systemSettings.appName);
+      if (systemSettings.appLogoUrl && systemSettings.appLogoUrl !== appLogoInput) setAppLogoInput(systemSettings.appLogoUrl);
     }
-  }, [systemSettings]);
+  }, [systemSettings?.appName, systemSettings?.appLogoUrl]);
 
   const [logs, setLogs] = useState<Log[]>([]);
   const [logSearchTerm, setLogSearchTerm] = useState<string>('');
@@ -2312,7 +2378,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   useEffect(() => {
     if (profile) {
       const normRole = normalizeUserRole(profile.role);
-      if (normRole === 'PSYCHOLOGIST') {
+      if (normRole === 'PSYCHOLOGIST' && activeTab === 'incidents') {
         setActiveTab('notifications');
       }
     }
@@ -2324,7 +2390,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const requiredPerm = tabPermissionMap[activeTab];
     if (requiredPerm && !can(requiredPerm)) {
       const availableTab = tabPriorityOrder.find(item => can(item.key));
-      if (availableTab) {
+      if (availableTab && availableTab.id !== activeTab) {
         setActiveTab(availableTab.id);
       }
     }
@@ -2345,7 +2411,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           } as RolePermissions;
         }
       });
-      setFirestoreRolePermissions(permissionsMap);
+      setFirestoreRolePermissions(prev => {
+        if (JSON.stringify(prev) === JSON.stringify(permissionsMap)) return prev;
+        return permissionsMap;
+      });
     }, (error) => {
       console.warn("Permisos collection listener warning:", error);
     });
@@ -2395,12 +2464,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               }
             });
           }
-          return {
+          const next = {
             ...DEFAULT_SETTINGS,
             ...prev,
             ...data,
             rolePermissions: mergedRolePermissions
           };
+          if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+          return next;
         });
         if (data.appLogoUrl) {
           localStorage.setItem('app_logo_url', data.appLogoUrl);
@@ -2709,7 +2780,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (text.includes('expediente') || text.includes('psicopedagógic')) return 'Expedientes';
     if (text.includes('informe')) return 'Informes';
     if (text.includes('tarea') || text.includes('felicitación') || text.includes('felicitacion')) return 'Tareas / Felicitaciones';
-    if (text.includes('usuario') || text.includes('docente') || text.includes('coordinador')) return 'Usuarios';
+    if (text.includes('usuario') || text.includes('docente') || text.includes('coordinador') || text.includes('directiv') || text.includes('admin')) return 'Usuarios';
     if (text.includes('permiso') || text.includes('categoría') || text.includes('categoria') || text.includes('respaldo') || text.includes('logotipo')) return 'Configuración';
     return 'General';
   };
@@ -2723,20 +2794,25 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       creatorName?: string;
       creatorEmail?: string;
       creatorRole?: string;
+      userEmail?: string;
+      userName?: string;
+      userRole?: string;
     }
   ) => {
-    if (!profile) return;
     try {
-      const creatorName = extra?.creatorName || profile.name || 'Usuario';
-      const creatorEmail = extra?.creatorEmail || profile.email;
-      const creatorRole = extra?.creatorRole || profile.role || 'DOCENTE';
+      const effectiveEmail = profile?.email || activeUser?.email || extra?.creatorEmail || extra?.userEmail || 'incidencias.dunor@gmail.com';
+      const effectiveName = profile?.name || activeUser?.displayName || extra?.creatorName || extra?.userName || (isSuperAdmin ? 'Superadministrador' : effectiveEmail.split('@')[0]);
+      const effectiveRole = profile?.role || (isSuperAdmin ? 'ADMIN' : (extra?.creatorRole || extra?.userRole || 'ADMIN'));
+      const creatorName = extra?.creatorName || effectiveName;
+      const creatorEmail = extra?.creatorEmail || effectiveEmail;
+      const creatorRole = extra?.creatorRole || effectiveRole;
       const moduleName = extra?.module || getModuleFromAction(action, details || '');
 
       await addDoc(collection(db, 'logs'), {
         action,
-        userEmail: profile.email,
-        userName: profile.name,
-        userRole: profile.role,
+        userEmail: effectiveEmail,
+        userName: effectiveName,
+        userRole: effectiveRole,
         creatorName,
         creatorEmail,
         creatorRole,
@@ -3712,6 +3788,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         if (!isMounted) return;
         if (snapshot.exists()) {
           const data = snapshot.data() as UserProfile;
+          if (data.role === 'BLOQUEADO' || (data as any).status === 'BLOQUEADO' || (data as any).isBlocked) {
+            localStorage.setItem('blocked_account_notice', "Cuenta bloqueada contacta a Soporte Técnico");
+            handleLogout();
+            return;
+          }
           if (activeUserUidStr && data.uid !== activeUserUidStr) {
             try {
               updateDoc(doc(db, 'users', emailId), { uid: activeUserUidStr }).catch(e => console.error("Error updating UID:", e));
@@ -3954,6 +4035,27 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [profile, isSuperAdmin]);
 
   useEffect(() => {
+    if (profile && (profile.role === 'BLOQUEADO' || (profile as any).status === 'BLOQUEADO' || (profile as any).isBlocked)) {
+      localStorage.setItem('blocked_account_notice', "Cuenta bloqueada contacta a Soporte Técnico");
+      handleLogout();
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    if (profile?.role === 'ADMIN' || isSuperAdmin) {
+      const q = query(collection(db, 'users'), where('role', '==', 'BLOQUEADO'), limit(100));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        setBlockedUsers(uniqueUsers);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'users (bloqueados)');
+      });
+      return () => unsubscribe();
+    }
+  }, [profile, isSuperAdmin]);
+
+  useEffect(() => {
     if (activeUser && isSuperAdminEmail(activeUser.email) && !profile && !isProfileLoading) {
       const restoreAdmin = async () => {
         try {
@@ -4010,6 +4112,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     setTeachers([]);
     setPsychologists([]);
     setDirectives([]);
+    setBlockedUsers([]);
     try {
       if (auth.currentUser) {
         await signOut(auth).catch((e) => {
@@ -5507,6 +5610,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 psychologists={psychologists}
                 directives={directives}
                 admins={admins}
+                blockedUsers={blockedUsers}
                 addLog={addLog}
                 canManageUsers={can('canManageUsers')}
                 canAssignPsychologist={can('canAssignPsychologist')}
@@ -7152,11 +7256,13 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
     }
   }, [expandedIncidentId, incident.id]);
 
+  const hasMarkedReceivedRef = useRef(false);
   useEffect(() => {
-    if (isExpanded && role === 'COORDINATOR' && !incident.isReceived && !isSuperAdmin) {
+    if (isExpanded && role === 'COORDINATOR' && !incident.isReceived && !isSuperAdmin && !hasMarkedReceivedRef.current) {
+      hasMarkedReceivedRef.current = true;
       onMarkReceived();
     }
-  }, [isExpanded, role, incident.isReceived, onMarkReceived, isSuperAdmin]);
+  }, [isExpanded, role, incident.isReceived, isSuperAdmin]);
 
   const handleAddComment = () => {
     if (!newComment.trim()) return;
@@ -9483,19 +9589,23 @@ const TaskManager = ({
   );
 };
 
-const UserManagement = ({ profile, coordinators, teachers, psychologists, directives = [], admins, addLog, canManageUsers = true, canAssignPsychologist = true, systemSettings, firestoreRolePermissions, sendNotification, sendEmail }: { 
+const UserManagement = ({ profile, coordinators, teachers, psychologists, directives = [], admins, blockedUsers = [], addLog, canManageUsers = true, canAssignPsychologist = true, systemSettings, firestoreRolePermissions, sendNotification, sendEmail }: { 
   profile: UserProfile, 
   coordinators: UserProfile[], 
   teachers: UserProfile[], 
   psychologists: UserProfile[],
   directives?: UserProfile[],
   admins: UserProfile[],
+  blockedUsers?: UserProfile[],
   addLog: (action: string, details?: string, extra?: {
     module?: string;
     recordId?: string;
     creatorName?: string;
     creatorEmail?: string;
     creatorRole?: string;
+    userEmail?: string;
+    userName?: string;
+    userRole?: string;
   }) => Promise<void>,
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
@@ -9536,7 +9646,8 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     profile.role === 'COORDINATOR' ? 'TEACHER' : profile.role === 'DIRECTIVE' ? 'COORDINATOR' : 'TEACHER'
   );
   const [educationLevel, setEducationLevel] = useState<'Preescolar' | 'Primaria' | 'Secundaria'>('Primaria');
-  const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE'>(
+  const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria'>('TODOS');
+  const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE' | 'BLOQUEADO'>(
     profile.role === 'ADMIN' || isSuperAdminEmail(profile.email) 
       ? 'ADMIN' 
       : profile.role === 'DIRECTIVE'
@@ -9545,39 +9656,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   );
   const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
-  const [isSyncingAuth, setIsSyncingAuth] = useState(false);
 
   const isSuperAdmin = isSuperAdminEmail(profile.email);
   const isAdmin = profile.role === 'ADMIN';
   const isDirective = profile.role === 'DIRECTIVE';
   const isCoordinator = profile.role === 'COORDINATOR';
-
-  const handleSyncAllAuthUsers = async () => {
-    setIsSyncingAuth(true);
-    try {
-      const allCurrentUsers = [...admins, ...directives, ...coordinators, ...psychologists, ...teachers];
-      const res = await fetch('/api/sync-all-users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ users: allCurrentUsers })
-      });
-      const data = await res.json();
-      if (data.success) {
-        showSystemPopup(
-          "Sincronización con Authentication Exitosa",
-          `Se han sincronizado y verificado ${data.count || allCurrentUsers.length} usuarios directamente en Firebase Authentication. Todos los administradores y usuarios ahora cuentan con credenciales activas.`,
-          "success"
-        );
-      } else {
-        showSystemPopup("Aviso de Sincronización", data.error || "No se pudo completar la sincronización total.", "warning");
-      }
-    } catch (err: any) {
-      console.error("Sync error:", err);
-      showSystemPopup("Error de Sincronización", err.message || "Error al sincronizar con Authentication", "error");
-    } finally {
-      setIsSyncingAuth(false);
-    }
-  };
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -9588,6 +9671,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     setLoading(true);
     try {
       const emailId = formData.email.toLowerCase().trim();
+      const creatorName = profile?.name || (isSuperAdmin ? 'Superadministrador' : 'Administrador');
+      const creatorEmail = profile?.email || 'incidencias.dunor@gmail.com';
+      const creatorRole = profile?.role || (isSuperAdmin ? 'ADMIN' : 'COORDINATOR');
 
       const newUserData: any = {
         name: formData.name.trim(),
@@ -9595,6 +9681,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         role: newUserRole,
         uid: emailId,
         isRegistered: false,
+        createdBy: creatorEmail,
+        createdByName: creatorName,
+        creatorRole: creatorRole,
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -9611,11 +9700,27 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       }
 
       await setDoc(doc(db, 'users', emailId), newUserData, { merge: true });
-      await addLog(
-        'Creó un usuario',
-        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Nombre: ${formData.name.trim()} | Email: ${emailId} | Rol: ${newUserRole}`,
-        { module: 'Usuarios', recordId: emailId }
-      );
+
+      const logDetails = `Registrado por: ${creatorName} (${creatorRole} - ${creatorEmail}) | Nombre: ${formData.name.trim()} | Email: ${emailId} | Rol: ${newUserRole}${newUserRole === 'TEACHER' && educationLevel ? ` | Nivel: ${educationLevel}` : ''}`;
+
+      try {
+        await addLog(
+          'Creó un usuario',
+          logDetails,
+          { 
+            module: 'Usuarios', 
+            recordId: emailId,
+            creatorName,
+            creatorEmail,
+            creatorRole,
+            userEmail: creatorEmail,
+            userName: creatorName,
+            userRole: creatorRole
+          }
+        );
+      } catch (logErr) {
+        console.warn("Notice calling addLog:", logErr);
+      }
 
       // Send registration confirmation email with the access link and welcome message
       const accessUrl = "https://dashboard-dunor.vercel.app/";
@@ -9698,6 +9803,14 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     ? teachers.filter(t => t.assignedCoordinatorId === profile.uid || t.assignedCoordinatorEmail === profile.email || t.assignedCoordinatorName === profile.name)
     : teachers;
 
+  const canFilterTeachersByLevel = isSuperAdmin || isAdmin || isDirective;
+
+  const filteredTeachers = displayedTeachers.filter(t => {
+    if (!canFilterTeachersByLevel || teacherLevelFilter === 'TODOS') return true;
+    const lvl = getUserEducationLevel(t, coordinators);
+    return normalizeEducationLevel(lvl) === normalizeEducationLevel(teacherLevelFilter);
+  });
+
   const deleteUser = async (userToDelete: UserProfile) => {
     // Rule 1: Coordinator cannot delete themselves or other coordinators
     if (isCoordinator && (userToDelete.role === 'COORDINATOR' || userToDelete.email.toLowerCase() === profile.email.toLowerCase())) {
@@ -9743,7 +9856,18 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   const updateUserRole = async (userToUpdate: UserProfile, newRole: UserRole) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
-      await updateDoc(doc(db, 'users', emailId), { role: newRole });
+      const updateData: any = { 
+        role: newRole,
+        updatedAt: Date.now()
+      };
+      if (newRole === 'BLOQUEADO') {
+        updateData.status = 'BLOQUEADO';
+        updateData.isBlocked = true;
+      } else {
+        updateData.status = 'ACTIVO';
+        updateData.isBlocked = false;
+      }
+      await updateDoc(doc(db, 'users', emailId), updateData);
 
       // Sync role change to Firebase Authentication
       fetch('/api/create-or-update-auth-user', {
@@ -9758,11 +9882,17 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       }).catch(e => console.warn("Failed to sync role to Auth:", e));
 
       await addLog(
-        'Actualizó rol de usuario',
+        newRole === 'BLOQUEADO' ? 'Bloqueó usuario' : 'Actualizó rol de usuario',
         `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email}) | Rol anterior: ${userToUpdate.role} | Nuevo rol: ${newRole}`,
         { module: 'Usuarios', recordId: emailId }
       );
-      showSystemPopup("Rol Actualizado", `El rol de ${userToUpdate.name} fue cambiado a ${newRole} y sincronizado con Authentication.`, "success");
+      showSystemPopup(
+        newRole === 'BLOQUEADO' ? "Usuario Bloqueado" : "Rol Actualizado", 
+        newRole === 'BLOQUEADO'
+          ? `El usuario ${userToUpdate.name} ha sido bloqueado. Se cerrará su sesión en forma automática y se le denegará el acceso con el mensaje: "Cuenta bloqueada contacta a Soporte Técnico".`
+          : `El rol de ${userToUpdate.name} fue cambiado a ${newRole} y sincronizado con Authentication.`, 
+        "success"
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${userToUpdate.email}`);
     }
@@ -9898,17 +10028,6 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {(isAdmin || isSuperAdmin) && (
-            <button
-              onClick={handleSyncAllAuthUsers}
-              disabled={isSyncingAuth}
-              className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl transition-all font-bold text-sm cursor-pointer disabled:opacity-50 border border-slate-200"
-              title="Asegura que todos los usuarios de Firestore estén dados de alta en Firebase Authentication"
-            >
-              <RefreshCw className={cn("w-4 h-4 text-indigo-600", isSyncingAuth && "animate-spin")} />
-              <span>{isSyncingAuth ? 'Sincronizando...' : 'Sincronizar con Authentication'}</span>
-            </button>
-          )}
           {canManageUsers && (
             <button
               onClick={() => setShowAddModal(true)}
@@ -9987,6 +10106,28 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           <School className="w-4 h-4" />
           Docentes
         </button>
+        {isSuperAdmin && (
+          <button
+            onClick={() => setActiveUserTab('BLOQUEADO')}
+            className={cn(
+              "px-6 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-2 whitespace-nowrap",
+              activeUserTab === 'BLOQUEADO' 
+                ? "bg-rose-600 text-white shadow-lg shadow-rose-100" 
+                : "text-rose-600 hover:bg-rose-50"
+            )}
+          >
+            <ShieldAlert className="w-4 h-4" />
+            <span>Bloqueados</span>
+            {blockedUsers.length > 0 && (
+              <span className={cn(
+                "text-[10px] px-2 py-0.5 rounded-full font-bold",
+                activeUserTab === 'BLOQUEADO' ? "bg-white text-rose-700" : "bg-rose-100 text-rose-800"
+              )}>
+                {blockedUsers.length}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -10047,22 +10188,76 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         )}
         
         {activeUserTab === 'TEACHER' && (
+          <div className="space-y-4">
+            {canFilterTeachersByLevel && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  <GraduationCap className="w-4 h-4 text-indigo-600" />
+                  <span>Nivel de Educación:</span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(['TODOS', 'Preescolar', 'Primaria', 'Secundaria'] as const).map(lvl => {
+                    const count = lvl === 'TODOS'
+                      ? displayedTeachers.filter(u => !isSuperAdminEmail(u.email)).length
+                      : displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === normalizeEducationLevel(lvl)).length;
+                    const isActive = teacherLevelFilter === lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setTeacherLevelFilter(lvl)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                          isActive
+                            ? "bg-indigo-600 text-white shadow-sm shadow-indigo-200"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        )}
+                      >
+                        <span>{lvl === 'TODOS' ? 'Todos los Niveles' : lvl}</span>
+                        <span className={cn(
+                          "text-[10px] px-1.5 py-0.5 rounded-full font-bold",
+                          isActive ? "bg-white/20 text-white" : "bg-white text-slate-600 border border-slate-200"
+                        )}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <UserList 
+              title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
+              users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+              onDelete={deleteUser} 
+              onUpdateRole={updateUserRole}
+              showPasswords={isSuperAdmin}
+              canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
+              coordinators={coordinators}
+              psychologists={psychologists}
+              onAssignCoordinator={updateAssignedCoordinator}
+              onAssignPsychologist={updateAssignedPsychologist}
+              onUpdateEducationLevel={updateUserEducationLevel}
+              profile={profile}
+              canManageUsers={canManageUsers}
+              canAssignPsychologist={canAssignPsychologist}
+              onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            />
+          </div>
+        )}
+
+        {activeUserTab === 'BLOQUEADO' && isSuperAdmin && (
           <UserList 
-            title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
-            users={displayedTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+            title="Usuarios Bloqueados (Acceso Denegado al Sistema)" 
+            users={blockedUsers.filter(u => !isSuperAdminEmail(u.email))} 
             onDelete={deleteUser} 
             onUpdateRole={updateUserRole}
             showPasswords={isSuperAdmin}
-            canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
-            coordinators={coordinators}
-            psychologists={psychologists}
-            onAssignCoordinator={updateAssignedCoordinator}
-            onAssignPsychologist={updateAssignedPsychologist}
-            onUpdateEducationLevel={updateUserEducationLevel}
+            canChangeRole={true}
             profile={profile}
             canManageUsers={canManageUsers}
-            canAssignPsychologist={canAssignPsychologist}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={setUserToEditPermissions}
           />
         )}
 
@@ -10331,6 +10526,19 @@ const UserList = ({
                       )}
                     </div>
 
+                    {(u.createdByName || u.createdBy) && (
+                      <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mt-1">
+                        <UserCheck className="w-3 h-3 text-slate-400" />
+                        <span>Registrado por: <strong className="text-slate-600 font-semibold">{u.createdByName || u.createdBy}</strong> {u.creatorRole ? `(${u.creatorRole})` : ''}</span>
+                      </div>
+                    )}
+                    {!u.createdByName && !u.createdBy && u.role === 'ADMIN' && (
+                      <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mt-1">
+                        <UserCheck className="w-3 h-3 text-slate-400" />
+                        <span>Registrado por: <strong className="text-slate-600 font-semibold">Sistema / Superadministrador Inicial</strong></span>
+                      </div>
+                    )}
+
                     {/* Chips showing active custom permissions directly on user card - strictly for SuperAdmin */}
                     {hasCustomPerms && actualCustomEntries.length > 0 && isSuperAdmin && (
                       <div className="flex flex-wrap items-center gap-1.5 mt-2">
@@ -10457,10 +10665,13 @@ const UserList = ({
                     <div className="flex items-center gap-1.5">
                       <div className={cn(
                         "w-2 h-2 rounded-full",
-                        u.isRegistered ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
+                        u.role === 'BLOQUEADO' ? "bg-rose-600 animate-pulse" : u.isRegistered ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
                       )} />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        {u.isRegistered ? 'Registrado' : 'Pendiente'}
+                      <span className={cn(
+                        "text-[10px] font-bold uppercase tracking-wider",
+                        u.role === 'BLOQUEADO' ? "text-rose-600 font-extrabold" : "text-slate-400"
+                      )}>
+                        {u.role === 'BLOQUEADO' ? 'Bloqueado' : u.isRegistered ? 'Registrado' : 'Pendiente'}
                       </span>
                     </div>
                     
@@ -10503,6 +10714,9 @@ const UserList = ({
                             <option value="DIRECTIVE">Directivo</option>
                             <option value="PSYCHOLOGIST">Psicólogo</option>
                             <option value="ADMIN">Admin</option>
+                            {(isSuperAdmin || u.role === 'BLOQUEADO') && (
+                              <option value="BLOQUEADO" className="text-red-600 font-bold">Bloqueado</option>
+                            )}
                           </select>
                           <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                         </div>

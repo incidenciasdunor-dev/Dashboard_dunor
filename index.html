@@ -3,6 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function() {
+        function isFsAssert(str) {
+          if (!str) return false;
+          var s = String(str).toLowerCase();
+          return s.indexOf('internal assertion failed') !== -1 ||
+                 s.indexOf('unexpected state') !== -1 ||
+                 s.indexOf('c050') !== -1 ||
+                 s.indexOf('b815') !== -1 ||
+                 s.indexOf('da08') !== -1 ||
+                 s.indexOf('ca9') !== -1 ||
+                 s.indexOf('fi08') !== -1 ||
+                 (s.indexOf('firestore') !== -1 && (s.indexOf('assertion') !== -1 || s.indexOf('unexpected') !== -1));
+        }
+        var origErr = console.error;
+        console.error = function() {
+          var msg = Array.prototype.slice.call(arguments).map(function(a) {
+            try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch(e) { return String(a); }
+          }).join(' ');
+          if (isFsAssert(msg)) {
+            console.warn('[Firestore Assertion Prevented]:', msg);
+            return;
+          }
+          origErr.apply(console, arguments);
+        };
+        window.addEventListener('error', function(e) {
+          var m = (e.message || '') + ' ' + (e.error ? (e.error.message || e.error.stack || '') : '');
+          if (isFsAssert(m)) {
+            e.preventDefault();
+            if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(e) {
+          var m = '';
+          try { m = (e.reason ? (e.reason.message || e.reason.stack || JSON.stringify(e.reason)) : ''); } catch(err) { m = String(e.reason); }
+          if (isFsAssert(m)) {
+            e.preventDefault();
+            if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
