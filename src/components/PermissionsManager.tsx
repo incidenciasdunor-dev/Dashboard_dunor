@@ -61,6 +61,14 @@ export const ROLE_LABELS: Record<UserRole, { name: string; title: string; color:
     border: 'border-emerald-200',
     desc: 'Registro de incidencias, solicitudes de canalización y seguimiento.' 
   },
+  BLOQUEADO: { 
+    name: 'Bloqueado', 
+    title: 'Usuario Bloqueado',
+    color: 'text-rose-700', 
+    bg: 'bg-rose-50', 
+    border: 'border-rose-200',
+    desc: 'Acceso completamente restringido. La sesión se cierra y se prohíbe el ingreso al sistema.' 
+  },
 };
 
 export const PERMISSION_GROUPS: {

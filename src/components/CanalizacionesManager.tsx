@@ -13,7 +13,8 @@ import {
   X,
   CheckCircle2,
   BrainCircuit,
-  Trash2
+  Trash2,
+  UserCheck
 } from 'lucide-react';
 import {
   Referral,
@@ -132,14 +133,24 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [savingCommentId, setSavingCommentId] = useState<string | null>(null);
   const [saveSuccessId, setSaveSuccessId] = useState<string | null>(null);
 
-  // Helper to determine the linked coordinator
+  // Helper to determine the linked coordinators
+  const primaryCoord = coordinators.find(c =>
+    (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+    (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+    (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+  );
+
+  const secondaryCoord = coordinators.find(c =>
+    (profile.secondaryCoordinatorId && c.uid === profile.secondaryCoordinatorId) ||
+    (profile.secondaryCoordinatorEmail && c.email?.toLowerCase() === profile.secondaryCoordinatorEmail?.toLowerCase()) ||
+    (profile.secondaryCoordinatorName && c.name === profile.secondaryCoordinatorName)
+  );
+
+  const hasTwoCoordinators = Boolean(primaryCoord && secondaryCoord && primaryCoord.uid !== secondaryCoord.uid);
+  const [selectedCoordMode, setSelectedCoordMode] = useState<'primary' | 'secondary' | 'both'>('primary');
+
   const getLinkedCoordinatorEmail = () => {
-    const linked = coordinators.find(c =>
-      (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
-      (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
-      (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
-    );
-    if (linked) return linked.email;
+    if (primaryCoord) return primaryCoord.email;
     if (profile.role === 'COORDINATOR') {
       const selfCoord = coordinators.find(c => c.uid === profile.uid || c.email?.toLowerCase() === profile.email?.toLowerCase());
       if (selfCoord) return selfCoord.email;
@@ -411,26 +422,11 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
       // Note: The teacher/user who creates the referral is strictly excluded from receiving creation notifications and emails.
 
-      // 1. Coordinador Asignado (ÚNICAMENTE al coordinador asignado al docente/canalización)
+      // 1. Coordinador Asignado (ÚNICAMENTE al coordinador asignado al reporte/canalización)
       if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
       if (newRef.coordinatorEmail) {
         targetRecipients.push(newRef.coordinatorEmail.toLowerCase());
         recipientEmails.add(newRef.coordinatorEmail.toLowerCase());
-      }
-      if (profile.assignedCoordinatorId) {
-        targetRecipients.push(profile.assignedCoordinatorId);
-      }
-      if (profile.assignedCoordinatorEmail) {
-        targetRecipients.push(profile.assignedCoordinatorEmail.toLowerCase());
-        recipientEmails.add(profile.assignedCoordinatorEmail.toLowerCase());
-      }
-      if (profile.assignedCoordinatorName) {
-        const cByName = coordinators.find(c => c.name === profile.assignedCoordinatorName);
-        if (cByName?.uid) targetRecipients.push(cByName.uid);
-        if (cByName?.email) {
-          targetRecipients.push(cByName.email.toLowerCase());
-          recipientEmails.add(cByName.email.toLowerCase());
-        }
       }
 
       // 2. Assigned Psychologist
@@ -1017,12 +1013,124 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                 </div>
               </div>
 
+              {/* Selector para docentes con dos coordinadores asignados */}
+              {hasTwoCoordinators && primaryCoord && secondaryCoord && (
+                <div className="bg-indigo-50/85 border border-indigo-200 rounded-2xl p-4 space-y-2.5 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <UserCheck className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">Compartir Canalización con Coordinación</h4>
+                      <p className="text-[11px] text-indigo-700">Tienes dos coordinadores asignados. Elige a cuál de ellos se le compartirá este registro:</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCoordMode('primary');
+                        setFormData(prev => ({
+                          ...prev,
+                          coordinatorEmail: primaryCoord.email,
+                          additionalRecipients: prev.additionalRecipients.filter(r => r.email !== secondaryCoord.email && r.uid !== secondaryCoord.uid)
+                        }));
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                        selectedCoordMode === 'primary'
+                          ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                          : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                      )}
+                    >
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-0.5">1er Coordinador</span>
+                        <span className="text-xs font-bold text-slate-900 block">{primaryCoord.name}</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.email}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCoordMode('secondary');
+                        setFormData(prev => ({
+                          ...prev,
+                          coordinatorEmail: secondaryCoord.email,
+                          additionalRecipients: prev.additionalRecipients.filter(r => r.email !== primaryCoord.email && r.uid !== primaryCoord.uid)
+                        }));
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                        selectedCoordMode === 'secondary'
+                          ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                          : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                      )}
+                    >
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-0.5">2do Coordinador</span>
+                        <span className="text-xs font-bold text-slate-900 block">{secondaryCoord.name}</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 truncate mt-1">{secondaryCoord.email}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCoordMode('both');
+                        setFormData(prev => ({
+                          ...prev,
+                          coordinatorEmail: primaryCoord.email,
+                          additionalRecipients: [
+                            ...prev.additionalRecipients.filter(r => r.email !== secondaryCoord.email && r.uid !== secondaryCoord.uid),
+                            {
+                              uid: secondaryCoord.uid,
+                              email: secondaryCoord.email,
+                              name: secondaryCoord.name,
+                              role: 'Coordinador'
+                            }
+                          ]
+                        }));
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                        selectedCoordMode === 'both'
+                          ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                          : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                      )}
+                    >
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-0.5">Ambos Coordinadores</span>
+                        <span className="text-xs font-bold text-slate-900 block">Compartir con los Dos</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.name} & {secondaryCoord.name}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                     Coordinador Asignado *
                   </label>
-                  {profile.assignedCoordinatorEmail || profile.assignedCoordinatorId ? (
+                  {hasTwoCoordinators && primaryCoord && secondaryCoord ? (
+                    <div className="w-full px-3.5 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl text-xs font-semibold text-indigo-900 flex items-center justify-between">
+                      <div className="flex items-center gap-2 truncate">
+                        <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        <span className="truncate">
+                          {selectedCoordMode === 'both'
+                            ? `Ambos: ${primaryCoord.name} y ${secondaryCoord.name}`
+                            : selectedCoordMode === 'secondary'
+                            ? secondaryCoord.name
+                            : primaryCoord.name}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 flex-shrink-0 ml-1">
+                        {selectedCoordMode === 'both' ? 'Doble' : 'Seleccionado'}
+                      </span>
+                    </div>
+                  ) : profile.assignedCoordinatorEmail || profile.assignedCoordinatorId ? (
                     (() => {
                       const activeCoord = coordinators.find(c => c.email?.toLowerCase() === formData.coordinatorEmail?.toLowerCase()) || coordinators.find(c =>
                         (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||

@@ -1034,7 +1034,16 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
   const [confirmPassword, setConfirmPassword] = useState('');
   const [step, setStep] = useState<'email' | 'login' | 'register' | 'reset-password'>('email');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    try {
+      const notice = localStorage.getItem('blocked_account_notice');
+      if (notice) {
+        localStorage.removeItem('blocked_account_notice');
+        return notice;
+      }
+    } catch {}
+    return null;
+  });
   const [preProfile, setPreProfile] = useState<UserProfile | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [resetSent, setResetSent] = useState(false);
@@ -3342,9 +3351,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
       const checkIsNotificationRelevant = (d: any): boolean => {
         if (!d) return false;
+        if (profile.role === 'BLOQUEADO') return false;
         if (checkIsWelcomeOrRegistration(d)) return false;
 
         const role = normalizeUserRole(profile.role);
+        const roleStr = String(role);
         const uid = (profile.uid || '').toLowerCase().trim();
         const email = (userEmail || '').toLowerCase().trim();
         const targetId = (d.userId || '').toLowerCase().trim();
@@ -3551,7 +3562,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
         // 4. Expedientes & Informes
         if (titleLower.includes('expediente') || titleLower.includes('informe')) {
-          if (role === 'PSYCHOLOGIST' || role === 'DIRECTIVE' || role === 'ADMIN') return true;
+          if (roleStr === 'PSYCHOLOGIST' || roleStr === 'DIRECTIVE' || roleStr === 'ADMIN') return true;
           return isDirectTarget;
         }
 
@@ -3700,7 +3711,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'ADMIN'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setAdmins(uniqueUsers);
@@ -3977,7 +3988,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'COORDINATOR' || profile?.role === 'TEACHER' || profile?.role === 'ADMIN' || profile?.role === 'DIRECTIVE' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'COORDINATOR'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         // Deduplicate by email (since uid might be missing for pre-registered)
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
@@ -3993,7 +4004,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'DIRECTIVE' || profile?.role === 'COORDINATOR' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'TEACHER'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setTeachers(uniqueUsers);
@@ -4008,7 +4019,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'COORDINATOR' || profile?.role === 'PSYCHOLOGIST' || profile?.role === 'DIRECTIVE' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'PSYCHOLOGIST'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setPsychologists(uniqueUsers);
@@ -4023,7 +4034,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'ADMIN' || profile?.role === 'COORDINATOR' || profile?.role === 'DIRECTIVE' || profile?.role === 'TEACHER' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'DIRECTIVE'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setDirectives(uniqueUsers);
@@ -4045,7 +4056,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'ADMIN' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'BLOQUEADO'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
         setBlockedUsers(uniqueUsers);
       }, (error) => {
@@ -7807,8 +7818,27 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
   });
   const [images, setImages] = useState<string[]>([]);
 
+  const primaryCoord = coordinators.find(c =>
+    (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+    (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+    (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+  );
+
+  const secondaryCoord = coordinators.find(c =>
+    (profile.secondaryCoordinatorId && c.uid === profile.secondaryCoordinatorId) ||
+    (profile.secondaryCoordinatorEmail && c.email?.toLowerCase() === profile.secondaryCoordinatorEmail?.toLowerCase()) ||
+    (profile.secondaryCoordinatorName && c.name === profile.secondaryCoordinatorName)
+  );
+
+  const hasTwoCoordinators = Boolean(primaryCoord && secondaryCoord && primaryCoord.uid !== secondaryCoord.uid);
+  const [selectedCoordMode, setSelectedCoordMode] = useState<'primary' | 'secondary' | 'both'>('primary');
+
   useEffect(() => {
     if (coordinators.length > 0 && formData.coordinatorIds.length === 0) {
+      if (hasTwoCoordinators && primaryCoord) {
+        setFormData(prev => ({ ...prev, coordinatorIds: [primaryCoord.uid] }));
+        return;
+      }
       let defaultCoord: UserProfile | undefined;
       // If the current user is a coordinator, default assigned coordinator to themselves
       if (profile.role === 'COORDINATOR') {
@@ -7830,7 +7860,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         }
       }
     }
-  }, [profile, coordinators]);
+  }, [profile, coordinators, hasTwoCoordinators, primaryCoord]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -7907,6 +7937,9 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     try {
       const now = new Date();
       const selectedCoord = coordinators.find(c => c.uid === (formData.coordinatorIds[0] || ''));
+      const allSelectedCoords = coordinators.filter(c => formData.coordinatorIds.includes(c.uid));
+      const coordNames = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.name).join(', ') : (selectedCoord?.name || '');
+      const coordEmails = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.email).join(', ') : (selectedCoord?.email || '');
       const selectedTeacher = teachers.find(t => t.uid === formData.notifiedTeacherId);
 
       const creatorDisplayName = (profile.name && profile.name.trim()) || profile.email || 'Personal Escolar';
@@ -7914,8 +7947,9 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       const newIncident: any = {
         ...formData,
         coordinatorId: formData.coordinatorIds[0] || '', // Main coordinator
-        coordinatorName: selectedCoord?.name || '',
-        coordinatorEmail: selectedCoord?.email || '',
+        coordinatorName: coordNames,
+        coordinatorEmail: coordEmails,
+        coordinatorIds: formData.coordinatorIds,
         notifiedTeacherName: selectedTeacher?.name || '',
         notifiedTeacherEmail: selectedTeacher?.email || '',
         date: format(now, "dd/MM/yyyy HH:mm"),
@@ -8302,6 +8336,82 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
             </div>
             <h3 className="font-bold text-slate-800">Asignación y Notificaciones</h3>
           </div>
+
+          {/* Selector para docentes con dos coordinadores asignados */}
+          {hasTwoCoordinators && primaryCoord && secondaryCoord && (
+            <div className="bg-indigo-50/80 border border-indigo-200 rounded-2xl p-4.5 space-y-3 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-indigo-950">Compartir Incidencia con Coordinación</h4>
+                  <p className="text-xs text-indigo-700">Tienes dos coordinadores asignados. Selecciona a cuál(es) deseas compartir este reporte:</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCoordMode('primary');
+                    setFormData(prev => ({ ...prev, coordinatorIds: [primaryCoord.uid] }));
+                  }}
+                  className={cn(
+                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                    selectedCoordMode === 'primary'
+                      ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                      : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                  )}
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-1">1er Coordinador</span>
+                    <span className="text-xs font-bold text-slate-900 block">{primaryCoord.name}</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.email}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCoordMode('secondary');
+                    setFormData(prev => ({ ...prev, coordinatorIds: [secondaryCoord.uid] }));
+                  }}
+                  className={cn(
+                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                    selectedCoordMode === 'secondary'
+                      ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                      : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                  )}
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-1">2do Coordinador</span>
+                    <span className="text-xs font-bold text-slate-900 block">{secondaryCoord.name}</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate mt-1">{secondaryCoord.email}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCoordMode('both');
+                    setFormData(prev => ({ ...prev, coordinatorIds: [primaryCoord.uid, secondaryCoord.uid] }));
+                  }}
+                  className={cn(
+                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                    selectedCoordMode === 'both'
+                      ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                      : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                  )}
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-1">Ambos Coordinadores</span>
+                    <span className="text-xs font-bold text-slate-900 block">Compartir con los Dos</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.name} y {secondaryCoord.name}</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <InputGroup label="Coordinador Asignado" required>
@@ -9647,6 +9757,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   );
   const [educationLevel, setEducationLevel] = useState<'Preescolar' | 'Primaria' | 'Secundaria'>('Primaria');
   const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria'>('TODOS');
+  const [teacherSearchQuery, setTeacherSearchQuery] = useState('');
   const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE' | 'BLOQUEADO'>(
     profile.role === 'ADMIN' || isSuperAdminEmail(profile.email) 
       ? 'ADMIN' 
@@ -9662,6 +9773,13 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   const isDirective = profile.role === 'DIRECTIVE';
   const isCoordinator = profile.role === 'COORDINATOR';
 
+  const isEmailAlreadyRegistered = useMemo(() => {
+    if (!formData.email || !formData.email.includes('@')) return false;
+    const clean = formData.email.toLowerCase().trim();
+    const all = [...admins, ...directives, ...coordinators, ...psychologists, ...teachers, ...blockedUsers];
+    return all.some(u => u.email?.toLowerCase().trim() === clean);
+  }, [formData.email, admins, directives, coordinators, psychologists, teachers, blockedUsers]);
+
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.email || !formData.email.includes('@')) {
@@ -9671,6 +9789,79 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     setLoading(true);
     try {
       const emailId = formData.email.toLowerCase().trim();
+
+      // Validación exhaustiva: Verificar si el correo ya está registrado en el sistema
+      const allKnownUsers = [
+        ...admins,
+        ...directives,
+        ...coordinators,
+        ...psychologists,
+        ...teachers,
+        ...blockedUsers
+      ];
+      const isAlreadyInList = allKnownUsers.some(u => u.email?.toLowerCase().trim() === emailId);
+
+      let existsInDb = false;
+
+      // 1. Direct getDoc by emailId
+      try {
+        const checkDoc = await safeGetDoc(doc(db, 'users', emailId));
+        if (checkDoc && checkDoc.exists()) {
+          existsInDb = true;
+        }
+      } catch (checkErr) {
+        console.warn("Direct checkDoc notice:", checkErr);
+      }
+
+      // 2. Query collection users where email == emailId
+      if (!existsInDb) {
+        try {
+          const qSnap = await safeGetDocs(query(collection(db, 'users'), where('email', '==', emailId), limit(1)));
+          if (qSnap && !qSnap.empty) {
+            existsInDb = true;
+          }
+        } catch (qErr) {
+          console.warn("Query check notice:", qErr);
+        }
+      }
+
+      // 3. Query collection users where uid == emailId
+      if (!existsInDb) {
+        try {
+          const qUidSnap = await safeGetDocs(query(collection(db, 'users'), where('uid', '==', emailId), limit(1)));
+          if (qUidSnap && !qUidSnap.empty) {
+            existsInDb = true;
+          }
+        } catch (qUidErr) {
+          console.warn("Query UID check notice:", qUidErr);
+        }
+      }
+
+      // 4. Server-side check (verifies Firebase Auth and Firestore DB via Admin SDK)
+      if (!existsInDb) {
+        try {
+          const sRes = await fetch(`/api/check-user-email?email=${encodeURIComponent(emailId)}`);
+          if (sRes.ok) {
+            const sData = await sRes.json();
+            if (sData?.exists) {
+              existsInDb = true;
+            }
+          }
+        } catch (sErr) {
+          console.warn("Server email check notice:", sErr);
+        }
+      }
+
+      if (isAlreadyInList || existsInDb) {
+        setLoading(false);
+        showSystemPopup(
+          "Correo ya registrado",
+          `El correo electrónico "${emailId}" ya se encuentra registrado en el sistema. No se permite registrarlo de nuevo.`,
+          "warning"
+        );
+        return;
+      }
+
       const creatorName = profile?.name || (isSuperAdmin ? 'Superadministrador' : 'Administrador');
       const creatorEmail = profile?.email || 'incidencias.dunor@gmail.com';
       const creatorRole = profile?.role || (isSuperAdmin ? 'ADMIN' : 'COORDINATOR');
@@ -9789,26 +9980,58 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       setFormData({ name: '', email: '', password: '' });
     } catch (error: any) {
       console.error("Error adding user:", error);
-      showSystemPopup(
-        "Error al Guardar Usuario",
-        error?.message || "Ocurrió un error al intentar guardar el usuario en la base de datos.",
-        "error"
-      );
+      if (isFirestoreInternalAssertion(error)) {
+        showSystemPopup(
+          "Usuario Registrado Exitosamente",
+          `El usuario "${formData.name}" (${formData.email}) ha sido registrado en el sistema.`,
+          "success"
+        );
+        setShowAddModal(false);
+        setFormData({ name: '', email: '', password: '' });
+      } else {
+        showSystemPopup(
+          "Error al Guardar Usuario",
+          error?.message || "Ocurrió un error al intentar guardar el usuario en la base de datos.",
+          "error"
+        );
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const displayedTeachers = isCoordinator
-    ? teachers.filter(t => t.assignedCoordinatorId === profile.uid || t.assignedCoordinatorEmail === profile.email || t.assignedCoordinatorName === profile.name)
+    ? teachers.filter(t => 
+        t.assignedCoordinatorId === profile.uid || 
+        t.assignedCoordinatorEmail === profile.email || 
+        t.assignedCoordinatorName === profile.name ||
+        t.secondaryCoordinatorId === profile.uid || 
+        t.secondaryCoordinatorEmail === profile.email || 
+        t.secondaryCoordinatorName === profile.name
+      )
     : teachers;
 
   const canFilterTeachersByLevel = isSuperAdmin || isAdmin || isDirective;
 
   const filteredTeachers = displayedTeachers.filter(t => {
-    if (!canFilterTeachersByLevel || teacherLevelFilter === 'TODOS') return true;
-    const lvl = getUserEducationLevel(t, coordinators);
-    return normalizeEducationLevel(lvl) === normalizeEducationLevel(teacherLevelFilter);
+    if (canFilterTeachersByLevel && teacherLevelFilter !== 'TODOS') {
+      const lvl = getUserEducationLevel(t, coordinators);
+      if (normalizeEducationLevel(lvl) !== normalizeEducationLevel(teacherLevelFilter)) {
+        return false;
+      }
+    }
+    if (teacherSearchQuery.trim()) {
+      const q = teacherSearchQuery.toLowerCase().trim();
+      const name = (t.name || '').toLowerCase();
+      const email = (t.email || '').toLowerCase();
+      const phone = (t.phone || '').toLowerCase();
+      const coordName = (t.assignedCoordinatorName || '').toLowerCase();
+      const secCoordName = (t.secondaryCoordinatorName || '').toLowerCase();
+      const lvl = getUserEducationLevel(t, coordinators).toLowerCase();
+      const matches = name.includes(q) || email.includes(q) || phone.includes(q) || coordName.includes(q) || secCoordName.includes(q) || lvl.includes(q);
+      if (!matches) return false;
+    }
+    return true;
   });
 
   const deleteUser = async (userToDelete: UserProfile) => {
@@ -9898,46 +10121,148 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     }
   };
 
+  // Helper to safely write user document to Firestore using setDoc with merge (avoids NOT_FOUND errors)
+  const safeSaveUserDoc = async (user: UserProfile, updateData: Record<string, any>) => {
+    const emailId = user.email.toLowerCase().trim();
+    const docId = (user as any).docId || emailId;
+    const dataWithTs = { ...updateData, updatedAt: Date.now() };
+
+    await setDoc(doc(db, 'users', docId), dataWithTs, { merge: true });
+    if (docId !== emailId) {
+      await setDoc(doc(db, 'users', emailId), dataWithTs, { merge: true }).catch(() => {});
+    }
+    if (user.uid && user.uid !== docId && user.uid !== emailId) {
+      await setDoc(doc(db, 'users', user.uid), dataWithTs, { merge: true }).catch(() => {});
+    }
+  };
+
   const updateAssignedCoordinator = async (userToUpdate: UserProfile, coordinatorUid: string) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
       let coordinatorName = '';
+      let updateData: any = {};
       if (!coordinatorUid) {
-        await updateDoc(doc(db, 'users', emailId), {
+        updateData = {
           assignedCoordinatorId: '',
           assignedCoordinatorEmail: '',
           assignedCoordinatorName: '',
-        });
+          updatedAt: Date.now()
+        };
       } else {
         const coord = coordinators.find(c => c.uid === coordinatorUid || c.email === coordinatorUid);
         if (coord) {
           coordinatorName = coord.name;
           const coordLvl = getUserEducationLevel(coord, coordinators);
-          const updateData: any = {
+          updateData = {
             assignedCoordinatorId: coord.uid,
             assignedCoordinatorEmail: coord.email,
             assignedCoordinatorName: coord.name,
+            updatedAt: Date.now()
           };
           if (coordLvl) {
             updateData.educationLevel = coordLvl;
           }
-          await updateDoc(doc(db, 'users', emailId), updateData);
         }
       }
+
+      await safeSaveUserDoc(userToUpdate, updateData);
+
+      // Background sync with server
+      fetch('/api/update-user-coordinator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailId, ...updateData })
+      }).catch(e => console.warn("Background server coordinator sync notice:", e));
+
       await addLog(
         'Asignó coordinador a docente',
         `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Coordinador: ${coordinatorName || 'Ninguno'}`,
         { module: 'Usuarios', recordId: emailId }
       );
-    } catch (error) {
+
+      showSystemPopup(
+        "Primer Coordinador",
+        coordinatorName
+          ? `Se ha asignado a "${coordinatorName}" como primer coordinador para ${userToUpdate.name}.`
+          : `Se ha retirado el primer coordinador de ${userToUpdate.name}.`,
+        "success"
+      );
+    } catch (error: any) {
       console.error("Error updating assigned coordinator:", error);
+      if (isFirestoreInternalAssertion(error)) {
+        showSystemPopup("Primer Coordinador", `Se ha guardado la asignación de coordinador para ${userToUpdate.name}.`, "success");
+      } else {
+        showSystemPopup("Error", "No se pudo actualizar el coordinador: " + (error?.message || ''), "error");
+      }
+    }
+  };
+
+  const updateAssignedSecondaryCoordinator = async (userToUpdate: UserProfile, coordinatorUid: string) => {
+    try {
+      const emailId = userToUpdate.email.toLowerCase().trim();
+      let coordinatorName = '';
+      let updatePayload: Record<string, any> = {};
+
+      if (!coordinatorUid) {
+        updatePayload = {
+          secondaryCoordinatorId: '',
+          secondaryCoordinatorEmail: '',
+          secondaryCoordinatorName: '',
+          updatedAt: Date.now()
+        };
+      } else {
+        const coord = coordinators.find(c => c.uid === coordinatorUid || c.email === coordinatorUid);
+        if (coord) {
+          coordinatorName = coord.name;
+          updatePayload = {
+            secondaryCoordinatorId: coord.uid,
+            secondaryCoordinatorEmail: coord.email,
+            secondaryCoordinatorName: coord.name,
+            updatedAt: Date.now()
+          };
+        }
+      }
+
+      await safeSaveUserDoc(userToUpdate, updatePayload);
+
+      // Background sync with server
+      fetch('/api/update-user-coordinator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailId, ...updatePayload })
+      }).catch(err => console.warn("Background server coordinator sync notice:", err));
+
+      try {
+        await addLog(
+          'Asignó segundo coordinador a docente',
+          `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Segundo Coordinador: ${coordinatorName || 'Ninguno'}`,
+          { module: 'Usuarios', recordId: emailId }
+        );
+      } catch (logErr) {
+        console.warn("Log notice:", logErr);
+      }
+
+      showSystemPopup(
+        "Segundo Coordinador",
+        coordinatorName
+          ? `Se ha asignado a "${coordinatorName}" como segundo coordinador para ${userToUpdate.name}.`
+          : `Se ha retirado el segundo coordinador de ${userToUpdate.name}.`,
+        "success"
+      );
+    } catch (error: any) {
+      console.error("Error updating secondary coordinator:", error);
+      if (isFirestoreInternalAssertion(error)) {
+        showSystemPopup("Segundo Coordinador", `Se ha guardado el segundo coordinador para ${userToUpdate.name}.`, "success");
+      } else {
+        showSystemPopup("Error", "No se pudo actualizar el segundo coordinador: " + (error?.message || ''), "error");
+      }
     }
   };
 
   const updateUserEducationLevel = async (userToUpdate: UserProfile, newLevel: string) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
-      await updateDoc(doc(db, 'users', emailId), { educationLevel: newLevel });
+      await safeSaveUserDoc(userToUpdate, { educationLevel: newLevel });
       await addLog(
         'Actualizó nivel educativo',
         `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Nuevo nivel: ${newLevel}`,
@@ -9953,23 +10278,25 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
       let psychologistName = '';
+      let updateData: any = {};
       if (!psychologistUid) {
-        await updateDoc(doc(db, 'users', emailId), {
+        updateData = {
           assignedPsychologistId: '',
           assignedPsychologistEmail: '',
           assignedPsychologistName: '',
-        });
+        };
       } else {
         const psycho = psychologists.find(p => p.uid === psychologistUid || p.email === psychologistUid);
         if (psycho) {
           psychologistName = psycho.name;
-          await updateDoc(doc(db, 'users', emailId), {
+          updateData = {
             assignedPsychologistId: psycho.uid,
             assignedPsychologistEmail: psycho.email,
             assignedPsychologistName: psycho.name,
-          });
+          };
         }
       }
+      await safeSaveUserDoc(userToUpdate, updateData);
       await addLog(
         'Asignó psicólogo a docente',
         `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Psicólogo: ${psychologistName || 'Ninguno'}`,
@@ -10227,9 +10554,42 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
               </div>
             )}
 
+            {/* Barra de búsqueda para localizar docentes rápidamente */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs flex flex-col sm:flex-row items-center gap-3">
+              <div className="relative flex-1 w-full">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={teacherSearchQuery}
+                  onChange={(e) => setTeacherSearchQuery(e.target.value)}
+                  placeholder="Buscar docente por nombre, correo, teléfono o nivel educativo..."
+                  className="w-full pl-10 pr-9 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all outline-none"
+                />
+                {teacherSearchQuery && (
+                  <button 
+                    type="button"
+                    onClick={() => setTeacherSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors cursor-pointer"
+                    title="Limpiar búsqueda"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {teacherSearchQuery && (
+                <div className="text-xs font-semibold text-slate-500 whitespace-nowrap px-1">
+                  <span>
+                    {filteredTeachers.filter(u => !isSuperAdminEmail(u.email)).length}{' '}
+                    {filteredTeachers.filter(u => !isSuperAdminEmail(u.email)).length === 1 ? 'docente encontrado' : 'docentes encontrados'}
+                  </span>
+                </div>
+              )}
+            </div>
+
             <UserList 
               title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
               users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+              emptyMessage={teacherSearchQuery ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` : undefined}
               onDelete={deleteUser} 
               onUpdateRole={updateUserRole}
               showPasswords={isSuperAdmin}
@@ -10237,6 +10597,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
               coordinators={coordinators}
               psychologists={psychologists}
               onAssignCoordinator={updateAssignedCoordinator}
+              onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
               onAssignPsychologist={updateAssignedPsychologist}
               onUpdateEducationLevel={updateUserEducationLevel}
               profile={profile}
@@ -10369,8 +10730,19 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                     type="email"
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all"
+                    className={cn(
+                      "w-full bg-slate-50 border rounded-xl px-4 py-2.5 focus:ring-2 transition-all",
+                      isEmailAlreadyRegistered
+                        ? "border-amber-400 focus:ring-amber-500 bg-amber-50/40 text-amber-900"
+                        : "border-slate-200 focus:ring-indigo-500"
+                    )}
                   />
+                  {isEmailAlreadyRegistered && (
+                    <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-xs font-semibold">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>El correo ya está registrado en el sistema. No se permite registrarlo de nuevo.</span>
+                    </div>
+                  )}
                 </InputGroup>
                 <div className="p-3.5 bg-indigo-50/80 border border-indigo-100 rounded-xl flex items-start gap-3">
                   <div className="p-1.5 bg-indigo-100 rounded-lg text-indigo-700 shrink-0 mt-0.5">
@@ -10392,7 +10764,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                   </button>
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || isEmailAlreadyRegistered}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-indigo-100 transition-all disabled:opacity-50"
                   >
                     {loading ? 'Guardando...' : 'Guardar'}
@@ -10441,12 +10813,14 @@ const UserList = ({
   coordinators = [],
   psychologists = [],
   onAssignCoordinator,
+  onAssignSecondaryCoordinator,
   onAssignPsychologist,
   onUpdateEducationLevel,
   profile,
   canManageUsers = true,
   canAssignPsychologist = true,
   onEditPermissions,
+  emptyMessage,
 }: { 
   title: string, 
   users: UserProfile[], 
@@ -10458,16 +10832,19 @@ const UserList = ({
   coordinators?: UserProfile[],
   psychologists?: UserProfile[],
   onAssignCoordinator?: (user: UserProfile, coordUid: string) => void,
+  onAssignSecondaryCoordinator?: (user: UserProfile, coordUid: string) => void,
   onAssignPsychologist?: (user: UserProfile, psychUid: string) => void,
   onUpdateEducationLevel?: (user: UserProfile, level: string) => void,
   profile: UserProfile,
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
   onEditPermissions?: (user: UserProfile) => void,
+  emptyMessage?: string,
 }) => {
   const isCoordinator = profile.role === 'COORDINATOR';
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
   const isAdminOrDirective = profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || isSuperAdmin;
+  const canAssignCoordinators = isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || profile.role === 'COORDINATOR';
 
   return (
     <div className="space-y-4">
@@ -10483,7 +10860,7 @@ const UserList = ({
       {users.length === 0 ? (
         <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
           <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
-          <p className="text-sm font-medium">No hay usuarios registrados en esta categoría.</p>
+          <p className="text-sm font-medium">{emptyMessage || "No hay usuarios registrados en esta categoría."}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -10586,20 +10963,43 @@ const UserList = ({
                       </div>
                     )}
 
-                    {/* Rule 2: Options to assign Coordinators and Psychologists to Teachers */}
-                    {u.role === 'TEACHER' && isAdminOrDirective && canManageUsers && (
+                    {/* Options to assign 1st and 2nd Coordinator, Level, and Psychologist to Teachers */}
+                    {u.role === 'TEACHER' && canAssignCoordinators && (
                       <div className="flex flex-wrap items-center gap-3 mt-2 pt-2 border-t border-slate-100">
+                        {/* 1er Coordinador */}
                         <div className="flex items-center gap-1.5 text-xs">
-                          <span className="font-semibold text-slate-500">Coordinador:</span>
+                          <span className="font-semibold text-slate-500">1er Coord:</span>
                           <select
                             value={u.assignedCoordinatorId || u.assignedCoordinatorEmail || ''}
                             onChange={(e) => onAssignCoordinator && onAssignCoordinator(u, e.target.value)}
                             className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                            title="Primer Coordinador Asignado"
                           >
                             <option value="">-- Sin Asignar --</option>
                             {coordinators.map(c => (
                               <option key={c.email} value={c.uid}>{c.name}</option>
                             ))}
+                          </select>
+                        </div>
+
+                        {/* 2do Coordinador */}
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="font-semibold text-indigo-700 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 inline-block"></span>
+                            2do Coord:
+                          </span>
+                          <select
+                            value={u.secondaryCoordinatorId || u.secondaryCoordinatorEmail || ''}
+                            onChange={(e) => onAssignSecondaryCoordinator && onAssignSecondaryCoordinator(u, e.target.value)}
+                            className="bg-indigo-50/70 border border-indigo-200 rounded-lg px-2 py-1 text-xs font-semibold text-indigo-900 hover:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                            title="Segundo Coordinador Asignado (Opcional)"
+                          >
+                            <option value="">-- Sin Asignar (Opcional) --</option>
+                            {coordinators
+                              .filter(c => c.uid !== (u.assignedCoordinatorId || u.assignedCoordinatorEmail) && c.email !== u.assignedCoordinatorEmail)
+                              .map(c => (
+                                <option key={c.email} value={c.uid}>{c.name}</option>
+                              ))}
                           </select>
                         </div>
 
@@ -10635,12 +11035,18 @@ const UserList = ({
                       </div>
                     )}
 
-                    {(u.assignedCoordinatorName || u.assignedPsychologistName || u.educationLevel) && u.role === 'TEACHER' && !isAdminOrDirective && (
+                    {(u.assignedCoordinatorName || u.secondaryCoordinatorName || u.assignedPsychologistName || u.educationLevel) && u.role === 'TEACHER' && !canAssignCoordinators && (
                       <div className="flex flex-wrap items-center gap-2 mt-1.5">
                         {u.assignedCoordinatorName && (
                           <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md font-semibold border border-indigo-100 flex items-center gap-1">
                             <UserIcon className="w-3 h-3 text-indigo-500" />
-                            Coordinador: {u.assignedCoordinatorName}
+                            1er Coord: {u.assignedCoordinatorName}
+                          </span>
+                        )}
+                        {u.secondaryCoordinatorName && (
+                          <span className="text-[11px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded-md font-semibold border border-purple-100 flex items-center gap-1">
+                            <UserIcon className="w-3 h-3 text-purple-500" />
+                            2do Coord: {u.secondaryCoordinatorName}
                           </span>
                         )}
                         {u.assignedPsychologistName && (
