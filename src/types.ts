@@ -10,29 +10,19 @@ export interface FollowUpComment {
 
 export interface UserProfile {
   uid: string;
-  docId?: string;
   name: string;
   email: string;
   phone?: string;
   role: UserRole;
-  status?: string;
-  isBlocked?: boolean;
   assignedCoordinatorId?: string;
   assignedCoordinatorEmail?: string;
   assignedCoordinatorName?: string;
-  secondaryCoordinatorId?: string;
-  secondaryCoordinatorEmail?: string;
-  secondaryCoordinatorName?: string;
   assignedPsychologistId?: string;
   assignedPsychologistEmail?: string;
   assignedPsychologistName?: string;
   educationLevel?: 'Preescolar' | 'Primaria' | 'Secundaria' | string;
   isRegistered?: boolean;
   password?: string;
-  createdBy?: string;
-  createdByName?: string;
-  creatorRole?: string;
-  createdAt?: number;
   updatedAt?: number;
   customPermissions?: Partial<RolePermissions>;
 }
@@ -398,12 +388,8 @@ export interface Referral {
   teacherName: string;
   teacherEmail: string;
   coordinatorId?: string;
-  coordinatorIds?: string[];
   coordinatorName?: string;
   coordinatorEmail?: string;
-  secondaryCoordinatorId?: string;
-  secondaryCoordinatorName?: string;
-  secondaryCoordinatorEmail?: string;
   psychologistId?: string;
   psychologistName?: string;
   psychologistEmail?: string;
