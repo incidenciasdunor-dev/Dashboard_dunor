@@ -130,6 +130,7 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
         { key: 'canViewPermissions', label: 'Gestión de Permisos', description: 'Acceso al módulo independiente de gestión de permisos.' },
         { key: 'canViewReferrals', label: 'Ver Canalizaciones Psicopedagógicas', description: 'Acceso al módulo de canalización y comunicación a psicología.' },
         { key: 'canCreateReferral', label: 'Crear Canalización', description: 'Permite enviar nuevas solicitudes de canalización dirigidas a psicología.' },
+        { key: 'canDeleteReferrals', label: 'Eliminar Canalizaciones', description: 'Permite eliminar permanentemente registros de canalización psicopedagógica.' },
         { key: 'canViewExpedientes', label: 'Ver Expedientes Psicopedagógicos', description: 'Acceso al módulo de registro y seguimiento confidencial de expedientes.' },
         { key: 'canManageExpedientes', label: 'Abrir y Gestionar Expedientes', description: 'Permite crear, vincular y actualizar expedientes clínicos/psicopedagógicos.' },
       ]

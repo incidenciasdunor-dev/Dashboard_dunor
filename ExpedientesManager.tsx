@@ -30,7 +30,9 @@ import {
   Expediente,
   Referral,
   UserProfile,
-  normalizeUserRole
+  normalizeUserRole,
+  isSuperAdminEmail,
+  SUPER_ADMIN_EMAILS
 } from '../types';
 import { doc, setDoc, updateDoc, deleteDoc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -45,8 +47,9 @@ interface ExpedientesManagerProps {
   directives?: UserProfile[];
   teachers?: UserProfile[];
   psychologists?: UserProfile[];
+  admins?: UserProfile[];
   addLog: (action: string, details?: string) => Promise<void>;
-  sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean) => Promise<void>;
+  sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>;
   canManageExpedientes?: boolean;
   preselectedReferral?: Referral | null;
   onClearPreselectedReferral?: () => void;
@@ -61,6 +64,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   directives = [],
   teachers = [],
   psychologists = [],
+  admins = [],
   addLog,
   sendNotification,
   canManageExpedientes = true,
@@ -70,8 +74,9 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 }) => {
   const userRole = normalizeUserRole(profile.role);
   const isDirectiveOrCoordinator = userRole === 'DIRECTIVE' || userRole === 'COORDINATOR';
-  const isPsychologist = userRole === 'PSYCHOLOGIST' || userRole === 'ADMIN' || (profile.role && String(profile.role).toLowerCase().includes('psico')) || (profile.role && String(profile.role).toLowerCase().includes('admin'));
-  const allowManageExpedientes = canManageExpedientes && isPsychologist && !isDirectiveOrCoordinator;
+  const isPsychologist = userRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
+  const isAdmin = userRole === 'ADMIN';
+  const allowManageExpedientes = canManageExpedientes && isPsychologist && !isDirectiveOrCoordinator && !isAdmin;
 
   const [viewMode, setViewMode] = useState<'FORM' | 'LIST'>(preselectedReferral && allowManageExpedientes ? 'FORM' : 'LIST');
   const [editingExpedienteId, setEditingExpedienteId] = useState<string | null>(null);
@@ -82,7 +87,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const [selectedSharedExpediente, setSelectedSharedExpediente] = useState<any | null>(null);
   const [sharedModalRecipients, setSharedModalRecipients] = useState<string[]>([]);
   const [isUpdatingRecipients, setIsUpdatingRecipients] = useState(false);
-  const [listTab, setListTab] = useState<'SHARED' | 'MASTER'>(isDirectiveOrCoordinator || !allowManageExpedientes ? 'SHARED' : 'MASTER');
+  const [listTab, setListTab] = useState<'SHARED' | 'MASTER'>(isDirectiveOrCoordinator || isAdmin || !allowManageExpedientes ? 'SHARED' : 'MASTER');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -131,7 +136,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     attachmentData: string;
     psychologyFollowUp: string;
     latestProgress: string;
-    status: 'EN_PROCESO' | 'CASO_CONCLUIDO';
+    status: 'EN_PROCESO' | 'CASO_CONCLUIDO' | 'CONCLUIDO' | 'DERIVADO_EXTERNO';
   }>({
     studentName: '',
     gradeGroup: '',
@@ -163,41 +168,57 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     latestProgress: ''
   });
 
-  // Unique list of Coordinators, Directives, Teachers, and Psychologists
+  // Unique list of Coordinators, Directives, Teachers, Psychologists, and Admins (Super Admins excluded as they receive copies by default)
   const allAvailableRecipients = React.useMemo(() => {
     const list: { email: string; name: string; roleLabel: string; uid?: string }[] = [];
     const emailsSeen = new Set<string>();
 
+    const isExcluded = (u: any) => {
+      if (!u || !u.email) return true;
+      if (isSuperAdminEmail(u.email)) return true;
+      if (u.role === 'SUPER_ADMIN') return true;
+      const lowerName = (u.name || '').toLowerCase();
+      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor')) return true;
+      return false;
+    };
+
     coordinators.forEach(c => {
-      if (c.email && !emailsSeen.has(c.email.toLowerCase())) {
+      if (c.email && !emailsSeen.has(c.email.toLowerCase()) && !isExcluded(c)) {
         emailsSeen.add(c.email.toLowerCase());
         list.push({ email: c.email, name: c.name || 'Coordinador', roleLabel: 'Coordinador', uid: c.uid });
       }
     });
 
     directives.forEach(d => {
-      if (d.email && !emailsSeen.has(d.email.toLowerCase())) {
+      if (d.email && !emailsSeen.has(d.email.toLowerCase()) && !isExcluded(d)) {
         emailsSeen.add(d.email.toLowerCase());
         list.push({ email: d.email, name: d.name || 'Directivo', roleLabel: 'Directivo', uid: d.uid });
       }
     });
 
+    (admins || []).forEach(a => {
+      if (a.email && !emailsSeen.has(a.email.toLowerCase()) && !isExcluded(a)) {
+        emailsSeen.add(a.email.toLowerCase());
+        list.push({ email: a.email, name: a.name || 'Administrador', roleLabel: 'Administrador', uid: a.uid });
+      }
+    });
+
     (teachers || []).forEach(t => {
-      if (t.email && !emailsSeen.has(t.email.toLowerCase())) {
+      if (t.email && !emailsSeen.has(t.email.toLowerCase()) && !isExcluded(t)) {
         emailsSeen.add(t.email.toLowerCase());
         list.push({ email: t.email, name: t.name || 'Docente', roleLabel: 'Docente', uid: t.uid });
       }
     });
 
     (psychologists || []).forEach(p => {
-      if (p.email && !emailsSeen.has(p.email.toLowerCase())) {
+      if (p.email && !emailsSeen.has(p.email.toLowerCase()) && !isExcluded(p)) {
         emailsSeen.add(p.email.toLowerCase());
         list.push({ email: p.email, name: p.name || 'Psicólogo', roleLabel: 'Psicólogo', uid: p.uid });
       }
     });
 
     return list;
-  }, [coordinators, directives, teachers, psychologists]);
+  }, [coordinators, directives, admins, teachers, psychologists]);
 
   // Handle preselected referral if passed
   useEffect(() => {
@@ -254,6 +275,16 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       setSelectedRecipients(prev => prev.filter(e => !dirEmails.includes(e)));
     } else {
       setSelectedRecipients(prev => Array.from(new Set([...prev, ...dirEmails])));
+    }
+  };
+
+  const toggleSelectAllAdmins = () => {
+    const adminEmails = allAvailableRecipients.filter(r => r.roleLabel === 'Administrador').map(r => r.email);
+    const allSelected = adminEmails.length > 0 && adminEmails.every(e => selectedRecipients.includes(e));
+    if (allSelected) {
+      setSelectedRecipients(prev => prev.filter(e => !adminEmails.includes(e)));
+    } else {
+      setSelectedRecipients(prev => Array.from(new Set([...prev, ...adminEmails])));
     }
   };
 
@@ -507,8 +538,47 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
       await addLog(
         editingExpedienteId ? 'Actualización de Expediente' : 'Nuevo Expediente Psicopedagógico',
-        `Se ${editingExpedienteId ? 'actualizó' : 'creó'} la ficha psicopedagógica para ${payload.studentName}.`
+        `${editingExpedienteId ? 'Actualizado' : 'Creado'} por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${payload.studentName} (${payload.gradeGroup || 'S/G'}) | Psicólogo: ${payload.psychologistName || profile.name} | Estatus: ${payload.status || 'EN_PROCESO'}`
       );
+
+      // Send in-app and email notifications (Requirement 3)
+      if (sendNotification) {
+        const targetRecipients: string[] = [];
+        if (selectedLinkedReferralId) {
+          const linkedRef = referrals.find(r => r.id === selectedLinkedReferralId);
+          if (linkedRef) {
+            if (linkedRef.teacherId) targetRecipients.push(linkedRef.teacherId);
+            else if (linkedRef.teacherEmail) targetRecipients.push(linkedRef.teacherEmail);
+            if (linkedRef.coordinatorId) targetRecipients.push(linkedRef.coordinatorId);
+            else if (linkedRef.coordinatorEmail) targetRecipients.push(linkedRef.coordinatorEmail);
+          }
+        }
+
+        // Strictly exclude the creator/editor from receiving this notification
+        const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+        const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+        const filteredRecipients = targetRecipients.filter(t => {
+          const clean = t.toLowerCase().trim();
+          return clean !== myUid && clean !== myEmail;
+        });
+
+        if (filteredRecipients.length > 0) {
+          await sendNotification(
+            filteredRecipients,
+            editingExpedienteId ? `Actualización de Expediente: ${payload.studentName}` : `Nuevo Expediente Psicopedagógico: ${payload.studentName}`,
+            `El área de psicología ha ${editingExpedienteId ? 'actualizado' : 'registrado'} el expediente psicopedagógico para el estudiante "${payload.studentName}" (${payload.gradeGroup}).`,
+            id,
+            false,
+            { 
+              expedienteId: id, 
+              type: 'expediente',
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: !editingExpedienteId
+            }
+          );
+        }
+      }
 
       setSaveSuccessMessage(true);
       setTimeout(() => setSaveSuccessMessage(false), 4000);
@@ -562,7 +632,24 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       }
 
       // 2. Prepare Shared Copy Payload
+      // Collect superadmin recipients (included automatically by default)
+      const superAdminRecipients: { email: string; name: string; roleLabel: string; uid?: string }[] = [];
+      const saEmailsSeen = new Set<string>();
+      (admins || []).forEach(a => {
+        if (a.email && (isSuperAdminEmail(a.email) || (a as any).role === 'SUPER_ADMIN') && !saEmailsSeen.has(a.email.toLowerCase())) {
+          saEmailsSeen.add(a.email.toLowerCase());
+          superAdminRecipients.push({ email: a.email, name: a.name || 'Super Admin', roleLabel: 'Super Admin', uid: a.uid });
+        }
+      });
+      SUPER_ADMIN_EMAILS.forEach(saEmail => {
+        if (!saEmailsSeen.has(saEmail.toLowerCase())) {
+          saEmailsSeen.add(saEmail.toLowerCase());
+          superAdminRecipients.push({ email: saEmail, name: 'Super Admin', roleLabel: 'Super Admin' });
+        }
+      });
+
       const selectedUsersData = allAvailableRecipients.filter(r => selectedRecipients.includes(r.email));
+      const allRecipientsPayload = [...selectedUsersData, ...superAdminRecipients];
       
       const sharedCopyPayload = {
         expedienteId: id,
@@ -577,7 +664,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         sharedBy: profile.name || 'Psicología',
         sharedByEmail: profile.email,
         sharedAt: Date.now(),
-        recipients: selectedUsersData
+        recipients: allRecipientsPayload
       };
 
       // Store in shared_expedientes collection
@@ -586,21 +673,27 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
       // 3. Send system notification to selected recipients
       if (sendNotification) {
-        const recipientUids = selectedUsersData.map(u => u.uid).filter(Boolean) as string[];
-        const recipientEmails = selectedUsersData.map(u => u.email);
+        const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+        const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+        const recipientUids = selectedUsersData.map(u => u.uid).filter(u => u && u.toLowerCase().trim() !== myUid) as string[];
+        const recipientEmails = selectedUsersData.map(u => u.email).filter(e => e && e.toLowerCase().trim() !== myEmail);
         const targets = recipientUids.length > 0 ? recipientUids : recipientEmails;
 
-        await sendNotification(
-          targets,
-          `📄 Ficha de Expediente Compartida: ${formData.studentName}`,
-          `${profile.name} te ha compartido los avances del expediente psicopedagógico de ${formData.studentName} (${formData.gradeGroup}).`,
-          id
-        );
+        if (targets.length > 0) {
+          await sendNotification(
+            targets,
+            `📄 Ficha de Expediente Compartida: ${formData.studentName}`,
+            `${profile.name} te ha compartido los avances del expediente psicopedagógico de ${formData.studentName} (${formData.gradeGroup}).`,
+            id,
+            false,
+            { creatorUid: profile.uid, creatorEmail: profile.email }
+          );
+        }
       }
 
       await addLog(
         'Envío de copia compartida de expediente',
-        `Alumno: ${formData.studentName}. Destinatarios (${selectedRecipients.length}): ${selectedUsersData.map(u => `${u.name} (${u.roleLabel})`).join(', ')}`
+        `Compartido por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${formData.studentName} (${formData.gradeGroup || 'S/G'}) | Destinatarios (${selectedRecipients.length}): ${selectedUsersData.map(u => `${u.name} (${u.roleLabel})`).join(', ')}`
       );
 
       showAlert('Envío exitoso', `¡Copia compartida enviada con éxito a ${selectedRecipients.length} usuario(s) seleccionado(s)!\n\nEl expediente original en la base de datos se guardó completo sin sufrir modificaciones.`, 'success');
@@ -627,12 +720,28 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
     if (!selectedSharedExpediente || !selectedSharedExpediente.id) return;
     setIsUpdatingRecipients(true);
     try {
+      const superAdminRecipients: { email: string; name: string; roleLabel: string; uid?: string }[] = [];
+      const saEmailsSeen = new Set<string>();
+      (admins || []).forEach(a => {
+        if (a.email && (isSuperAdminEmail(a.email) || (a as any).role === 'SUPER_ADMIN') && !saEmailsSeen.has(a.email.toLowerCase())) {
+          saEmailsSeen.add(a.email.toLowerCase());
+          superAdminRecipients.push({ email: a.email, name: a.name || 'Super Admin', roleLabel: 'Super Admin', uid: a.uid });
+        }
+      });
+      SUPER_ADMIN_EMAILS.forEach(saEmail => {
+        if (!saEmailsSeen.has(saEmail.toLowerCase())) {
+          saEmailsSeen.add(saEmail.toLowerCase());
+          superAdminRecipients.push({ email: saEmail, name: 'Super Admin', roleLabel: 'Super Admin' });
+        }
+      });
+
       const updatedRecipientsData = allAvailableRecipients.filter(r => sharedModalRecipients.includes(r.email));
+      const fullRecipientsData = [...updatedRecipientsData, ...superAdminRecipients];
       const oldEmails = (selectedSharedExpediente.recipients || []).map((r: any) => r.email);
       const newlyAdded = updatedRecipientsData.filter(r => !oldEmails.includes(r.email));
 
       await updateDoc(doc(db, 'shared_expedientes', selectedSharedExpediente.id), {
-        recipients: updatedRecipientsData,
+        recipients: fullRecipientsData,
         updatedAt: Date.now()
       });
 
@@ -650,7 +759,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
       await addLog(
         'Actualización de destinatarios en expediente compartido',
-        `Alumno: ${selectedSharedExpediente.studentName}. Total destinatarios: ${updatedRecipientsData.length}. Nuevos: ${newlyAdded.map(u => u.name).join(', ') || 'Ninguno'}`
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${selectedSharedExpediente.studentName} | Total destinatarios: ${updatedRecipientsData.length} | Nuevos: ${newlyAdded.map(u => u.name).join(', ') || 'Ninguno'}`
       );
 
       setSelectedSharedExpediente((prev: any) => ({
@@ -728,7 +837,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       }
       await addLog(
         'Cambio de Estatus de Expediente',
-        `Estatus del expediente de ${exp.studentName} cambiado a ${newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso'}.`
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${exp.studentName} (${exp.gradeGroup || 'S/G'}) | Nuevo estatus: ${newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso'}`
       );
 
       if (sendNotification) {
@@ -739,15 +848,22 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
         if (coordinators) {
           coordinators.forEach(c => { if (c.email) recipients.add(c.email.toLowerCase()); });
         }
+
+        // Exclude current user from status change notification
+        if (profile.email) recipients.delete(profile.email.toLowerCase());
+        if (profile.uid) recipients.delete(profile.uid);
+
         const statusLabel = newStatus === 'CASO_CONCLUIDO' ? 'Caso Concluido' : 'En Proceso';
-        await sendNotification(
-          Array.from(recipients),
-          `Estatus de Expediente Actualizado: ${exp.studentName}`,
-          `El expediente psicopedagógico del estudiante ${exp.studentName} (${exp.gradeGroup || ''}) ha cambiado a estatus "${statusLabel}" por ${profile.name}.`,
-          exp.id,
-          false,
-          { expedienteId: exp.id, type: 'expediente' }
-        );
+        if (recipients.size > 0) {
+          await sendNotification(
+            Array.from(recipients),
+            `Estatus de Expediente Actualizado: ${exp.studentName}`,
+            `El expediente psicopedagógico del estudiante ${exp.studentName} (${exp.gradeGroup || ''}) ha cambiado a estatus "${statusLabel}" por ${profile.name}.`,
+            exp.id,
+            false,
+            { expedienteId: exp.id, type: 'expediente', creatorUid: profile.uid, creatorEmail: profile.email }
+          );
+        }
       }
     } catch (err) {
       console.error("Error updating status:", err);
@@ -763,7 +879,10 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       async () => {
         try {
           await deleteDoc(doc(db, 'expedientes', id));
-          await addLog('Eliminación de Expediente', `Se eliminó la ficha psicopedagógica de ${studentName}.`);
+          await addLog(
+            'Eliminación de Expediente',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Ficha psicopedagógica del alumno: ${studentName}`
+          );
           showAlert('Eliminado', 'Expediente eliminado correctamente.', 'success');
         } catch (e) {
           console.error("Error deleting expediente:", e);
@@ -783,7 +902,10 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       async () => {
         try {
           await deleteDoc(doc(db, 'shared_expedientes', id));
-          await addLog('Eliminación de Copia Compartida', `Se eliminó la copia de expediente para ${studentName}.`);
+          await addLog(
+            'Eliminación de Copia Compartida',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Copia compartida de: ${studentName}`
+          );
           showAlert('Eliminado', 'Copia compartida eliminada correctamente.', 'success');
         } catch (e) {
           console.error("Error deleting shared expediente:", e);
@@ -826,8 +948,11 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
 
   const userEmailLower = profile.email?.toLowerCase();
   const filteredSharedExpedientes = sharedExpedientes.filter(exp => {
-    // Requirement 1: Directives and Coordinators (and non-psychologists/admins) only view expedientes shared with them
-    if (isDirectiveOrCoordinator || !isPsychologist) {
+    // Super admins always have access by default to all shared expedientes
+    if (isSuperAdminEmail(profile.email) || (profile as any).role === 'SUPER_ADMIN') {
+      // Allowed access
+    } else if (isDirectiveOrCoordinator || isAdmin || !isPsychologist) {
+      // Directives, Coordinators, Admins, and non-psychologists only view expedientes shared with them
       const isRecipient = Array.isArray(exp.recipients) && exp.recipients.some((r: any) => 
         (r.uid && profile.uid && r.uid === profile.uid) || 
         (r.email && userEmailLower && r.email.toLowerCase() === userEmailLower)
@@ -1204,6 +1329,52 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
                         </div>
                       </div>
                     )}
+
+                    {/* Admins Section */}
+                    {allAvailableRecipients.some(r => r.roleLabel === 'Administrador') && (
+                      <div className="space-y-2 pt-2 border-t border-slate-100">
+                        <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                          <span className="text-[11px] font-extrabold text-purple-900 uppercase tracking-wider flex items-center gap-1.5">
+                            <ShieldAlert className="w-3.5 h-3.5 text-purple-600" /> Administradores
+                          </span>
+                          <button
+                            type="button"
+                            onClick={toggleSelectAllAdmins}
+                            className="text-[11px] font-bold text-purple-600 hover:text-purple-800 cursor-pointer"
+                          >
+                            Seleccionar / Deseleccionar Todos
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                          {allAvailableRecipients.filter(r => r.roleLabel === 'Administrador').map(a => {
+                            const isSelected = selectedRecipients.includes(a.email);
+                            return (
+                              <label
+                                key={a.email}
+                                onClick={() => toggleRecipient(a.email)}
+                                className={cn(
+                                  "flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer select-none",
+                                  isSelected 
+                                    ? "bg-purple-50 border-purple-300 text-purple-900 shadow-sm"
+                                    : "bg-slate-50/80 border-slate-200 text-slate-700 hover:bg-slate-100"
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}}
+                                  className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
+                                />
+                                <div className="flex flex-col min-w-0">
+                                  <span className="truncate font-bold">{a.name}</span>
+                                  <span className="text-[10px] text-slate-500 truncate">{a.email}</span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1447,7 +1618,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
               )}
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>Expedientes Compartidos ({sharedExpedientes.length})</span>
+              <span>Expedientes Compartidos ({filteredSharedExpedientes.length})</span>
             </button>
 
             {allowManageExpedientes && (

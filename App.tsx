@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, Component, ReactNode } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Component, ReactNode } from 'react';
 import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetDoc, safeGetDocs, isFirestoreInternalAssertion } from './lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
 import { format } from 'date-fns';
-import { cn } from './lib/utils';
+import { cn, getUserEducationLevel, normalizeEducationLevel } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAppStructurePdf } from './lib/generateAppStructurePdf';
@@ -20,29 +20,45 @@ import { InformeManager } from './components/InformeManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 import { SystemModal, SystemModalState } from './components/SystemModal';
+import {
+  isNotificationSupported,
+  getNotificationPermission,
+  requestSystemNotificationPermission,
+  showSystemNotification,
+  sendTestNotification,
+} from './lib/nativeNotifications';
 import confetti from 'canvas-confetti';
 
 const Logo = ({ className, appName = 'DASHBOARD DUNOR', logoUrl }: { className?: string, short?: boolean, appName?: string, logoUrl?: string }) => {
-  const defaultLogo = "/logo.svg";
-  const [imgSrc, setImgSrc] = useState(logoUrl || defaultLogo);
-
-  useEffect(() => {
-    setImgSrc(logoUrl || defaultLogo);
+  const candidateList = useMemo(() => {
+    const list: string[] = [];
+    if (logoUrl && typeof logoUrl === 'string' && logoUrl.trim()) {
+      list.push(logoUrl.trim());
+    }
+    list.push('/logo_dunor.png', '/logo_dunor.svg', '/logo.svg');
+    return Array.from(new Set(list));
   }, [logoUrl]);
 
+  const [candidateIndex, setCandidateIndex] = useState(0);
+
+  useEffect(() => {
+    setCandidateIndex(0);
+  }, [candidateList]);
+
   const handleError = () => {
-    if (imgSrc !== defaultLogo) {
-      setImgSrc(defaultLogo);
-    } else if (imgSrc !== "/logo_dunor.svg") {
-      setImgSrc("/logo_dunor.svg");
-    } else if (imgSrc !== "/logo_dunor.png") {
-      setImgSrc("/logo_dunor.png");
-    }
+    setCandidateIndex(prev => {
+      if (prev + 1 < candidateList.length) {
+        return prev + 1;
+      }
+      return prev;
+    });
   };
+
+  const currentSrc = candidateList[candidateIndex] || '/logo_dunor.png';
 
   return (
     <img
-      src={imgSrc}
+      src={currentSrc}
       alt={appName || 'DASHBOARD DUNOR'}
       onError={handleError}
       className={cn("object-contain max-h-full max-w-full", className)}
@@ -126,18 +142,21 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 const SUPER_ADMIN_EMAILS = [
-  'mi_yorch@hotmail.com'
+  'mi_yorch@hotmail.com',
+  'incidencias.dunor@gmail.com'
 ];
 
 const isSuperAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
-  return SUPER_ADMIN_EMAILS.includes(email.toLowerCase().trim());
+  const clean = email.toLowerCase().trim();
+  return SUPER_ADMIN_EMAILS.includes(clean);
 };
 
-class ErrorBoundary extends (Component as any) {
-  constructor(props: any) {
+class ErrorBoundary extends React.Component<{ children?: React.ReactNode }, { hasError: boolean; error: any }> {
+  state: { hasError: boolean; error: any } = { hasError: false, error: null };
+
+  constructor(props: { children?: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false, error: null };
   }
 
   static getDerivedStateFromError(error: Error) {
@@ -197,6 +216,7 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
   const logoSrc = systemSettings?.appLogoUrl || "/logo.svg";
   const logoAppName = systemSettings?.appName || "DASHBOARD DUNOR";
   const isDirective = profile?.role === 'DIRECTIVE' || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email);
+  const canSeeSignatures = isDirective || profile?.role === 'COORDINATOR';
 
   const handlePrint = () => {
     const printContent = document.getElementById('printable-report');
@@ -648,7 +668,10 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
                 </div>
                 <div className="info-item">
                   <span className="label">Reportado por</span>
-                  <span className="content">{incident.reporterName}</span>
+                  <span className="content">
+                    {incident.reporterName || incident.creatorName || 'Personal Escolar'}
+                    {incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}
+                  </span>
                 </div>
                 <div className="info-item">
                   <span className="label">Estado Actual</span>
@@ -725,7 +748,7 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
               </div>
             )}
 
-            {isDirective && (
+            {canSeeSignatures && (
               <div className="section signatures-section">
                 <h3 className="section-title">Firmas de Conformidad y Seguimiento</h3>
                 <div className="signatures-grid">
@@ -832,9 +855,9 @@ const ImageGallery = ({ isOpen, images, currentIndex, onClose }: { isOpen: boole
 };
 
 const LoadingScreen = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50">
+  <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950 p-4 transition-colors">
     <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-    <p className="mt-4 text-slate-600 font-medium">Cargando aplicación...</p>
+    <p className="mt-4 text-slate-600 dark:text-slate-300 font-medium">Cargando aplicación...</p>
   </div>
 );
 
@@ -1005,13 +1028,22 @@ const FirebaseSecretsModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: (
   );
 };
 
-const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userData: { uid: string; email: string; displayName?: string }) => void, systemSettings?: SystemSettings }) => {
+const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userData: { uid: string; email: string; displayName?: string }, fullProfile?: UserProfile) => void, systemSettings?: SystemSettings }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [step, setStep] = useState<'email' | 'login' | 'register' | 'reset-password'>('email');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    try {
+      const notice = localStorage.getItem('blocked_account_notice');
+      if (notice) {
+        localStorage.removeItem('blocked_account_notice');
+        return notice;
+      }
+    } catch {}
+    return null;
+  });
   const [preProfile, setPreProfile] = useState<UserProfile | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [resetSent, setResetSent] = useState(false);
@@ -1029,6 +1061,12 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       // Clean up URL without refreshing
       window.history.replaceState({}, document.title, window.location.pathname);
     }
+
+    const blockedNotice = localStorage.getItem('blocked_account_notice');
+    if (blockedNotice) {
+      setError(blockedNotice);
+      localStorage.removeItem('blocked_account_notice');
+    }
   }, []);
 
   const checkEmail = async (e: React.FormEvent) => {
@@ -1039,7 +1077,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const isSuper = isSuperAdminEmail(emailId);
 
     if (isSuper) {
-      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
+      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador DUNOR";
       const adminProfile: UserProfile = {
         uid: emailId,
         name: adminName,
@@ -1080,8 +1118,18 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
 
       if (snapshot && snapshot.exists()) {
         const userData = snapshot.data() as UserProfile;
+        
+        // Check if user is blocked
+        if (userData.role === 'BLOQUEADO' || (userData as any).status === 'BLOQUEADO' || (userData as any).isBlocked) {
+          setError("Cuenta bloqueada contacta a Soporte Técnico");
+          setPreProfile(null);
+          setStep('email');
+          setLoading(false);
+          return;
+        }
+
         setPreProfile({ ...userData, uid: snapshot.id });
-        if (userData.isRegistered) {
+        if (userData.isRegistered && userData.password) {
           setStep('login');
         } else {
           setStep('register');
@@ -1089,46 +1137,10 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         return;
       }
 
-      // If snapshot is null (network offline/failed to fetch from server or cache)
-      if (!snapshot) {
-        // Fallback: allow user to proceed to login step so Auth can authenticate them
-        const fallbackProfile: UserProfile = {
-          uid: emailId,
-          name: emailId.split('@')[0],
-          email: emailId,
-          role: "TEACHER",
-          isRegistered: true
-        };
-        setPreProfile(fallbackProfile);
-        setStep('login');
-        return;
-      }
-
-      // Snapshot exists but document was not found
-      let isDbEmpty = false;
-      try {
-        const usersCheck = await safeGetDocs(query(collection(db, 'users'), limit(1)));
-        if (usersCheck.empty) {
-          isDbEmpty = true;
-        }
-      } catch (checkErr) {
-        console.warn("Check users empty error:", checkErr);
-      }
-
-      if (isDbEmpty) {
-        const initAdminProfile: UserProfile = {
-          uid: emailId,
-          name: "Administrador Inicial",
-          email: emailId,
-          role: "ADMIN",
-          isRegistered: false
-        };
-        setPreProfile(initAdminProfile);
-        setStep('register');
-        return;
-      }
-
-      // Strictly deny access if user is not registered in the database
+      // If document does NOT exist in the users collection:
+      // Strictly deny access. Do not assign any role, do not allow auto-registration, and do not proceed to login/recovery.
+      setPreProfile(null);
+      setStep('email');
       setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos. Póngase en contacto con un administrador para registrar su cuenta.");
       setLoading(false);
       return;
@@ -1157,9 +1169,38 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       return;
     }
 
+    if (uData && (uData.role === 'BLOQUEADO' || (uData as any).status === 'BLOQUEADO' || (uData as any).isBlocked)) {
+      setError("Cuenta bloqueada contacta a Soporte Técnico");
+      setLoading(false);
+      return;
+    }
+
     // 1. Try standard Firebase Auth
     try {
-      await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const userCred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const authUid = userCred.user?.uid || uData?.uid || cleanEmail;
+      const fullProfile: UserProfile | null = uData ? { ...uData, uid: authUid, isRegistered: true } : (isSuper ? {
+        uid: authUid,
+        name: cleanEmail.includes('dunor') ? "Administrador DUNOR" : (cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+        email: cleanEmail,
+        role: "ADMIN" as UserRole,
+        isRegistered: true
+      } : null);
+
+      if (fullProfile) {
+        localStorage.setItem('app_user_profile', JSON.stringify(fullProfile));
+      }
+      localStorage.setItem('app_custom_user', JSON.stringify({
+        uid: authUid,
+        email: cleanEmail,
+        displayName: fullProfile?.name || cleanEmail.split('@')[0]
+      }));
+
+      onCustomLogin({
+        uid: authUid,
+        email: cleanEmail,
+        displayName: fullProfile?.name || cleanEmail.split('@')[0]
+      }, fullProfile || undefined);
       setLoading(false);
       return;
     } catch (err: any) {
@@ -1187,11 +1228,17 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           updatedAt: Date.now()
         };
         await setDoc(doc(db, 'users', cleanEmail), adminProfile, { merge: true }).catch(() => {});
+        localStorage.setItem('app_user_profile', JSON.stringify(adminProfile));
+        localStorage.setItem('app_custom_user', JSON.stringify({
+          uid: adminProfile.uid,
+          email: cleanEmail,
+          displayName: adminProfile.name
+        }));
         onCustomLogin({
           uid: adminProfile.uid,
           email: cleanEmail,
           displayName: adminProfile.name
-        });
+        }, adminProfile);
         setLoading(false);
         return;
       }
@@ -1210,11 +1257,31 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           updatedAt: Date.now()
         };
         await setDoc(doc(db, 'users', cleanEmail), updatedProfile, { merge: true }).catch(() => {});
+
+        // Background sync to Firebase Authentication
+        fetch('/api/create-or-update-auth-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: password,
+            name: uData.name,
+            role: uData.role,
+            phone: uData.phone
+          })
+        }).catch(err => console.warn("Background Auth sync warning:", err));
+
+        localStorage.setItem('app_user_profile', JSON.stringify(updatedProfile));
+        localStorage.setItem('app_custom_user', JSON.stringify({
+          uid: uData.uid || cleanEmail,
+          email: cleanEmail,
+          displayName: uData.name
+        }));
         onCustomLogin({
           uid: uData.uid || cleanEmail,
           email: cleanEmail,
           displayName: uData.name
-        });
+        }, updatedProfile);
         setLoading(false);
         return;
       }
@@ -1239,6 +1306,22 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     setError(null);
     const cleanEmail = email.toLowerCase().trim();
     localStorage.setItem('last_user_email', cleanEmail);
+
+    const isSuper = isSuperAdminEmail(cleanEmail);
+    const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
+    const uData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
+
+    if (!isSuper && (!uData || !uData.isRegistered)) {
+      setError("Acceso denegado: El correo electrónico no se encuentra registrado en el sistema.");
+      setLoading(false);
+      return;
+    }
+
+    if (uData && (uData.role === 'BLOQUEADO' || (uData as any).status === 'BLOQUEADO' || (uData as any).isBlocked)) {
+      setError("Cuenta bloqueada contacta a Soporte Técnico");
+      setLoading(false);
+      return;
+    }
 
     let sent = false;
     try {
@@ -1276,8 +1359,14 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
     const existingData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
 
-    if (!isSuper && !existingData && !preProfile) {
+    if (!isSuper && !existingData) {
       setError("Acceso denegado: Tu correo electrónico no está dado de alta en la base de datos.");
+      setLoading(false);
+      return;
+    }
+
+    if (existingData && (existingData.role === 'BLOQUEADO' || (existingData as any).status === 'BLOQUEADO' || (existingData as any).isBlocked)) {
+      setError("Cuenta bloqueada contacta a Soporte Técnico");
       setLoading(false);
       return;
     }
@@ -1298,6 +1387,27 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       }
     }
 
+    // Call server to ensure user exists in Firebase Auth
+    try {
+      const authRes = await fetch('/api/create-or-update-auth-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          password: password,
+          name: existingData?.name || preProfile?.name || cleanEmail.split('@')[0],
+          role: existingData?.role || preProfile?.role || (isSuper ? "ADMIN" : "TEACHER"),
+          phone: existingData?.phone || preProfile?.phone || ''
+        })
+      });
+      const authData = await authRes.json();
+      if (authData?.uid) {
+        authUid = authData.uid;
+      }
+    } catch (authSyncErr) {
+      console.warn("Background Auth sync warning on register:", authSyncErr);
+    }
+
     try {
       const newProfile: UserProfile = {
         ...(existingData || preProfile || {}),
@@ -1311,11 +1421,36 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       };
 
       await setDoc(doc(db, 'users', cleanEmail), newProfile, { merge: true });
+
+      try {
+        await addDoc(collection(db, 'logs'), {
+          action: 'Activación de cuenta de usuario',
+          userEmail: cleanEmail,
+          userName: newProfile.name,
+          userRole: newProfile.role,
+          creatorName: newProfile.name,
+          creatorEmail: cleanEmail,
+          creatorRole: newProfile.role,
+          module: 'Usuarios',
+          recordId: cleanEmail,
+          timestamp: Date.now(),
+          details: `El usuario completó su registro inicial y activó su contraseña en el sistema. Nombre: ${newProfile.name} | Rol: ${newProfile.role}`
+        });
+      } catch (logErr) {
+        console.warn("Log write on user register notice:", logErr);
+      }
+
+      localStorage.setItem('app_user_profile', JSON.stringify(newProfile));
+      localStorage.setItem('app_custom_user', JSON.stringify({
+        uid: authUid,
+        email: cleanEmail,
+        displayName: newProfile.name
+      }));
       onCustomLogin({
         uid: authUid,
         email: cleanEmail,
         displayName: newProfile.name
-      });
+      }, newProfile);
     } catch (err: any) {
       console.error(err);
       setError("Error al procesar el registro: " + (err.message || "Error desconocido"));
@@ -1356,9 +1491,44 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         const userDocSnap = await safeGetDoc(doc(db, 'users', cleanEmail)).catch(() => null);
         const existingData = userDocSnap?.exists() ? (userDocSnap.data() as UserProfile) : null;
 
+        if (!isSuper && !existingData) {
+          setError("Acceso denegado: El correo electrónico no está dado de alta en la base de datos.");
+          setLoading(false);
+          return;
+        }
+
+        if (existingData && (existingData.role === 'BLOQUEADO' || (existingData as any).status === 'BLOQUEADO' || (existingData as any).isBlocked)) {
+          setError("Cuenta bloqueada contacta a Soporte Técnico");
+          setLoading(false);
+          return;
+        }
+
+        let authUid = existingData?.uid || cleanEmail;
+
+        // Sync with Firebase Authentication
+        try {
+          const authRes = await fetch('/api/create-or-update-auth-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: cleanEmail,
+              password: password,
+              name: existingData?.name || cleanEmail.split('@')[0],
+              role: existingData?.role || (isSuper ? "ADMIN" : "TEACHER"),
+              phone: existingData?.phone || ''
+            })
+          });
+          const authData = await authRes.json();
+          if (authData?.uid) {
+            authUid = authData.uid;
+          }
+        } catch (authErr) {
+          console.warn("Auth sync error on reset password:", authErr);
+        }
+
         const updatedProfile: UserProfile = {
           ...(existingData || {}),
-          uid: existingData?.uid || cleanEmail,
+          uid: authUid,
           name: existingData?.name || (isSuper ? "Super Admin (Yorch)" : cleanEmail.split('@')[0]),
           email: cleanEmail,
           role: existingData?.role || (isSuper ? "ADMIN" : "TEACHER"),
@@ -1368,6 +1538,24 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         };
 
         await setDoc(doc(db, 'users', cleanEmail), updatedProfile, { merge: true });
+
+        try {
+          await addDoc(collection(db, 'logs'), {
+            action: 'Restablecimiento de contraseña',
+            userEmail: cleanEmail,
+            userName: updatedProfile.name,
+            userRole: updatedProfile.role,
+            creatorName: updatedProfile.name,
+            creatorEmail: cleanEmail,
+            creatorRole: updatedProfile.role,
+            module: 'Usuarios',
+            recordId: cleanEmail,
+            timestamp: Date.now(),
+            details: `El usuario ${updatedProfile.name} (${cleanEmail}) restableció su contraseña de acceso.`
+          });
+        } catch (logErr) {
+          console.warn("Log write on password reset notice:", logErr);
+        }
 
         // Directly log the user in!
         onCustomLogin({
@@ -1688,11 +1876,15 @@ export default function App() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setAuthTimeout(true);
-    }, 3000);
+    }, 2000);
     return () => clearTimeout(timer);
   }, []);
 
-  const isAuthLoading = loading && !authTimeout;
+  const hasCachedUser = typeof window !== 'undefined' && Boolean(
+    localStorage.getItem('app_user_profile') || localStorage.getItem('app_custom_user')
+  );
+
+  const isAuthLoading = loading && !authTimeout && !hasCachedUser;
 
   return (
     <ErrorBoundary>
@@ -1711,11 +1903,37 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   });
 
-  const activeUser = (user && !user.isAnonymous) ? user : customUser;
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  useEffect(() => {
+    if (customUser) {
+      setIsLoggingOut(false);
+    }
+  }, [customUser]);
+
+  const isActuallyLoggedIn = Boolean((user && !user.isAnonymous) || customUser) && !isLoggingOut;
+  const activeUser = isActuallyLoggedIn ? ((user && !user.isAnonymous) ? user : customUser) : null;
+
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('app_user_profile');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.email || parsed.uid)) return parsed;
+      }
+    } catch (e) {}
+    return null;
+  });
+
   const [isProfileLoading, setIsProfileLoading] = useState(false);
-  const [hasCheckedProfile, setHasCheckedProfile] = useState(false);
+  const [hasCheckedProfile, setHasCheckedProfile] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('app_user_profile');
+      return Boolean(saved);
+    } catch {
+      return false;
+    }
+  });
   const [isSeeding, setIsSeeding] = useState(false);
   const [showAppSecretsModal, setShowAppSecretsModal] = useState(false);
 
@@ -1733,13 +1951,74 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   }, [isDarkMode]);
 
+  // Ensure network is restored on window focus or tab visibility change
+  useEffect(() => {
+    const handleWindowActive = () => {
+      if (document.visibilityState === 'visible') {
+        restoreFirestoreConnection().catch(() => {});
+        // If we already have a loaded profile, ensure loading state never traps the user
+        if (profile) {
+          setIsProfileLoading(false);
+          setHasCheckedProfile(true);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleWindowActive);
+    window.addEventListener('focus', handleWindowActive);
+    window.addEventListener('online', handleWindowActive);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleWindowActive);
+      window.removeEventListener('focus', handleWindowActive);
+      window.removeEventListener('online', handleWindowActive);
+    };
+  }, [profile]);
+
+  // Invisible auto-watchdog: automatically transitions user to panel if profile resolution takes more than 1s
+  useEffect(() => {
+    if (activeUser && (!profile || !hasCheckedProfile || isProfileLoading)) {
+      const autoTimer = setTimeout(() => {
+        try {
+          const saved = localStorage.getItem('app_user_profile');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && (parsed.email || parsed.uid)) {
+              setProfile(parsed);
+              setIsProfileLoading(false);
+              setHasCheckedProfile(true);
+              return;
+            }
+          }
+        } catch (e) {}
+
+        const emailId = (activeUser.email || (typeof window !== 'undefined' ? localStorage.getItem('last_user_email') : null) || '').toLowerCase().trim();
+        if (isSuperAdminEmail(emailId)) {
+          const autoAdmin: UserProfile = {
+            uid: activeUser.uid || emailId,
+            name: emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+            email: emailId,
+            role: "ADMIN",
+            isRegistered: true
+          };
+          setProfile(autoAdmin);
+          try { localStorage.setItem('app_user_profile', JSON.stringify(autoAdmin)); } catch (e) {}
+        }
+        setIsProfileLoading(false);
+        setHasCheckedProfile(true);
+      }, 1000);
+
+      return () => clearTimeout(autoTimer);
+    }
+  }, [activeUser, profile, hasCheckedProfile, isProfileLoading]);
+
   useEffect(() => {
     if (activeUser && !auth.currentUser) {
       signInAnonymously(auth).catch((err) => {
         console.warn("signInAnonymously session sync notice:", err);
       });
     }
-  }, [activeUser]);
+  }, [activeUser?.uid]);
 
   const [systemPopup, setSystemPopup] = useState<{
     isOpen: boolean;
@@ -1798,6 +2077,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [psychologists, setPsychologists] = useState<UserProfile[]>([]);
   const [directives, setDirectives] = useState<UserProfile[]>([]);
   const [admins, setAdmins] = useState<UserProfile[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [liveToast, setLiveToast] = useState<{
     id: string;
@@ -2017,6 +2297,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   };
   const [newCategory, setNewCategory] = useState('');
   const [editingCategory, setEditingCategory] = useState<{ original: string; name: string } | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<string | null>(null);
   const [appNameInput, setAppNameInput] = useState(systemSettings.appName || 'DASHBOARD DUNOR');
   const [appLogoInput, setAppLogoInput] = useState(systemSettings.appLogoUrl || '');
 
@@ -2029,12 +2310,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   useEffect(() => {
     if (systemSettings) {
-      if (systemSettings.appName) setAppNameInput(systemSettings.appName);
-      if (systemSettings.appLogoUrl) setAppLogoInput(systemSettings.appLogoUrl);
+      if (systemSettings.appName && systemSettings.appName !== appNameInput) setAppNameInput(systemSettings.appName);
+      if (systemSettings.appLogoUrl && systemSettings.appLogoUrl !== appLogoInput) setAppLogoInput(systemSettings.appLogoUrl);
     }
-  }, [systemSettings]);
+  }, [systemSettings?.appName, systemSettings?.appLogoUrl]);
 
   const [logs, setLogs] = useState<Log[]>([]);
+  const [logSearchTerm, setLogSearchTerm] = useState<string>('');
+  const [logModuleFilter, setLogModuleFilter] = useState<string>('ALL');
+  const [logRoleFilter, setLogRoleFilter] = useState<string>('ALL');
+  const [selectedLogDetail, setSelectedLogDetail] = useState<Log | null>(null);
   const [galleryConfig, setGalleryConfig] = useState<{
     isOpen: boolean;
     images: string[];
@@ -2102,7 +2387,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   useEffect(() => {
     if (profile) {
       const normRole = normalizeUserRole(profile.role);
-      if (normRole === 'PSYCHOLOGIST') {
+      if (normRole === 'PSYCHOLOGIST' && activeTab === 'incidents') {
         setActiveTab('notifications');
       }
     }
@@ -2114,7 +2399,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const requiredPerm = tabPermissionMap[activeTab];
     if (requiredPerm && !can(requiredPerm)) {
       const availableTab = tabPriorityOrder.find(item => can(item.key));
-      if (availableTab) {
+      if (availableTab && availableTab.id !== activeTab) {
         setActiveTab(availableTab.id);
       }
     }
@@ -2135,7 +2420,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           } as RolePermissions;
         }
       });
-      setFirestoreRolePermissions(permissionsMap);
+      setFirestoreRolePermissions(prev => {
+        if (JSON.stringify(prev) === JSON.stringify(permissionsMap)) return prev;
+        return permissionsMap;
+      });
     }, (error) => {
       console.warn("Permisos collection listener warning:", error);
     });
@@ -2185,12 +2473,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               }
             });
           }
-          return {
+          const next = {
             ...DEFAULT_SETTINGS,
             ...prev,
             ...data,
             rolePermissions: mergedRolePermissions
           };
+          if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+          return next;
         });
         if (data.appLogoUrl) {
           localStorage.setItem('app_logo_url', data.appLogoUrl);
@@ -2231,8 +2521,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [systemSettings.appName, systemSettings.appLogoUrl]);
 
   useEffect(() => {
-    if (isSuperAdmin) {
-      const q = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200));
+    if (isSuperAdmin || can('canViewLogs')) {
+      const q = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(300));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Log));
         setLogs(logsData);
@@ -2241,7 +2531,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       });
       return () => unsubscribe();
     }
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, profile]);
 
   const sendEmail = async (to: string, subject: string, html: string) => {
     if (!to || !to.includes('@')) return { error: 'Invalid email' };
@@ -2272,14 +2562,27 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     skipAdmins: boolean = false,
     extraData: Record<string, any> = {}
   ) => {
-    const notificationData = {
-      title,
-      message,
-      incidentId: incidentId || '',
-      read: false,
-      createdAt: Date.now(),
-      ...extraData
-    };
+    const titleLower = (title || '').toLowerCase();
+    const msgLower = (message || '').toLowerCase();
+
+    // Strictly eliminate welcome and new user registration notifications for all users
+    if (
+      titleLower.includes('bienvenid') ||
+      titleLower.includes('nuevo usuario') ||
+      titleLower.includes('registro de nuevo usuario') ||
+      titleLower.includes('usuario registrado') ||
+      titleLower.includes('usuario nuevo') ||
+      titleLower.includes('alta de usuario') ||
+      msgLower.includes('bienvenid') ||
+      msgLower.includes('bienvenido/a a dashboard dunor') ||
+      msgLower.includes('tu registro al dashboard dunor fue exitosa') ||
+      msgLower.includes('nuevo usuario') ||
+      msgLower.includes('usuario registrado') ||
+      msgLower.includes('cuenta creada') ||
+      (msgLower.includes('dashboard dunor') && (msgLower.includes('registro') || msgLower.includes('bienvenid')))
+    ) {
+      return;
+    }
 
     let allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
     if (allUsers.length === 0) {
@@ -2291,6 +2594,44 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
+    // Identify creator / excluded users so they NEVER receive notification or email for their own creations
+    const excludedIdsAndEmails = new Set<string>();
+    if (extraData?.creatorUid) excludedIdsAndEmails.add(String(extraData.creatorUid).toLowerCase().trim());
+    if (extraData?.creatorEmail) excludedIdsAndEmails.add(String(extraData.creatorEmail).toLowerCase().trim());
+    if (extraData?.excludeUserId) excludedIdsAndEmails.add(String(extraData.excludeUserId).toLowerCase().trim());
+    if (extraData?.excludeUserEmail) excludedIdsAndEmails.add(String(extraData.excludeUserEmail).toLowerCase().trim());
+    if (Array.isArray(extraData?.excludeUserIds)) {
+      extraData.excludeUserIds.forEach((id: any) => {
+        if (id && typeof id === 'string') excludedIdsAndEmails.add(id.toLowerCase().trim());
+      });
+    }
+    if (extraData?.isCreationNotification && profile) {
+      if (profile.uid) excludedIdsAndEmails.add(profile.uid.toLowerCase().trim());
+      if (profile.email) excludedIdsAndEmails.add(profile.email.toLowerCase().trim());
+    }
+
+    // Expand exclusions to both uid and email if a matching user is found
+    allUsers.forEach(u => {
+      const uUid = u.uid ? u.uid.toLowerCase().trim() : '';
+      const uEmail = u.email ? u.email.toLowerCase().trim() : '';
+      if ((uUid && excludedIdsAndEmails.has(uUid)) || (uEmail && excludedIdsAndEmails.has(uEmail))) {
+        if (uUid) excludedIdsAndEmails.add(uUid);
+        if (uEmail) excludedIdsAndEmails.add(uEmail);
+      }
+    });
+
+    const notificationData = {
+      title,
+      message,
+      incidentId: incidentId || '',
+      read: false,
+      createdAt: Date.now(),
+      ...extraData,
+      creatorUid: extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification ? profile?.uid : undefined),
+      creatorEmail: extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification ? profile?.email : undefined),
+      isCreationNotification: Boolean(extraData?.isCreationNotification)
+    };
+
     const finalTargetUserIds = new Set<string>();
     const targetEmails = new Set<string>();
     const rawTargets: string[] = Array.isArray(userIdOrIds) ? userIdOrIds : [userIdOrIds];
@@ -2300,6 +2641,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const clean = str.trim();
       const cleanLower = clean.toLowerCase();
       if (cleanLower === 'jorge.villanueva@boletomovil.com') return;
+      if (excludedIdsAndEmails.has(cleanLower)) return;
 
       const matched = allUsers.find(u =>
         u.uid === clean ||
@@ -2307,6 +2649,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       );
 
       if (matched) {
+        const mUidLower = matched.uid ? matched.uid.toLowerCase().trim() : '';
+        const mEmailLower = matched.email ? matched.email.toLowerCase().trim() : '';
+        if (excludedIdsAndEmails.has(mUidLower) || excludedIdsAndEmails.has(mEmailLower)) {
+          return;
+        }
+
         const targetId = matched.uid || (matched.email ? matched.email.toLowerCase() : cleanLower);
         finalTargetUserIds.add(targetId);
         if (matched.email && matched.email.includes('@')) {
@@ -2348,23 +2696,41 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
-    // 2. Directives (always receive all notifications generated across the school)
-    const schoolDirectives = allUsers.filter(u => u.role === 'DIRECTIVE');
-    schoolDirectives.forEach(d => {
-      if (d.uid) addTargetUser(d.uid);
-      else if (d.email) addTargetUser(d.email);
-    });
-
-    // 3. Admins & SuperAdmin (unless skipAdmins is true)
+    // 2. SuperAdmin: System notifications reach superadmin in-app for auditing (NO EMAILS), unless skipAdmins or creator is superadmin
     if (!skipAdmins) {
-      const schoolAdmins = allUsers.filter(u => u.role === 'ADMIN' || isSuperAdminEmail(u.email));
-      schoolAdmins.forEach(a => {
-        if (a.uid) addTargetUser(a.uid);
-        else if (a.email) addTargetUser(a.email);
+      SUPER_ADMIN_EMAILS.forEach(email => {
+        const eLower = email.toLowerCase().trim();
+        if (!excludedIdsAndEmails.has(eLower)) {
+          finalTargetUserIds.add(eLower);
+        }
+      });
+      allUsers.filter(u => isSuperAdminEmail(u.email)).forEach(sa => {
+        const saUid = sa.uid ? sa.uid.toLowerCase().trim() : '';
+        const saEmail = sa.email ? sa.email.toLowerCase().trim() : '';
+        if (sa.uid && !excludedIdsAndEmails.has(saUid) && !excludedIdsAndEmails.has(saEmail)) {
+          finalTargetUserIds.add(sa.uid);
+        }
+        if (sa.email && !excludedIdsAndEmails.has(saEmail) && !excludedIdsAndEmails.has(saUid)) {
+          finalTargetUserIds.add(sa.email.toLowerCase().trim());
+        }
       });
     }
 
-    // 4. Create single notification document per unique target user ID/email
+    // Double check that no excluded user ID or email slipped into finalTargetUserIds or targetEmails
+    if (excludedIdsAndEmails.size > 0) {
+      for (const id of Array.from(finalTargetUserIds)) {
+        if (excludedIdsAndEmails.has(id.toLowerCase().trim())) {
+          finalTargetUserIds.delete(id);
+        }
+      }
+      for (const email of Array.from(targetEmails)) {
+        if (excludedIdsAndEmails.has(email.toLowerCase().trim())) {
+          targetEmails.delete(email);
+        }
+      }
+    }
+
+    // 3. Create single notification document per unique target user ID/email
     for (const userId of finalTargetUserIds) {
       if (!userId) continue;
       try {
@@ -2377,8 +2743,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
-    // 5. Send Email Notification to all recipient emails (unless skipEmail is set)
-    if (systemSettings.emailNotificationsEnabled !== false && !extraData?.skipEmail && targetEmails.size > 0) {
+    // 6. Send Email Notification to all recipient emails (unless skipEmail is set)
+    // CRITICAL: SuperAdmin receives ONLY in-app notifications, NEVER notification emails ("solo notificaciones NO CORREOS, le lleguen al superadmin")
+    const filteredTargetEmails = Array.from(targetEmails).filter(email => !isSuperAdminEmail(email));
+
+    if (systemSettings.emailNotificationsEnabled !== false && !extraData?.skipEmail && filteredTargetEmails.length > 0) {
       const appTitle = systemSettings.appName || 'DASHBOARD DUNOR';
       const formattedMsg = message.replace(/\n/g, '<br/>');
 
@@ -2403,7 +2772,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         </div>
       `;
 
-      for (const targetEmail of targetEmails) {
+      for (const targetEmail of filteredTargetEmails) {
         if (targetEmail && targetEmail.includes('@')) {
           sendEmail(targetEmail, title, emailHtml).catch(err => {
             console.error("Error sending email notification to:", targetEmail, err);
@@ -2413,13 +2782,51 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   };
 
-  const addLog = async (action: string, details?: string) => {
-    if (!profile) return;
+  const getModuleFromAction = (action: string, details: string = ''): string => {
+    const text = (action + ' ' + details).toLowerCase();
+    if (text.includes('incidencia')) return 'Incidencias';
+    if (text.includes('canaliz') || text.includes('referral') || text.includes('psicolog')) return 'Canalizaciones';
+    if (text.includes('expediente') || text.includes('psicopedagógic')) return 'Expedientes';
+    if (text.includes('informe')) return 'Informes';
+    if (text.includes('tarea') || text.includes('felicitación') || text.includes('felicitacion')) return 'Tareas / Felicitaciones';
+    if (text.includes('usuario') || text.includes('docente') || text.includes('coordinador') || text.includes('directiv') || text.includes('admin')) return 'Usuarios';
+    if (text.includes('permiso') || text.includes('categoría') || text.includes('categoria') || text.includes('respaldo') || text.includes('logotipo')) return 'Configuración';
+    return 'General';
+  };
+
+  const addLog = async (
+    action: string, 
+    details?: string,
+    extra?: {
+      module?: string;
+      recordId?: string;
+      creatorName?: string;
+      creatorEmail?: string;
+      creatorRole?: string;
+      userEmail?: string;
+      userName?: string;
+      userRole?: string;
+    }
+  ) => {
     try {
+      const effectiveEmail = profile?.email || activeUser?.email || extra?.creatorEmail || extra?.userEmail || 'incidencias.dunor@gmail.com';
+      const effectiveName = profile?.name || activeUser?.displayName || extra?.creatorName || extra?.userName || (isSuperAdmin ? 'Superadministrador' : effectiveEmail.split('@')[0]);
+      const effectiveRole = profile?.role || (isSuperAdmin ? 'ADMIN' : (extra?.creatorRole || extra?.userRole || 'ADMIN'));
+      const creatorName = extra?.creatorName || effectiveName;
+      const creatorEmail = extra?.creatorEmail || effectiveEmail;
+      const creatorRole = extra?.creatorRole || effectiveRole;
+      const moduleName = extra?.module || getModuleFromAction(action, details || '');
+
       await addDoc(collection(db, 'logs'), {
         action,
-        userEmail: profile.email,
-        userName: profile.name,
+        userEmail: effectiveEmail,
+        userName: effectiveName,
+        userRole: effectiveRole,
+        creatorName,
+        creatorEmail,
+        creatorRole,
+        module: moduleName,
+        recordId: extra?.recordId || '',
         timestamp: Date.now(),
         details: details || ''
       });
@@ -2436,6 +2843,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     emailHeaderTitle = 'Actualización de Incidencia',
     actionDetails,
     excludeUserId,
+    excludeUserEmail,
+    isCreation = false,
     extraData = {}
   }: {
     incident: Incident;
@@ -2445,6 +2854,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     emailHeaderTitle?: string;
     actionDetails?: string;
     excludeUserId?: string;
+    excludeUserEmail?: string;
+    isCreation?: boolean;
     extraData?: Record<string, any>;
   }) => {
     let allUsers = [...admins, ...directives, ...coordinators, ...teachers, ...psychologists];
@@ -2460,14 +2871,33 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const targetUserIds = new Set<string>();
     const targetEmails = new Set<string>();
 
-    const excludeClean = excludeUserId ? excludeUserId.toLowerCase().trim() : '';
+    // Build comprehensive exclusion set for the user performing the action / creator of report
+    const excludeSet = new Set<string>();
+    if (excludeUserId) excludeSet.add(excludeUserId.toLowerCase().trim());
+    if (excludeUserEmail) excludeSet.add(excludeUserEmail.toLowerCase().trim());
+    if (profile?.uid) excludeSet.add(profile.uid.toLowerCase().trim());
+    if (profile?.email) excludeSet.add(profile.email.toLowerCase().trim());
+    if (isCreation) {
+      if (incident.reporterId) excludeSet.add(incident.reporterId.toLowerCase().trim());
+      if (incident.reporterEmail) excludeSet.add(incident.reporterEmail.toLowerCase().trim());
+    }
+
+    // Expand exclusions across all matching user records (both UID & email)
+    allUsers.forEach(u => {
+      const uUid = u.uid ? u.uid.toLowerCase().trim() : '';
+      const uEmail = u.email ? u.email.toLowerCase().trim() : '';
+      if ((uUid && excludeSet.has(uUid)) || (uEmail && excludeSet.has(uEmail))) {
+        if (uUid) excludeSet.add(uUid);
+        if (uEmail) excludeSet.add(uEmail);
+      }
+    });
 
     const addTarget = (uidOrEmail?: string) => {
       if (!uidOrEmail) return;
       const clean = uidOrEmail.trim();
       if (!clean) return;
       if (clean.toLowerCase() === 'jorge.villanueva@boletomovil.com') return;
-      if (clean.toLowerCase() === excludeClean) return;
+      if (excludeSet.has(clean.toLowerCase())) return;
 
       const matched = allUsers.find(u =>
         u.uid === clean ||
@@ -2475,10 +2905,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       );
 
       if (matched) {
-        if (matched.uid && matched.uid.toLowerCase() !== excludeClean) {
+        const mUid = matched.uid ? matched.uid.toLowerCase().trim() : '';
+        const mEmail = matched.email ? matched.email.toLowerCase().trim() : '';
+        if (excludeSet.has(mUid) || excludeSet.has(mEmail)) {
+          return;
+        }
+        if (matched.uid) {
           targetUserIds.add(matched.uid);
         }
-        if (matched.email && matched.email.toLowerCase() !== excludeClean) {
+        if (matched.email) {
           targetEmails.add(matched.email.toLowerCase());
         }
       } else {
@@ -2491,34 +2926,90 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     };
 
-    // 1. Reporter (Docente que levanta el reporte)
-    addTarget(incident.reporterId);
-    addTarget(incident.reporterEmail);
+    // 1. Reporter (Docente que levanta el reporte) - Only if NOT a creation event
+    if (!isCreation) {
+      addTarget(incident.reporterId);
+      addTarget(incident.reporterEmail);
+    }
 
-    // 2. Coordinators (Coordinadores asignados/seleccionados)
+    // 2. Coordinators (ÚNICAMENTE los coordinadores asignados al reporte o al docente que levantó el reporte)
     if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds)) {
       incident.coordinatorIds.forEach(id => addTarget(id));
     }
     if (incident.coordinatorId) {
       addTarget(incident.coordinatorId);
     }
+    if (incident.coordinatorEmail) {
+      addTarget(incident.coordinatorEmail);
+    }
+    // Coordinador asignado específicamente en el perfil del docente que levantó el reporte
+    const reportingTeacher = allUsers.find(u => 
+      (incident.reporterId && u.uid === incident.reporterId) || 
+      (incident.reporterEmail && u.email?.toLowerCase() === incident.reporterEmail.toLowerCase())
+    );
+    if (reportingTeacher) {
+      if (reportingTeacher.assignedCoordinatorId) {
+        addTarget(reportingTeacher.assignedCoordinatorId);
+      }
+      if (reportingTeacher.assignedCoordinatorEmail) {
+        addTarget(reportingTeacher.assignedCoordinatorEmail);
+      }
+      if (reportingTeacher.assignedCoordinatorName) {
+        const foundCoordByName = coordinators.find(c => c.name === reportingTeacher.assignedCoordinatorName);
+        if (foundCoordByName) {
+          addTarget(foundCoordByName.uid);
+          addTarget(foundCoordByName.email);
+        }
+      }
+    }
 
-    // 3. Notified Teacher (Docente notificado si aplica)
+    // 3. Notified Teacher (Docente en copia si aplica)
     if (incident.notifiedTeacherId) {
       addTarget(incident.notifiedTeacherId);
     }
+    if (incident.notifiedTeacherEmail) {
+      addTarget(incident.notifiedTeacherEmail);
+    }
 
     // 4. Directives and Admins (Directivos y Administradores de la institución)
-    allUsers.filter(u => u.role === 'DIRECTIVE' || u.role === 'ADMIN' || isSuperAdminEmail(u.email)).forEach(u => {
+    allUsers.filter(u => {
+      const nr = normalizeUserRole(u.role);
+      return nr === 'DIRECTIVE' || nr === 'ADMIN' || isSuperAdminEmail(u.email);
+    }).forEach(u => {
       addTarget(u.uid);
       addTarget(u.email);
     });
+
+    // Exclude SuperAdmin from routine incident email alerts ("solo notificaciones NO CORREOS, le lleguen al superadmin")
+    for (const email of Array.from(targetEmails)) {
+      if (isSuperAdminEmail(email)) {
+        targetEmails.delete(email);
+      }
+    }
+
+    // Prune target sets against excludeSet
+    for (const id of Array.from(targetUserIds)) {
+      if (excludeSet.has(id.toLowerCase().trim())) {
+        targetUserIds.delete(id);
+      }
+    }
+    for (const email of Array.from(targetEmails)) {
+      if (excludeSet.has(email.toLowerCase().trim())) {
+        targetEmails.delete(email);
+      }
+    }
 
     const finalTargetIds = Array.from(targetUserIds);
 
     // Send in-app notification in real-time (skipEmail: true since notifyIncidentInvolvedUsers handles the rich email below)
     if (finalTargetIds.length > 0) {
-      await sendNotification(finalTargetIds, title, message, incident.id, false, { ...extraData, skipEmail: true });
+      await sendNotification(finalTargetIds, title, message, incident.id, false, {
+        ...extraData,
+        skipEmail: true,
+        creatorUid: excludeUserId || profile?.uid,
+        creatorEmail: excludeUserEmail || profile?.email,
+        isCreationNotification: isCreation
+      });
     }
 
     // Send email notification to all involved users (default true unless explicitly false)
@@ -2540,7 +3031,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             <div style="background-color: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Lugar / Espacio:</strong> ${incident.place || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Alumno(s):</strong> ${incident.students || 'N/A'}</p>
-              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || 'Docente'}</p>
+              <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || incident.creatorName || 'Personal Escolar'}${incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}</p>
+              ${(incident.notifiedTeacherName || incident.notifiedTeacherId) ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente:</strong> ${incident.notifiedTeacherName || 'Docente seleccionado'}</p>` : ''}
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Estatus del Reporte:</strong> <span style="background-color: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">${statusLabel}</span></p>
               ${actionDetails ? `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #475569;">${actionDetails}</div>` : ''}
             </div>
@@ -2724,6 +3216,62 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [systemNotificationPermission, setSystemNotificationPermission] = useState<NotificationPermission>(() => getNotificationPermission());
+  const [hideTestedNotificationCard, setHideTestedNotificationCard] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('dunor_hide_tested_notification_card') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleRequestSystemNotifications = async () => {
+    const perm = await requestSystemNotificationPermission();
+    setSystemNotificationPermission(perm);
+    if (perm === 'granted') {
+      await sendTestNotification();
+      setHideTestedNotificationCard(true);
+      try {
+        localStorage.setItem('dunor_hide_tested_notification_card', 'true');
+      } catch (e) {}
+      setLiveToast({
+        id: 'notif-perm-granted',
+        title: '¡Notificaciones del Sistema Activas!',
+        message: 'Aparecerán en la barra de notificaciones de tu celular o en tu PC.',
+        timestamp: Date.now()
+      });
+    } else if (perm === 'denied') {
+      setLiveToast({
+        id: 'notif-perm-denied',
+        title: 'Permiso Denegado',
+        message: 'Habilita las notificaciones en la barra de dirección de tu navegador para recibirlas.',
+        timestamp: Date.now()
+      });
+    }
+  };
+
+  const handleTestSystemNotification = async () => {
+    const ok = await sendTestNotification();
+    if (ok) {
+      setHideTestedNotificationCard(true);
+      try {
+        localStorage.setItem('dunor_hide_tested_notification_card', 'true');
+      } catch (e) {}
+      setLiveToast({
+        id: 'notif-test-ok',
+        title: 'Prueba Enviada',
+        message: 'Revisa la barra de notificaciones de tu celular o la pantalla de tu PC.',
+        timestamp: Date.now()
+      });
+    } else {
+      setLiveToast({
+        id: 'notif-test-err',
+        title: 'Permiso Pendiente',
+        message: 'Debes conceder permisos de notificación para recibir avisos.',
+        timestamp: Date.now()
+      });
+    }
+  };
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
@@ -2740,10 +3288,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, []);
 
   useEffect(() => {
-    if (user && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
+    if (activeUser && isNotificationSupported()) {
+      setSystemNotificationPermission(getNotificationPermission());
     }
-  }, [user]);
+  }, [activeUser]);
 
   useEffect(() => {
     // PWA Install Prompt Logic
@@ -2770,7 +3318,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (targetIds.length === 0) return;
 
     let q;
-    if (isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
+    if (isSuperAdmin) {
       q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
     } else if (targetIds.length === 1) {
       q = query(collection(db, 'notifications'), where('userId', '==', targetIds[0]));
@@ -2781,11 +3329,262 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rawDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
 
-      // Clean deduplication by document ID
+      const checkIsWelcomeOrRegistration = (d: any) => {
+        const titleLower = (d.title || '').toLowerCase();
+        const msgLower = (d.message || '').toLowerCase();
+        return (
+          titleLower.includes('bienvenid') ||
+          titleLower.includes('nuevo usuario') ||
+          titleLower.includes('registro de nuevo usuario') ||
+          titleLower.includes('usuario registrado') ||
+          titleLower.includes('usuario nuevo') ||
+          titleLower.includes('alta de usuario') ||
+          msgLower.includes('bienvenid') ||
+          msgLower.includes('bienvenido/a a dashboard dunor') ||
+          msgLower.includes('tu registro al dashboard dunor fue exitosa') ||
+          msgLower.includes('nuevo usuario') ||
+          msgLower.includes('usuario registrado') ||
+          msgLower.includes('cuenta creada') ||
+          (msgLower.includes('dashboard dunor') && (msgLower.includes('registro') || msgLower.includes('bienvenid')))
+        );
+      };
+
+      const checkIsNotificationRelevant = (d: any): boolean => {
+        if (!d) return false;
+        if (profile.role === 'BLOQUEADO') return false;
+        if (checkIsWelcomeOrRegistration(d)) return false;
+
+        const role = normalizeUserRole(profile.role);
+        const roleStr = String(role);
+        const uid = (profile.uid || '').toLowerCase().trim();
+        const email = (userEmail || '').toLowerCase().trim();
+        const targetId = (d.userId || '').toLowerCase().trim();
+        const isDirectTarget = targetId === uid || targetId === email;
+        const titleLower = (d.title || '').toLowerCase();
+        const msgLower = (d.message || '').toLowerCase();
+
+        // 0. EXCLUSIÓN DE CREACIÓN PARA EL CREADOR (Incidencias, Canalizaciones, Expedientes, Tareas o Felicitaciones)
+        // El usuario que crea el registro NUNCA debe recibir la notificación de creación en la barra, audio ni lista.
+        const isCreatorDirect =
+          (d.creatorUid && String(d.creatorUid).toLowerCase().trim() === uid) ||
+          (d.creatorEmail && String(d.creatorEmail).toLowerCase().trim() === email) ||
+          (d.excludeUserId && String(d.excludeUserId).toLowerCase().trim() === uid) ||
+          (d.excludeUserEmail && String(d.excludeUserEmail).toLowerCase().trim() === email);
+
+        if (isCreatorDirect) {
+          return false;
+        }
+
+        // Descartar confirmaciones personales de creación
+        if (
+          titleLower.includes('reporte registrado exitosamente') ||
+          titleLower.includes('confirmación de reporte') ||
+          msgLower.includes('has creado y enviado el reporte')
+        ) {
+          return false;
+        }
+
+        // Si es una notificación de creación, verificar que el usuario actual no sea el autor del registro
+        const isCreationType = 
+          d.isCreationNotification ||
+          titleLower.includes('nueva incidencia') ||
+          titleLower.includes('nuevo reporte') ||
+          titleLower.includes('reporte registrado') ||
+          titleLower.includes('nueva canalización') ||
+          titleLower.includes('nueva canalizacion') ||
+          titleLower.includes('nuevo expediente') ||
+          titleLower.includes('nueva tarea') ||
+          titleLower.includes('felicitac') ||
+          titleLower.includes('reconocimiento') ||
+          titleLower.includes('sugerencia de canaliz');
+
+        if (isCreationType) {
+          // Incidencias
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isReporter = (inc.reporterId && inc.reporterId.toLowerCase().trim() === uid) ||
+                                (inc.reporterEmail && inc.reporterEmail.toLowerCase().trim() === email);
+              if (isReporter) return false;
+            }
+          }
+
+          // Canalizaciones
+          if (d.referralId || d.type === 'referral') {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isRefCreator = (ref.teacherId && ref.teacherId.toLowerCase().trim() === uid) ||
+                                  (ref.teacherEmail && ref.teacherEmail.toLowerCase().trim() === email) ||
+                                  (ref.createdByEmail && ref.createdByEmail.toLowerCase().trim() === email);
+              if (isRefCreator) return false;
+            }
+          }
+
+          // Tareas y Felicitaciones
+          if (d.taskId || d.type === 'task' || d.type === 'felicitacion') {
+            const task = tasks.find(t => t.id === d.taskId);
+            if (task) {
+              const isTaskCreator = task.createdByEmail && task.createdByEmail.toLowerCase().trim() === email;
+              if (isTaskCreator) return false;
+            }
+          }
+        }
+
+        if (isSuperAdmin) return true;
+
+        // 1. DIRECTIVOS Y ADMINISTRADORES: Por default les llegan todas las notificaciones
+        if (role === 'DIRECTIVE' || role === 'ADMIN' || isSuperAdmin) {
+          return true;
+        }
+
+        // 2. COORDINADORES: ÚNICAMENTE si son el coordinador asignado al reporte o al docente que levantó el reporte
+        if (role === 'COORDINATOR') {
+          // Incidencias
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isAssignedToIncident = 
+                inc.coordinatorId === uid ||
+                (inc.coordinatorIds && inc.coordinatorIds.includes(uid)) ||
+                (inc.coordinatorEmail && inc.coordinatorEmail.toLowerCase() === email);
+              if (isAssignedToIncident) return true;
+
+              const reportingTeacher = teachers.find(t => 
+                (inc.reporterId && t.uid === inc.reporterId) || 
+                (inc.reporterEmail && t.email?.toLowerCase() === inc.reporterEmail.toLowerCase())
+              );
+              if (reportingTeacher) {
+                const isAssignedToTeacher = 
+                  reportingTeacher.assignedCoordinatorId === uid ||
+                  (reportingTeacher.assignedCoordinatorEmail && reportingTeacher.assignedCoordinatorEmail.toLowerCase() === email) ||
+                  (reportingTeacher.assignedCoordinatorName && profile.name && reportingTeacher.assignedCoordinatorName.toLowerCase() === profile.name.toLowerCase());
+                if (isAssignedToTeacher) return true;
+              }
+
+              // No asignado a esta incidencia ni al docente: no mostrar en barra ni lista
+              return false;
+            }
+            return isDirectTarget;
+          }
+
+          // Canalizaciones
+          if (d.referralId || d.type === 'referral' || titleLower.includes('canaliz') || titleLower.includes('psicol')) {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isAssignedToRef = 
+                ref.coordinatorId === uid ||
+                (ref.coordinatorEmail && ref.coordinatorEmail.toLowerCase() === email);
+              if (isAssignedToRef) return true;
+
+              const refTeacher = teachers.find(t =>
+                (ref.teacherId && t.uid === ref.teacherId) ||
+                (ref.teacherEmail && t.email?.toLowerCase() === ref.teacherEmail.toLowerCase()) ||
+                (ref.createdByEmail && t.email?.toLowerCase() === ref.createdByEmail.toLowerCase())
+              );
+              if (refTeacher) {
+                const isAssignedToTeacher = 
+                  refTeacher.assignedCoordinatorId === uid ||
+                  (refTeacher.assignedCoordinatorEmail && refTeacher.assignedCoordinatorEmail.toLowerCase() === email) ||
+                  (refTeacher.assignedCoordinatorName && profile.name && refTeacher.assignedCoordinatorName.toLowerCase() === profile.name.toLowerCase());
+                if (isAssignedToTeacher) return true;
+              }
+
+              const inRecipients = ref.additionalRecipients?.some(r => r.uid === uid || r.email?.toLowerCase() === email);
+              if (inRecipients) return true;
+
+              return false;
+            }
+            return isDirectTarget;
+          }
+
+          // Tareas
+          if (d.taskId || d.type === 'task' || titleLower.includes('tarea')) {
+            const task = tasks.find(t => t.id === d.taskId);
+            if (task) {
+              return task.assignedToEmail?.toLowerCase() === email || isDirectTarget;
+            }
+            return isDirectTarget;
+          }
+
+          return isDirectTarget;
+        }
+
+        // 3. DOCENTES: Solo sus reportes o en copia
+        if (role === 'TEACHER') {
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
+              const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
+              return Boolean(isReporter || isNotified);
+            }
+            return isDirectTarget;
+          }
+
+          if (d.referralId || d.type === 'referral' || titleLower.includes('canaliz') || titleLower.includes('psicol')) {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isCreator = ref.createdByEmail?.toLowerCase() === email || ref.referredByName === profile.name;
+              const isRecipient = ref.additionalRecipients?.some(r => r.uid === uid || r.email?.toLowerCase() === email);
+              return Boolean(isCreator || isRecipient || isDirectTarget);
+            }
+            return isDirectTarget;
+          }
+
+          if (d.taskId || d.type === 'task' || d.type === 'felicitacion' || titleLower.includes('tarea') || titleLower.includes('felicitaci')) {
+            const task = tasks.find(t => t.id === d.taskId);
+            if (task) {
+              const isAssigned = task.assignedToEmail?.toLowerCase() === email;
+              return Boolean(isAssigned || isDirectTarget);
+            }
+            return isDirectTarget;
+          }
+
+          return isDirectTarget;
+        }
+
+        // 4. PSICÓLOGOS
+        if (role === 'PSYCHOLOGIST') {
+          const isPsychRelated = d.type === 'referral' || d.referralId || titleLower.includes('canaliz') || titleLower.includes('psicol');
+          if (d.incidentId) {
+            const inc = incidents.find(i => i.id === d.incidentId);
+            if (inc) {
+              const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
+              const hasReferral = inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS' || (inc as any).psychologistId === uid;
+              return Boolean(isReporter || hasReferral || isPsychRelated);
+            }
+            return Boolean(isPsychRelated || (isDirectTarget && isPsychRelated));
+          }
+          if (isPsychRelated) return true;
+          if (titleLower.includes('expediente') || titleLower.includes('informe')) return true;
+          return isDirectTarget;
+        }
+
+        // 4. Expedientes & Informes
+        if (titleLower.includes('expediente') || titleLower.includes('informe')) {
+          if (roleStr === 'PSYCHOLOGIST' || roleStr === 'DIRECTIVE' || roleStr === 'ADMIN') return true;
+          return isDirectTarget;
+        }
+
+        // Default: targeted directly or by role
+        if (isDirectTarget) return true;
+        if (profile.role && targetId === String(profile.role).toLowerCase()) return true;
+
+        return false;
+      };
+
+      // Clean deduplication and strictly exclude welcome, new user registration, and non-competent notifications
       const uniqueMap = new Map<string, any>();
       for (const d of rawDocs) {
         if (!d.id) continue;
-        uniqueMap.set(d.id, d);
+        if (!checkIsNotificationRelevant(d)) continue;
+
+        const eventKey = isSuperAdmin
+          ? (d.eventId || `${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${Math.floor((d.createdAt || 0) / 10000)}`)
+          : d.id;
+        if (!uniqueMap.has(eventKey)) {
+          uniqueMap.set(eventKey, d);
+        }
       }
 
       const finalDocs = Array.from(uniqueMap.values());
@@ -2794,8 +3593,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       snapshot.docChanges().forEach((change) => {
         if (change.type === "added") {
           const data = change.doc.data();
-          // Trigger instant real-time audio and visual alert for unread notifications added after load
-          if (!isInitialLoad && !data.read) {
+          // Trigger instant real-time audio and visual alert ONLY for relevant unread notifications
+          if (!isInitialLoad && !data.read && checkIsNotificationRelevant({ id: change.doc.id, ...data })) {
             playNotificationSound();
 
             setLiveToast({
@@ -2808,17 +3607,19 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               taskId: data.taskId
             });
 
-            if ('Notification' in window && Notification.permission === 'granted') {
-              try {
-                new Notification(data.title || 'Aviso de Incidencia', {
-                  body: data.message || 'Tienes una nueva notificación',
-                  icon: '/favicon.ico',
-                  tag: change.doc.id
-                });
-              } catch (e) {
-                console.warn('Native notification alert exception:', e);
+            showSystemNotification(data.title || 'Aviso de Incidencia - DUNOR', {
+              body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
+              icon: '/logo_dunor.png',
+              badge: '/logo_dunor.png',
+              tag: change.doc.id,
+              data: {
+                incidentId: data.incidentId,
+                referralId: data.referralId,
+                taskId: data.taskId
               }
-            }
+            }).catch((e) => {
+              console.warn('Native system notification delivery error:', e);
+            });
           }
         }
       });
@@ -2830,14 +3631,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     });
 
     return () => unsubscribe();
-  }, [user, profile, isSuperAdmin]);
+  }, [user, profile, isSuperAdmin, incidents, referrals, tasks, teachers, coordinators]);
 
   useEffect(() => {
     if (!activeUser || !profile) return;
     const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qTasks, (snapshot) => {
       const allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin) {
+      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin) {
         setTasks(allDocs);
       } else {
         const myEmailLower = profile.email?.toLowerCase();
@@ -2910,7 +3711,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'ADMIN'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setAdmins(uniqueUsers);
@@ -2924,44 +3725,96 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
 
 
+  const activeUserEmailStr = (activeUser?.email || (activeUser ? localStorage.getItem('last_user_email') : null) || '').toLowerCase().trim();
+  const activeUserUidStr = activeUser?.uid || '';
+
   useEffect(() => {
-    const userEmail = activeUser?.email || (activeUser ? localStorage.getItem('last_user_email') : null);
-    if (activeUser && userEmail) {
-      setIsProfileLoading(true);
-      setHasCheckedProfile(false);
-      const emailId = userEmail.toLowerCase().trim();
+    if (activeUser && activeUserEmailStr) {
+      const emailId = activeUserEmailStr;
       let isMounted = true;
+
+      // Only display the full-screen loading spinner if we don't already have this user's profile cached in memory or localStorage
+      const hasCachedProfileInMemory = profile && (
+        profile.email?.toLowerCase().trim() === emailId || 
+        profile.uid === activeUserUidStr
+      );
+
+      if (!hasCachedProfileInMemory) {
+        try {
+          const saved = localStorage.getItem('app_user_profile');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && (parsed.email?.toLowerCase().trim() === emailId || parsed.uid === activeUserUidStr)) {
+              setProfile(parsed);
+              setIsProfileLoading(false);
+              setHasCheckedProfile(true);
+            } else {
+              setIsProfileLoading(true);
+              setHasCheckedProfile(false);
+            }
+          } else {
+            setIsProfileLoading(true);
+            setHasCheckedProfile(false);
+          }
+        } catch {
+          setIsProfileLoading(true);
+          setHasCheckedProfile(false);
+        }
+      }
 
       const fallbackTimer = setTimeout(() => {
         if (isMounted) {
           console.warn(`Profile load fallback timeout triggered for ${emailId}`);
+          try {
+            const saved = localStorage.getItem('app_user_profile');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed && (parsed.email?.toLowerCase().trim() === emailId || parsed.uid === activeUserUidStr)) {
+                setProfile(parsed);
+                setIsProfileLoading(false);
+                setHasCheckedProfile(true);
+                return;
+              }
+            }
+          } catch (e) {}
+
           if (isSuperAdminEmail(emailId)) {
-            setProfile({
-              uid: activeUser.uid,
-              name: "Administrador",
+            const fallbackAdmin: UserProfile = {
+              uid: activeUserUidStr || emailId,
+              name: emailId.includes('dunor') ? "Administrador DUNOR" : "Super Admin (Yorch)",
               email: emailId,
               role: "ADMIN",
               isRegistered: true
-            });
+            };
+            setProfile(fallbackAdmin);
+            try { localStorage.setItem('app_user_profile', JSON.stringify(fallbackAdmin)); } catch (e) {}
           }
           setIsProfileLoading(false);
           setHasCheckedProfile(true);
         }
-      }, 3000);
+      }, 1200);
 
       const unsubscribe = onSnapshot(doc(db, 'users', emailId), async (snapshot) => {
         clearTimeout(fallbackTimer);
         if (!isMounted) return;
         if (snapshot.exists()) {
           const data = snapshot.data() as UserProfile;
-          if (data.uid !== activeUser.uid) {
+          if (data.role === 'BLOQUEADO' || (data as any).status === 'BLOQUEADO' || (data as any).isBlocked) {
+            localStorage.setItem('blocked_account_notice', "Cuenta bloqueada contacta a Soporte Técnico");
+            handleLogout();
+            return;
+          }
+          if (activeUserUidStr && data.uid !== activeUserUidStr) {
             try {
-              updateDoc(doc(db, 'users', emailId), { uid: activeUser.uid }).catch(e => console.error("Error updating UID:", e));
+              updateDoc(doc(db, 'users', emailId), { uid: activeUserUidStr }).catch(e => console.error("Error updating UID:", e));
             } catch (e) {
               console.error("Error updating UID:", e);
             }
           }
-          const profileWithUid = { ...data, uid: activeUser.uid };
+          const profileWithUid = { ...data, uid: activeUserUidStr || data.uid || emailId };
+          try {
+            localStorage.setItem('app_user_profile', JSON.stringify(profileWithUid));
+          } catch (e) {}
           setProfile(prev => {
             if (prev && 
                 prev.uid === profileWithUid.uid && 
@@ -2974,11 +3827,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             return profileWithUid;
           });
         } else {
+          // If doc by emailId doesn't exist, check by query or check if super admin
           const isSuper = isSuperAdminEmail(emailId);
           if (isSuper) {
-            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
+            const adminName = emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial");
             const autoProfile: UserProfile = {
-              uid: activeUser.uid,
+              uid: activeUserUidStr || emailId,
               name: adminName,
               email: emailId,
               role: "ADMIN",
@@ -2987,13 +3841,30 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             };
             try {
               await setDoc(doc(db, 'users', emailId), autoProfile, { merge: true });
+              localStorage.setItem('app_user_profile', JSON.stringify(autoProfile));
             } catch (createErr) {
               console.error("Auto-creation of super admin user document failed:", createErr);
             }
             if (isMounted) setProfile(autoProfile);
           } else {
-            console.warn(`User ${emailId} is not registered in the database. Access denied.`);
-            if (isMounted) setProfile(null);
+            // Check if user is registered with UID or case-insensitive query
+            try {
+              const queryByUid = await safeGetDocs(query(collection(db, 'users'), where('uid', '==', activeUserUidStr))).catch(() => null);
+              if (queryByUid && !queryByUid.empty) {
+                const foundData = queryByUid.docs[0].data() as UserProfile;
+                const pData = { ...foundData, uid: activeUserUidStr };
+                try { localStorage.setItem('app_user_profile', JSON.stringify(pData)); } catch (e) {}
+                if (isMounted) setProfile(pData);
+              } else {
+                console.warn(`User ${emailId} is not registered in the database. Access denied.`);
+                if (isMounted) {
+                  const saved = localStorage.getItem('app_user_profile');
+                  if (!saved) setProfile(null);
+                }
+              }
+            } catch (qErr) {
+              console.warn("Error checking secondary query for profile:", qErr);
+            }
           }
         }
         if (isMounted) {
@@ -3004,18 +3875,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         clearTimeout(fallbackTimer);
         if (!isMounted) return;
         console.warn(`Error loading profile for ${emailId}:`, error);
+        try {
+          const saved = localStorage.getItem('app_user_profile');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && (parsed.email?.toLowerCase().trim() === emailId || parsed.uid === activeUserUidStr)) {
+              setProfile(parsed);
+              setIsProfileLoading(false);
+              setHasCheckedProfile(true);
+              return;
+            }
+          }
+        } catch (e) {}
+
         const isSuper = isSuperAdminEmail(emailId);
         if (isSuper) {
           const fallbackProfile: UserProfile = {
-            uid: activeUser.uid,
-            name: "Administrador",
+            uid: activeUserUidStr || emailId,
+            name: emailId.includes('dunor') ? "Administrador DUNOR" : "Administrador",
             email: emailId,
             role: "ADMIN",
             isRegistered: true
           };
           setProfile(fallbackProfile);
-        } else {
-          setProfile(null);
         }
         setIsProfileLoading(false);
         setHasCheckedProfile(true);
@@ -3025,62 +3907,75 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         clearTimeout(fallbackTimer);
         unsubscribe();
       };
-    } else {
+    } else if (!activeUser) {
       setProfile(null);
       setIsProfileLoading(false);
       setHasCheckedProfile(true);
     }
-  }, [activeUser]);
+  }, [activeUserEmailStr, activeUserUidStr]);
 
   useEffect(() => {
     if (!profile) return;
 
-    let q;
-    if (isSuperAdmin || isSuperAdminEmail(profile.email) || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE') {
-      q = query(collection(db, 'incidents'), orderBy('createdAt', 'desc'));
-    } else if (profile.role === 'COORDINATOR') {
-      q = query(
-        collection(db, 'incidents'), 
-        or(
-          where('coordinatorId', '==', profile.uid),
-          where('coordinatorIds', 'array-contains', profile.uid)
-        ),
-        orderBy('createdAt', 'desc')
-      );
-    } else if (profile.role === 'PSYCHOLOGIST') {
-      q = query(
-        collection(db, 'incidents'),
-        or(
-          where('suggestReferral', '==', true),
-          where('reporterId', '==', profile.uid),
-          where('reporterEmail', '==', profile.email.toLowerCase()),
-          where('notifiedTeacherId', '==', profile.uid)
-        )
-      );
-    } else {
-      q = query(
-        collection(db, 'incidents'), 
-        or(
-          where('reporterId', '==', profile.uid),
-          where('notifiedTeacherId', '==', profile.uid)
-        ),
-        orderBy('createdAt', 'desc')
-      );
-    }
+    const normRole = normalizeUserRole(profile.role);
+    const userEmail = (profile.email || '').toLowerCase().trim();
+    const userUid = profile.uid;
+
+    const q = query(collection(db, 'incidents'), orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Incident));
       
-      // Manual sort for psychologist as we don't have composite indexes for all OR branches
-      if (profile.role === 'PSYCHOLOGIST') {
-        docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      docs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+      // 1. Directives, Admins, SuperAdmin: Full access to all incidents
+      if (isSuperAdmin || isSuperAdminEmail(userEmail) || normRole === 'ADMIN' || normRole === 'DIRECTIVE') {
+        setIncidents(docs);
+        return;
       }
-      
-      // Filter out soft-deleted incidents for coordinators
-      if (profile.role === 'COORDINATOR') {
-        docs = docs.filter(doc => !doc.deletedByCoordinators?.includes(profile.uid));
+
+      // 2. Coordinators: only incidents assigned to them (or in coordinatorIds) and not soft-deleted
+      if (normRole === 'COORDINATOR') {
+        docs = docs.filter(doc => {
+          if (doc.deletedByCoordinators?.includes(userUid)) return false;
+          const isAssigned = 
+            doc.coordinatorId === userUid || 
+            (doc.coordinatorIds && doc.coordinatorIds.includes(userUid)) ||
+            (doc.coordinatorEmail && doc.coordinatorEmail.toLowerCase() === userEmail);
+          return Boolean(isAssigned);
+        });
+        setIncidents(docs);
+        return;
       }
-      
+
+      // 3. Psychologists: incidents with suggestReferral or where they are directly involved
+      if (normRole === 'PSYCHOLOGIST') {
+        docs = docs.filter(doc => Boolean(
+          doc.suggestReferral ||
+          doc.reporterId === userUid ||
+          (doc.reporterEmail && doc.reporterEmail.toLowerCase() === userEmail) ||
+          doc.notifiedTeacherId === userUid ||
+          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail)
+        ));
+        setIncidents(docs);
+        return;
+      }
+
+      // 4. TEACHERS (Docentes) - STRICT ACCESS CONTROL (User Request):
+      // "Cuando un docente registre una incidencia, esta solo deberá ser visible para el docente que la registro, el coordinador asignado, el directivo y el administrador... ningún otro docente debe de poder visualizar los registros de otro docente, a menos que este como copia a docente"
+      docs = docs.filter(doc => {
+        const isAuthor = 
+          (doc.reporterId && doc.reporterId === userUid) ||
+          (doc.reporterEmail && doc.reporterEmail.toLowerCase() === userEmail);
+
+        const isCopied = 
+          (doc.notifiedTeacherId && doc.notifiedTeacherId === userUid) ||
+          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+          (doc.coordinatorIds && doc.coordinatorIds.includes(userUid));
+
+        return Boolean(isAuthor || isCopied);
+      });
+
       setIncidents(docs);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'incidents');
@@ -3093,7 +3988,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'COORDINATOR' || profile?.role === 'TEACHER' || profile?.role === 'ADMIN' || profile?.role === 'DIRECTIVE' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'COORDINATOR'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         // Deduplicate by email (since uid might be missing for pre-registered)
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
@@ -3106,10 +4001,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [profile, isSuperAdmin]);
 
   useEffect(() => {
-    if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'DIRECTIVE' || isSuperAdmin) {
+    if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'DIRECTIVE' || profile?.role === 'COORDINATOR' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'TEACHER'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setTeachers(uniqueUsers);
@@ -3121,26 +4016,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [profile, isSuperAdmin]);
 
   useEffect(() => {
-    if (profile?.role === 'COORDINATOR') {
-      const q = query(collection(db, 'users'), where('role', '==', 'TEACHER'), limit(100));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
-        // Deduplicate by email
-        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
-          .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
-        setTeachers(uniqueUsers);
-      }, (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'users (teachers-coordinator)');
-      });
-      return () => unsubscribe();
-    }
-  }, [profile]);
-
-  useEffect(() => {
     if (profile?.role === 'ADMIN' || profile?.role === 'TEACHER' || profile?.role === 'COORDINATOR' || profile?.role === 'PSYCHOLOGIST' || profile?.role === 'DIRECTIVE' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'PSYCHOLOGIST'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setPsychologists(uniqueUsers);
@@ -3155,12 +4034,33 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (profile?.role === 'ADMIN' || profile?.role === 'COORDINATOR' || profile?.role === 'DIRECTIVE' || profile?.role === 'TEACHER' || profile?.role === 'PSYCHOLOGIST' || isSuperAdmin) {
       const q = query(collection(db, 'users'), where('role', '==', 'DIRECTIVE'), limit(100));
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => doc.data() as UserProfile);
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
         const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values())
           .filter(u => u.email?.toLowerCase().trim() !== 'jorge.villanueva@boletomovil.com');
         setDirectives(uniqueUsers);
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users (directives)');
+      });
+      return () => unsubscribe();
+    }
+  }, [profile, isSuperAdmin]);
+
+  useEffect(() => {
+    if (profile && (profile.role === 'BLOQUEADO' || (profile as any).status === 'BLOQUEADO' || (profile as any).isBlocked)) {
+      localStorage.setItem('blocked_account_notice', "Cuenta bloqueada contacta a Soporte Técnico");
+      handleLogout();
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    if (profile?.role === 'ADMIN' || isSuperAdmin) {
+      const q = query(collection(db, 'users'), where('role', '==', 'BLOQUEADO'), limit(100));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const users = snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() } as UserProfile));
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.email, u])).values());
+        setBlockedUsers(uniqueUsers);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'users (bloqueados)');
       });
       return () => unsubscribe();
     }
@@ -3205,8 +4105,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, []);
 
   const handleLogout = async () => {
+    setIsLoggingOut(true);
     localStorage.removeItem('app_custom_user');
     localStorage.removeItem('last_user_email');
+    localStorage.removeItem('app_user_profile');
     setCustomUser(null);
     setProfile(null);
     setIsProfileLoading(false);
@@ -3221,6 +4123,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     setTeachers([]);
     setPsychologists([]);
     setDirectives([]);
+    setBlockedUsers([]);
     try {
       if (auth.currentUser) {
         await signOut(auth).catch((e) => {
@@ -3229,12 +4132,53 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     } catch (e: any) {
       console.warn("Logout notice:", e?.message || e);
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
-  if (loading || isProfileLoading || (activeUser && !hasCheckedProfile)) return <LoadingScreen />;
+  // If we already have a loaded profile, do not block the user with a full-screen loader
+  const shouldShowLoading = loading || (!profile && (isProfileLoading || (activeUser && !hasCheckedProfile)));
+
+  if (shouldShowLoading) {
+    return <LoadingScreen />;
+  }
   
-  if (!activeUser) return <ErrorBoundary><LoginScreen systemSettings={effectiveSystemSettings} onCustomLogin={(uData) => { setIsProfileLoading(true); setHasCheckedProfile(false); localStorage.setItem('app_custom_user', JSON.stringify(uData)); setCustomUser(uData); }} /></ErrorBoundary>;
+  if (!activeUser) {
+    return (
+      <ErrorBoundary>
+        <LoginScreen
+          systemSettings={effectiveSystemSettings}
+          onCustomLogin={(uData, fullProfile) => {
+            setIsLoggingOut(false);
+            localStorage.setItem('app_custom_user', JSON.stringify(uData));
+            setCustomUser(uData);
+            if (fullProfile) {
+              localStorage.setItem('app_user_profile', JSON.stringify(fullProfile));
+              setProfile(fullProfile);
+              setHasCheckedProfile(true);
+              setIsProfileLoading(false);
+            } else {
+              try {
+                const saved = localStorage.getItem('app_user_profile');
+                if (saved) {
+                  const parsed = JSON.parse(saved);
+                  if (parsed && (parsed.email === uData.email || parsed.uid === uData.uid)) {
+                    setProfile(parsed);
+                    setHasCheckedProfile(true);
+                    setIsProfileLoading(false);
+                    return;
+                  }
+                }
+              } catch (e) {}
+              setIsProfileLoading(true);
+              setHasCheckedProfile(false);
+            }
+          }}
+        />
+      </ErrorBoundary>
+    );
+  }
   
   if (!profile) return (
     <ErrorBoundary>
@@ -3242,13 +4186,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 text-center">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-slate-900 mb-2">Acceso No Autorizado</h2>
-          <p className="text-slate-600 mb-6">Tu correo no está registrado en el sistema o no tienes un perfil asignado. Contacta a tu administrador.</p>
-          <button
-            onClick={() => handleLogout()}
-            className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-all"
-          >
-            Cerrar sesión
-          </button>
+          <p className="text-slate-600 mb-3">Tu correo no está registrado en el sistema o no tienes un perfil asignado. Contacta a tu administrador.</p>
+          {activeUser?.email && (
+            <div className="bg-slate-100 rounded-xl p-2.5 mb-6 text-xs text-slate-600 font-mono break-all">
+              {activeUser.email}
+            </div>
+          )}
+          <div className="flex flex-col gap-2.5">
+            <button
+              onClick={() => {
+                setIsProfileLoading(true);
+                setHasCheckedProfile(false);
+              }}
+              className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-all cursor-pointer shadow-md"
+            >
+              Reintentar acceso
+            </button>
+            <button
+              onClick={() => handleLogout()}
+              className="w-full bg-slate-100 text-slate-700 font-bold py-2.5 rounded-xl hover:bg-slate-200 transition-all cursor-pointer"
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </div>
       </div>
     </ErrorBoundary>
@@ -3278,6 +4238,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       await updateDoc(doc(db, 'incidents', incidentId), updates);
 
       if (updatedStatus === 'RECIBIDO' && incident.status !== 'RECIBIDO') {
+        await addLog(
+          'Recibió reporte de incidencia',
+          `Recibido por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Reportado originalmente por: ${incident.reporterName}`,
+          { module: 'Incidencias', recordId: incidentId }
+        );
+
         await notifyIncidentInvolvedUsers({
           incident: { ...incident, status: 'RECIBIDO' },
           title: 'Reporte Recibido por Coordinación',
@@ -3297,7 +4263,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (!can('canChangeStatus') && profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
     try {
       await updateDoc(doc(db, 'incidents', incident.id), { status });
-      await addLog('Actualizó estatus de incidencia', `Estatus: ${status}, Incidencia: ${incident.place}`);
+      await addLog(
+        'Actualizó estatus de incidencia',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Nuevo estatus: ${status} | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+        { module: 'Incidencias', recordId: incident.id }
+      );
 
       const statusLabels: Record<IncidentStatus, string> = {
         PENDIENTE: 'Pendiente',
@@ -3330,7 +4300,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       
       await updateDoc(doc(db, 'incidents', incident.id), updateData);
       
-      await addLog('Actualizó estatus de canalización', `Estatus: ${referralStatus === 'IN_PROGRESS' ? 'En Canalización' : 'Sugerencia'}, Incidencia: ${incident.place}`);
+      await addLog(
+        'Actualizó estatus de canalización',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Estatus: ${referralStatus === 'IN_PROGRESS' ? 'En Canalización' : 'Sugerencia'} | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+        { module: 'Canalizaciones', recordId: incident.id }
+      );
 
       if (referralStatus === 'SUGGESTED') {
         // Determine assigned psychologist
@@ -3424,7 +4398,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       await updateDoc(doc(db, 'incidents', incident.id), { 
         referralComments: comments 
       });
-      await addLog('Actualizó comentarios de canalización', `Incidencia: ${incident.place}`);
+      await addLog(
+        'Actualizó comentarios de canalización',
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName} | Comentarios: "${comments.slice(0, 100)}"`,
+        { module: 'Canalizaciones', recordId: incident.id }
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incident.id}`);
     }
@@ -3437,6 +4415,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         followUpHistory: history,
         isReceived: false // Mark as unread so coordinator sees it as "Pendiente"
       });
+
+      await addLog(
+        'Agregó seguimiento a incidencia',
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName} | Comentario: "${newCommentText.substring(0, 100)}"`,
+        { module: 'Incidencias', recordId: incident.id }
+      );
 
       await notifyIncidentInvolvedUsers({
         incident,
@@ -3453,22 +4437,57 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   };
 
   const deleteIncident = async (incident: Incident) => {
-    if (profile.role !== 'COORDINATOR' || incident.status !== 'CERRADO') return;
-    setConfirmModal({
-      isOpen: true,
-      title: 'Eliminar Incidencia',
-      message: '¿Estás seguro de eliminar esta incidencia de tu panel? El docente que la creó aún podrá verla.',
-      onConfirm: async () => {
-        try {
-          await updateDoc(doc(db, 'incidents', incident.id), {
-            deletedByCoordinators: arrayUnion(profile.uid)
-          });
-          setConfirmModal(prev => ({ ...prev, isOpen: false }));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
+    if (!profile) return;
+    const canPermDelete = Boolean(isSuperAdmin || can('canDeleteIncidents') || profile.role === 'ADMIN');
+    const isCoordDelete = profile.role === 'COORDINATOR' && incident.status === 'CERRADO';
+
+    if (!canPermDelete && !isCoordDelete) {
+      showSystemPopup('Acción no permitida', 'No tienes permisos para eliminar este registro de incidencia.', 'warning');
+      return;
+    }
+
+    if (canPermDelete) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Eliminar Registro de Incidencia',
+        message: `¿Estás seguro de eliminar permanentemente el registro de incidencia en "${incident.place}" (Alumnos: ${incident.students})? Esta acción borrará el registro de la base de datos de manera definitiva e irreversible.`,
+        onConfirm: async () => {
+          try {
+            await deleteDoc(doc(db, 'incidents', incident.id));
+            await addLog(
+              'Eliminó incidencia permanentemente',
+              `Incidencia eliminada permanentemente por: ${profile.name} (${profile.role} - ${profile.email}) | ID: ${incident.id} | Alumno(s): ${incident.students} | Lugar: ${incident.place}`,
+              { module: 'Incidencias', recordId: incident.id }
+            );
+            setConfirmModal(prev => ({ ...prev, isOpen: false }));
+            showSystemPopup('Registro Eliminado', 'La incidencia ha sido eliminada permanentemente del sistema.', 'success');
+          } catch (error) {
+            handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
+          }
         }
-      }
-    });
+      });
+    } else if (isCoordDelete) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Eliminar Incidencia de Panel',
+        message: '¿Estás seguro de eliminar esta incidencia de tu panel? El docente que la creó aún podrá verla.',
+        onConfirm: async () => {
+          try {
+            await updateDoc(doc(db, 'incidents', incident.id), {
+              deletedByCoordinators: arrayUnion(profile.uid)
+            });
+            await addLog(
+              'Eliminó incidencia de panel',
+              `Eliminado de panel por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName}`,
+              { module: 'Incidencias', recordId: incident.id }
+            );
+            setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          } catch (error) {
+            handleFirestoreError(error, OperationType.DELETE, `incidents/${incident.id}`);
+          }
+        }
+      });
+    }
   };
 
   const handleInstallClick = async () => {
@@ -3498,6 +4517,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         await updateDoc(doc(db, 'incidents', incident.id), {
           forwardedTo: arrayUnion(adminId)
         });
+
+        await addLog(
+          'Reenvió incidencia a directivo/administrador',
+          `Reenviado por: ${profile.name} (${profile.role} - ${profile.email}) | Incidencia: ${incident.place} | Alumno(s): ${incident.students} | Creador del reporte: ${incident.reporterName} | Destinatario: ${admin.name} (${admin.email})`,
+          { module: 'Incidencias', recordId: incident.id }
+        );
 
         // Send email notification to the admin
         if (systemSettings.emailNotificationsEnabled !== false && admin.email) {
@@ -3542,6 +4567,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             batch.delete(doc(db, 'incidents', id));
           });
           await batch.commit();
+          await addLog(
+            'Eliminación múltiple de incidencias',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Cantidad: ${selectedIncidents.length} incidencias eliminadas de la base de datos`,
+            { module: 'Incidencias' }
+          );
           setSelectedIncidents([]);
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
@@ -3589,9 +4619,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         await setDoc(doc(db, 'settings', 'global'), settingsToSave, { merge: true });
       }
 
-      await deleteDoc(doc(db, 'users', 'incidencias.dunor@gmail.com')).catch(() => {});
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -3700,9 +4730,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       // 2. Ensure super admin documents exist
-      await deleteDoc(doc(db, 'users', 'incidencias.dunor@gmail.com')).catch(() => {});
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -4281,6 +5311,30 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
                 {(() => {
                   const filteredIncidents = incidents.filter(incident => {
+                    const normRole = normalizeUserRole(profile.role);
+                    const userEmail = (profile.email || '').toLowerCase().trim();
+                    const userUid = profile.uid;
+
+                    // Enforce teacher privacy: only own records or if in copy
+                    if (!isSuperAdmin && !isSuperAdminEmail(userEmail) && normRole !== 'ADMIN' && normRole !== 'DIRECTIVE') {
+                      if (normRole === 'TEACHER') {
+                        const isAuthor = 
+                          (incident.reporterId && incident.reporterId === userUid) ||
+                          (incident.reporterEmail && incident.reporterEmail.toLowerCase() === userEmail);
+                        const isCopied = 
+                          (incident.notifiedTeacherId && incident.notifiedTeacherId === userUid) ||
+                          (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+                          (incident.coordinatorIds && incident.coordinatorIds.includes(userUid));
+                        if (!isAuthor && !isCopied) return false;
+                      } else if (normRole === 'COORDINATOR') {
+                        const isAssigned = 
+                          incident.coordinatorId === userUid || 
+                          (incident.coordinatorIds && incident.coordinatorIds.includes(userUid)) ||
+                          (incident.coordinatorEmail && incident.coordinatorEmail.toLowerCase() === userEmail);
+                        if (!isAssigned) return false;
+                      }
+                    }
+
                     if (!searchTerm.trim()) return true;
                     const term = searchTerm.toLowerCase().trim();
                     const studentsMatch = incident.students?.toLowerCase().includes(term);
@@ -4410,6 +5464,94 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 )}
               </div>
 
+              {/* System Native Notifications Card (Celular y PC) - Ocultable una vez aceptado y probado */}
+              {!(systemNotificationPermission === 'granted' && hideTestedNotificationCard) && (
+                <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/20 relative overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHideTestedNotificationCard(true);
+                      try { localStorage.setItem('dunor_hide_tested_notification_card', 'true'); } catch (e) {}
+                    }}
+                    className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors z-20 cursor-pointer"
+                    title="Ocultar aviso"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                  <div className="absolute right-0 top-0 translate-x-4 -translate-y-4 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-11 h-11 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center flex-shrink-0 text-indigo-300">
+                        {systemNotificationPermission === 'granted' ? (
+                          <BellRing className="w-5 h-5 text-emerald-400 animate-pulse" />
+                        ) : (
+                          <Bell className="w-5 h-5 text-indigo-300" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-bold text-white">
+                            Notificaciones en Celular y PC
+                          </h3>
+                          {systemNotificationPermission === 'granted' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              Activo
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              No activado
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-300 mt-1 max-w-xl leading-relaxed">
+                          {systemNotificationPermission === 'granted'
+                            ? 'Recibirás avisos directos en la barra de notificación de tu celular o en la pantalla de tu computadora al recibir nuevas incidencias, canalizaciones o tareas.'
+                            : 'Permite que los avisos importantes aparezcan en la barra de notificaciones de tu celular o en el centro de avisos de tu PC aunque la app esté en segundo plano.'}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-slate-400">
+                          <span className="flex items-center gap-1">
+                            <Smartphone className="w-3.5 h-3.5 text-indigo-400" /> Barra de notificación móvil
+                          </span>
+                          <span>•</span>
+                          <span className="flex items-center gap-1">
+                            <Laptop className="w-3.5 h-3.5 text-indigo-400" /> Avisos de escritorio PC
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-start md:self-center flex-shrink-0">
+                      {systemNotificationPermission === 'granted' ? (
+                        <button
+                          type="button"
+                          onClick={handleTestSystemNotification}
+                          className="px-4 py-2.5 bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-bold rounded-xl transition border border-white/20 shadow-sm flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <BellRing className="w-4 h-4 text-emerald-400" />
+                          Probar notificación
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleRequestSystemNotifications}
+                          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Bell className="w-4 h-4" />
+                          Activar notificaciones
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {systemNotificationPermission === 'denied' && (
+                    <div className="mt-3 pt-3 border-t border-rose-500/20 text-xs text-rose-300 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                      <span>Las notificaciones están bloqueadas en tu navegador. Toca el candado o icono de permisos en la barra de direcciones de tu navegador para permitirlas.</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-3">
                 {notifications.length === 0 ? (
                   <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center">
@@ -4479,11 +5621,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 psychologists={psychologists}
                 directives={directives}
                 admins={admins}
+                blockedUsers={blockedUsers}
                 addLog={addLog}
                 canManageUsers={can('canManageUsers')}
                 canAssignPsychologist={can('canAssignPsychologist')}
                 systemSettings={effectiveSystemSettings}
                 firestoreRolePermissions={firestoreRolePermissions}
+                sendNotification={sendNotification}
+                sendEmail={sendEmail}
               />
             </motion.div>
           )}
@@ -4527,6 +5672,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 teachers={teachers}
                 psychologists={psychologists}
                 directives={directives}
+                admins={admins}
                 onSuccess={() => setActiveTab('incidents')}
                 onCancel={() => setActiveTab('incidents')}
                 sendNotification={sendNotification}
@@ -4616,13 +5762,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               {/* Hidden Secrets Card per requirement */}
 
               {/* Categorías de Incidencia */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    <ClipboardList className="w-5 h-5 text-indigo-600" />
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <div className="p-6 border-b border-slate-100 dark:border-slate-800">
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <ClipboardList className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                     Categorías de Incidencia
                   </h2>
-                  <p className="text-sm text-slate-500 mt-1">
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
                     Agrega, modifica o elimina las categorías elegibles para el reporte de incidencias.
                   </p>
                 </div>
@@ -4634,23 +5780,24 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         value={newCategory}
                         onChange={(e) => setNewCategory(e.target.value)}
                         placeholder="Escribe el nombre de la nueva categoría..."
-                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                        className="flex-1 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                         onKeyDown={async (e) => {
                           if (e.key === 'Enter') {
                             if (!newCategory.trim()) return;
                             const catToAdd = newCategory.trim();
-                            const currentCats = systemSettings.categories || [];
+                            const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                             if (currentCats.includes(catToAdd)) {
                               setNewCategory('');
                               return;
                             }
                             const updatedCategories = [...currentCats, catToAdd];
+                            setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                            setNewCategory('');
                             try {
                               await setDoc(doc(db, 'settings', 'global'), {
                                 categories: updatedCategories
                               }, { merge: true });
                               await addLog('Creó una nueva categoría', `Categoría: ${catToAdd}`);
-                              setNewCategory('');
                             } catch (error) {
                               console.error("Error adding category:", error);
                             }
@@ -4661,23 +5808,24 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         onClick={async () => {
                           if (!newCategory.trim()) return;
                           const catToAdd = newCategory.trim();
-                          const currentCats = systemSettings.categories || [];
+                          const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                           if (currentCats.includes(catToAdd)) {
                             setNewCategory('');
                             return;
                           }
                           const updatedCategories = [...currentCats, catToAdd];
+                          setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                          setNewCategory('');
                           try {
                             await setDoc(doc(db, 'settings', 'global'), {
                               categories: updatedCategories
                             }, { merge: true });
                             await addLog('Creó una nueva categoría', `Categoría: ${catToAdd}`);
-                            setNewCategory('');
                           } catch (error) {
                             console.error("Error adding category:", error);
                           }
                         }}
-                        className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2 cursor-pointer shadow-sm text-sm"
+                        className="bg-indigo-600 dark:bg-indigo-500 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all flex items-center gap-2 cursor-pointer shadow-sm text-sm"
                       >
                         <Plus className="w-4 h-4" />
                         Agregar Categoría
@@ -4686,17 +5834,18 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
-                    {(systemSettings.categories || []).map((cat) => {
+                    {(systemSettings.categories || DEFAULT_SETTINGS.categories || []).map((cat) => {
                       const isEditingThis = editingCategory?.original === cat;
+                      const isDeletingThis = deletingCategory === cat;
                       return (
-                        <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200/80 hover:border-slate-300 transition-all group">
+                        <div key={cat} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600 transition-all group min-h-[50px]">
                           {isEditingThis ? (
                             <div className="flex items-center gap-2 w-full">
                               <input
                                 type="text"
                                 value={editingCategory.name}
                                 onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
-                                className="flex-1 bg-white border border-indigo-300 rounded-lg px-3 py-1 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                className="flex-1 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-indigo-600 rounded-lg px-3 py-1 text-sm font-semibold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 autoFocus
                                 onKeyDown={async (e) => {
                                   if (e.key === 'Enter') {
@@ -4707,14 +5856,15 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                                       setEditingCategory(null);
                                       return;
                                     }
-                                    const currentCats = systemSettings.categories || [];
+                                    const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                                     const updatedCategories = currentCats.map(c => c === oldName ? newName : c);
+                                    setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                                    setEditingCategory(null);
                                     try {
                                       await setDoc(doc(db, 'settings', 'global'), {
                                         categories: updatedCategories
                                       }, { merge: true });
                                       await addLog('Modificó una categoría', `De: "${oldName}" a: "${newName}"`);
-                                      setEditingCategory(null);
                                     } catch (error) {
                                       console.error("Error updating category:", error);
                                     }
@@ -4732,58 +5882,87 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                                     setEditingCategory(null);
                                     return;
                                   }
-                                  const currentCats = systemSettings.categories || [];
+                                  const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
                                   const updatedCategories = currentCats.map(c => c === oldName ? newName : c);
+                                  setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                                  setEditingCategory(null);
                                   try {
                                     await setDoc(doc(db, 'settings', 'global'), {
                                       categories: updatedCategories
                                     }, { merge: true });
                                     await addLog('Modificó una categoría', `De: "${oldName}" a: "${newName}"`);
-                                    setEditingCategory(null);
                                   } catch (error) {
                                     console.error("Error updating category:", error);
                                   }
                                 }}
                                 title="Guardar cambio"
-                                className="p-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-lg transition-all cursor-pointer"
+                                className="p-1.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/60 rounded-lg transition-all cursor-pointer"
                               >
                                 <Check className="w-4 h-4" />
                               </button>
                               <button
                                 onClick={() => setEditingCategory(null)}
                                 title="Cancelar"
-                                className="p-1.5 bg-slate-200 text-slate-600 hover:bg-slate-300 rounded-lg transition-all cursor-pointer"
+                                className="p-1.5 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg transition-all cursor-pointer"
                               >
                                 <X className="w-4 h-4" />
                               </button>
                             </div>
+                          ) : isDeletingThis ? (
+                            <div className="flex items-center justify-between w-full gap-2 animate-fadeIn">
+                              <span className="text-xs font-bold text-rose-600 dark:text-rose-400 truncate">
+                                ¿Confirmas eliminar?
+                              </span>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <button
+                                  onClick={async () => {
+                                    const currentCats = systemSettings.categories || DEFAULT_SETTINGS.categories || [];
+                                    const updatedCategories = currentCats.filter(c => c !== cat);
+                                    setSystemSettings(prev => ({ ...prev, categories: updatedCategories }));
+                                    setDeletingCategory(null);
+                                    try {
+                                      await setDoc(doc(db, 'settings', 'global'), {
+                                        categories: updatedCategories
+                                      }, { merge: true });
+                                      await addLog('Eliminó una categoría', `Categoría: ${cat}`);
+                                    } catch (error) {
+                                      console.error("Error removing category:", error);
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm"
+                                >
+                                  Sí, eliminar
+                                </button>
+                                <button
+                                  onClick={() => setDeletingCategory(null)}
+                                  className="px-2 py-1 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-semibold transition-all cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
                           ) : (
                             <>
-                              <span className="text-sm font-semibold text-slate-700">{cat}</span>
+                              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{cat}</span>
                               {(isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || profile.role === 'COORDINATOR') && (
                                 <div className="flex items-center gap-1 opacity-90 group-hover:opacity-100 transition-opacity">
                                   <button
-                                    onClick={() => setEditingCategory({ original: cat, name: cat })}
+                                    onClick={() => {
+                                      setDeletingCategory(null);
+                                      setEditingCategory({ original: cat, name: cat });
+                                    }}
                                     title="Modificar nombre de categoría"
-                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg transition-all cursor-pointer"
                                   >
                                     <Edit2 className="w-4 h-4" />
                                   </button>
                                   <button
-                                    onClick={async () => {
-                                      const currentCats = systemSettings.categories || [];
-                                      const updatedCategories = currentCats.filter(c => c !== cat);
-                                      try {
-                                        await setDoc(doc(db, 'settings', 'global'), {
-                                          categories: updatedCategories
-                                        }, { merge: true });
-                                        await addLog('Eliminó una categoría', `Categoría: ${cat}`);
-                                      } catch (error) {
-                                        console.error("Error removing category:", error);
-                                      }
+                                    onClick={() => {
+                                      setEditingCategory(null);
+                                      setDeletingCategory(cat);
                                     }}
                                     title="Eliminar categoría"
-                                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-all cursor-pointer"
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -4794,6 +5973,65 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Notificaciones del Sistema en el Dispositivo (Móvil y PC) */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+                <div className="p-6 border-b border-slate-100 dark:border-slate-800">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Bell className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                        Notificaciones en Barra del Dispositivo (Celular y PC)
+                      </h2>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Controla los avisos nativos en la barra de notificaciones del celular o centro de notificaciones en PC.
+                      </p>
+                    </div>
+                    <div>
+                      {systemNotificationPermission === 'granted' ? (
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Activadas
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600" /> No activadas
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200">
+                      {systemNotificationPermission === 'granted'
+                        ? 'Tu dispositivo está configurado para recibir alertas visuales y con sonido.'
+                        : 'Permite las notificaciones para no perderte incidencias ni canalizaciones prioritarias.'}
+                    </p>
+                    <p className="text-slate-500">Funciona en Android (barra superior), iOS PWA y PC (Windows/Mac/Linux).</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {systemNotificationPermission === 'granted' ? (
+                      <button
+                        type="button"
+                        onClick={handleTestSystemNotification}
+                        className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl transition border border-indigo-200 shadow-sm flex items-center gap-2 cursor-pointer"
+                      >
+                        <BellRing className="w-4 h-4 text-indigo-600" />
+                        Probar notificación
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleRequestSystemNotifications}
+                        className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition shadow-md shadow-indigo-200 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Bell className="w-4 h-4" />
+                        Activar en este dispositivo
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -4965,98 +6203,530 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+              {/* Header */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <h1 className="text-2xl font-bold text-slate-900">Logs del Sistema</h1>
-                  <p className="text-slate-500">Registro de actividades y modificaciones recientes</p>
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                      <History className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h1 className="text-2xl font-bold text-slate-900">Logs y Auditoría del Sistema</h1>
+                      <p className="text-xs sm:text-sm text-slate-500">
+                        Historial de actividad con autor de creación, canalizaciones y registros
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                {logs.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setConfirmModal({
-                        isOpen: true,
-                        title: 'Borrar Historial de Logs',
-                        message: '¿Estás seguro de que deseas eliminar todos los registros de actividad? Esta acción no se puede deshacer.',
-                        onConfirm: async () => {
-                          try {
-                            const batch = writeBatch(db);
-                            // Firestore batch limit is 500, but we fetch 200 in the listener
-                            logs.forEach((log) => {
-                              if (log.id) {
-                                batch.delete(doc(db, 'logs', log.id));
-                              }
-                            });
-                            await batch.commit();
-                            setConfirmModal(prev => ({ ...prev, isOpen: false }));
-                          } catch (error) {
-                            console.error("Error clearing logs:", error);
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {logs.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const csvRows: string[] = [];
+                        csvRows.push(['Fecha', 'Hora', 'Módulo', 'Acción', 'Creador/Responsable', 'Rol Creador', 'Usuario Actor', 'Rol Actor', 'Detalles'].join(','));
+                        logs.forEach(l => {
+                          const mod = l.module || getModuleFromAction(l.action);
+                          const crName = l.creatorName || l.userName;
+                          const crRole = l.creatorRole || l.userRole || '';
+                          const d = `"${(l.details || '').replace(/"/g, '""')}"`;
+                          csvRows.push([
+                            format(l.timestamp, "yyyy-MM-dd"),
+                            format(l.timestamp, "HH:mm:ss"),
+                            `"${mod}"`,
+                            `"${l.action.replace(/"/g, '""')}"`,
+                            `"${crName.replace(/"/g, '""')}"`,
+                            `"${crRole}"`,
+                            `"${l.userName.replace(/"/g, '""')}"`,
+                            `"${l.userRole || ''}"`,
+                            d
+                          ].join(','));
+                        });
+                        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.setAttribute('href', url);
+                        link.setAttribute('download', `auditoria_logs_${format(new Date(), 'yyyyMMdd_HHmm')}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                      className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 transition-all shadow-sm cursor-pointer"
+                      title="Exportar logs a CSV"
+                    >
+                      <Download className="w-3.5 h-3.5 text-slate-500" />
+                      Exportar CSV
+                    </button>
+                  )}
+
+                  {logs.length > 0 && isSuperAdmin && (
+                    <button
+                      onClick={() => {
+                        setConfirmModal({
+                          isOpen: true,
+                          title: 'Borrar Historial de Logs',
+                          message: '¿Estás seguro de que deseas eliminar todos los registros de actividad? Esta acción no se puede deshacer.',
+                          onConfirm: async () => {
+                            try {
+                              const batch = writeBatch(db);
+                              logs.forEach((log) => {
+                                if (log.id) {
+                                  batch.delete(doc(db, 'logs', log.id));
+                                }
+                              });
+                              await batch.commit();
+                              setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                            } catch (error) {
+                              console.error("Error clearing logs:", error);
+                            }
                           }
-                        }
-                      });
-                    }}
-                    className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl font-bold hover:bg-red-100 transition-all border border-red-100"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Borrar Historial
-                  </button>
-                )}
+                        });
+                      }}
+                      className="flex items-center gap-1.5 bg-red-50 text-red-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-all border border-red-100 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Borrar Historial
+                    </button>
+                  )}
+                </div>
               </div>
 
+              {/* Filter and Search Bar */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                  {/* Search Input */}
+                  <div className="sm:col-span-5 relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por creador, acción, detalle, alumno o usuario..."
+                      value={logSearchTerm}
+                      onChange={(e) => setLogSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-slate-50/50"
+                    />
+                    {logSearchTerm && (
+                      <button
+                        onClick={() => setLogSearchTerm('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Module Filter */}
+                  <div className="sm:col-span-3">
+                    <select
+                      value={logModuleFilter}
+                      onChange={(e) => setLogModuleFilter(e.target.value)}
+                      className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                    >
+                      <option value="ALL">📁 Todos los Módulos</option>
+                      <option value="Incidencias">🚨 Incidencias</option>
+                      <option value="Canalizaciones">🧠 Canalizaciones</option>
+                      <option value="Expedientes">📂 Expedientes</option>
+                      <option value="Informes">📊 Informes</option>
+                      <option value="Tareas / Felicitaciones">📋 Tareas / Felicitaciones</option>
+                      <option value="Usuarios">👥 Usuarios</option>
+                      <option value="Permisos">🛡️ Permisos</option>
+                      <option value="Configuración">⚙️ Configuración</option>
+                    </select>
+                  </div>
+
+                  {/* Role Filter */}
+                  <div className="sm:col-span-3">
+                    <select
+                      value={logRoleFilter}
+                      onChange={(e) => setLogRoleFilter(e.target.value)}
+                      className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                    >
+                      <option value="ALL">👤 Todos los Roles</option>
+                      <option value="ADMIN">Administrador</option>
+                      <option value="DIRECTIVE">Directivo</option>
+                      <option value="COORDINATOR">Coordinador</option>
+                      <option value="PSYCHOLOGIST">Psicólogo</option>
+                      <option value="TEACHER">Docente</option>
+                    </select>
+                  </div>
+
+                  {/* Clear button */}
+                  <div className="sm:col-span-1 flex items-center">
+                    {(logSearchTerm || logModuleFilter !== 'ALL' || logRoleFilter !== 'ALL') && (
+                      <button
+                        onClick={() => {
+                          setLogSearchTerm('');
+                          setLogModuleFilter('ALL');
+                          setLogRoleFilter('ALL');
+                        }}
+                        className="w-full py-2 px-2 text-xs font-semibold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all flex items-center justify-center gap-1"
+                        title="Restablecer filtros"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span className="sm:hidden">Limpiar</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Filter info badges */}
+                <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-100 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-700">
+                      Mostrando {
+                        logs.filter(log => {
+                          const mod = log.module || getModuleFromAction(log.action);
+                          if (logModuleFilter !== 'ALL' && mod !== logModuleFilter) return false;
+                          if (logRoleFilter !== 'ALL' && log.userRole !== logRoleFilter && log.creatorRole !== logRoleFilter) return false;
+                          if (logSearchTerm.trim()) {
+                            const q = logSearchTerm.toLowerCase();
+                            const match = (log.action || '').toLowerCase().includes(q) ||
+                              (log.details || '').toLowerCase().includes(q) ||
+                              (log.userName || '').toLowerCase().includes(q) ||
+                              (log.userEmail || '').toLowerCase().includes(q) ||
+                              (log.creatorName || '').toLowerCase().includes(q) ||
+                              (log.creatorEmail || '').toLowerCase().includes(q) ||
+                              (mod || '').toLowerCase().includes(q);
+                            if (!match) return false;
+                          }
+                          return true;
+                        }).length
+                      } de {logs.length} registros
+                    </span>
+                    {(logModuleFilter !== 'ALL' || logRoleFilter !== 'ALL' || logSearchTerm) && (
+                      <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-md text-[11px]">
+                        Filtro activo
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span> Creación / Registro
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span> Actualización
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span> Eliminación
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Logs Table */}
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-100">
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Fecha y Hora</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Usuario</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Acción</th>
-                        <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Detalles</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Fecha / Hora</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Módulo</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Creador / Responsable</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Usuario Actor</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Acción Realizada</th>
+                        <th className="px-4 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Detalles del Registro</th>
+                        <th className="px-3 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Info</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {logs.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-6 py-10 text-center text-slate-400 italic">
-                            No hay registros de actividad disponibles.
-                          </td>
-                        </tr>
-                      ) : (
-                        logs.map((log) => (
-                          <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-slate-900">
-                                {format(log.timestamp, "dd/MM/yyyy")}
-                              </div>
-                              <div className="text-xs text-slate-500">
-                                {format(log.timestamp, "HH:mm:ss")}
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-bold text-slate-900">{log.userName}</div>
-                              <div className="text-xs text-slate-500">{log.userEmail}</div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={cn(
-                                "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold",
-                                log.action.includes('Eliminó') ? "bg-red-50 text-red-700" :
-                                log.action.includes('Creó') ? "bg-green-50 text-green-700" :
-                                "bg-blue-50 text-blue-700"
-                              )}>
-                                {log.action}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="text-sm text-slate-600 max-w-xs truncate" title={log.details}>
-                                {log.details || '-'}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
+                    <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
+                      {(() => {
+                        const displayedLogs = logs.filter(log => {
+                          const mod = log.module || getModuleFromAction(log.action);
+                          if (logModuleFilter !== 'ALL' && mod !== logModuleFilter) return false;
+                          if (logRoleFilter !== 'ALL' && log.userRole !== logRoleFilter && log.creatorRole !== logRoleFilter) return false;
+                          if (logSearchTerm.trim()) {
+                            const q = logSearchTerm.toLowerCase();
+                            const match = (log.action || '').toLowerCase().includes(q) ||
+                              (log.details || '').toLowerCase().includes(q) ||
+                              (log.userName || '').toLowerCase().includes(q) ||
+                              (log.userEmail || '').toLowerCase().includes(q) ||
+                              (log.creatorName || '').toLowerCase().includes(q) ||
+                              (log.creatorEmail || '').toLowerCase().includes(q) ||
+                              (mod || '').toLowerCase().includes(q);
+                            if (!match) return false;
+                          }
+                          return true;
+                        });
+
+                        if (displayedLogs.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={7} className="px-6 py-12 text-center text-slate-400 italic">
+                                <History className="w-8 h-8 text-slate-300 mx-auto mb-2 opacity-50" />
+                                No se encontraron registros de actividad con los filtros seleccionados.
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return displayedLogs.map((log) => {
+                          const mod = log.module || getModuleFromAction(log.action);
+                          const creatorName = log.creatorName || log.userName;
+                          const creatorEmail = log.creatorEmail || log.userEmail;
+                          const creatorRole = log.creatorRole || log.userRole;
+
+                          const isDeleteAction = log.action.includes('Eliminó') || log.action.includes('Eliminación');
+                          const isCreateAction = log.action.includes('Creó') || log.action.includes('Asignó') || log.action.includes('Envió') || log.action.includes('Generó');
+
+                          return (
+                            <tr
+                              key={log.id}
+                              className="hover:bg-slate-50/70 transition-colors cursor-pointer group"
+                              onClick={() => setSelectedLogDetail(log)}
+                            >
+                              {/* Date & Time */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="font-semibold text-slate-900 text-xs">
+                                  {format(log.timestamp, "dd/MM/yyyy")}
+                                </div>
+                                <div className="text-[11px] text-slate-400 font-mono">
+                                  {format(log.timestamp, "HH:mm:ss")}
+                                </div>
+                              </td>
+
+                              {/* Module */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <span className={cn(
+                                  "inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border",
+                                  mod === 'Incidencias' ? "bg-amber-50 text-amber-800 border-amber-200" :
+                                  mod === 'Canalizaciones' ? "bg-pink-50 text-pink-800 border-pink-200" :
+                                  mod === 'Expedientes' ? "bg-purple-50 text-purple-800 border-purple-200" :
+                                  mod === 'Informes' ? "bg-sky-50 text-sky-800 border-sky-200" :
+                                  mod === 'Tareas / Felicitaciones' ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
+                                  mod === 'Usuarios' ? "bg-indigo-50 text-indigo-800 border-indigo-200" :
+                                  mod === 'Permisos' ? "bg-violet-50 text-violet-800 border-violet-200" :
+                                  "bg-slate-100 text-slate-700 border-slate-200"
+                                )}>
+                                  {mod}
+                                </span>
+                              </td>
+
+                              {/* Creator / Responsible */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-[10px] shrink-0 border border-slate-200">
+                                    {creatorName ? creatorName.charAt(0).toUpperCase() : 'U'}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold text-slate-900 text-xs flex items-center gap-1">
+                                      {creatorName}
+                                      {creatorRole && (
+                                        <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
+                                          {creatorRole}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-slate-400 truncate max-w-[160px]">
+                                      {creatorEmail}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Acting User */}
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <div className="text-xs font-semibold text-slate-700">
+                                  {log.userName}
+                                </div>
+                                <div className="text-[11px] text-slate-400 truncate max-w-[140px]">
+                                  {log.userRole ? `${log.userRole} • ` : ''}{log.userEmail}
+                                </div>
+                              </td>
+
+                              {/* Action */}
+                              <td className="px-4 py-3.5">
+                                <span className={cn(
+                                  "inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border",
+                                  isDeleteAction ? "bg-rose-50 text-rose-700 border-rose-200" :
+                                  isCreateAction ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                  "bg-blue-50 text-blue-700 border-blue-200"
+                                )}>
+                                  {log.action}
+                                </span>
+                              </td>
+
+                              {/* Details snippet */}
+                              <td className="px-4 py-3.5">
+                                <div className="text-xs text-slate-600 max-w-sm truncate" title={log.details}>
+                                  {log.details || '-'}
+                                </div>
+                              </td>
+
+                              {/* View button */}
+                              <td className="px-3 py-3.5 text-right whitespace-nowrap">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedLogDetail(log);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Ver detalle completo"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
                     </tbody>
                   </table>
                 </div>
               </div>
+
+              {/* Log Detail Modal */}
+              <AnimatePresence>
+                {selectedLogDetail && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full overflow-hidden"
+                    >
+                      {/* Modal Header */}
+                      <div className="p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-indigo-500/20 rounded-xl border border-indigo-400/30">
+                            <History className="w-5 h-5 text-indigo-300" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-base">Detalle de Actividad en Registro</h3>
+                            <p className="text-xs text-indigo-200">
+                              {format(selectedLogDetail.timestamp, "dd 'de' MMMM, yyyy - HH:mm:ss")}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setSelectedLogDetail(null)}
+                          className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      {/* Modal Content */}
+                      <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                        {/* Action and Module Header */}
+                        <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-slate-100">
+                          <div>
+                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Acción</span>
+                            <span className="text-sm font-bold text-slate-900">{selectedLogDetail.action}</span>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                            Módulo: {selectedLogDetail.module || getModuleFromAction(selectedLogDetail.action)}
+                          </span>
+                        </div>
+
+                        {/* Creator / Author details */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <UserCheck className="w-4 h-4 text-emerald-600" />
+                            Creador / Responsable del Registro
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Nombre:</span>
+                              <span className="font-bold text-slate-800">
+                                {selectedLogDetail.creatorName || selectedLogDetail.userName}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Rol:</span>
+                              <span className="font-semibold text-slate-700">
+                                {selectedLogDetail.creatorRole || selectedLogDetail.userRole || 'No especificado'}
+                              </span>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <span className="text-slate-400 block text-[11px]">Correo Electrónico:</span>
+                              <span className="font-mono text-slate-700 text-[11px]">
+                                {selectedLogDetail.creatorEmail || selectedLogDetail.userEmail}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Executing user details if distinct */}
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <UserIcon className="w-4 h-4 text-blue-600" />
+                            Usuario que ejecutó la operación (Actor)
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Usuario:</span>
+                              <span className="font-bold text-slate-800">{selectedLogDetail.userName}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Rol en el sistema:</span>
+                              <span className="font-semibold text-slate-700">{selectedLogDetail.userRole || 'Usuario'}</span>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <span className="text-slate-400 block text-[11px]">Correo:</span>
+                              <span className="font-mono text-slate-700 text-[11px]">{selectedLogDetail.userEmail}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Record ID if present */}
+                        {selectedLogDetail.recordId && (
+                          <div>
+                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                              ID del Registro
+                            </span>
+                            <div className="bg-slate-100 px-3 py-1.5 rounded-lg text-xs font-mono text-slate-700 break-all select-all">
+                              {selectedLogDetail.recordId}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Full details text */}
+                        <div>
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                            Contenido y Metadatos del Evento
+                          </span>
+                          <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-700 font-sans leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                            {selectedLogDetail.details ? (
+                              <div className="space-y-1.5">
+                                {selectedLogDetail.details.split(' | ').map((part, idx) => (
+                                  <div key={idx} className="flex items-start gap-1.5 py-0.5 border-b border-slate-100 last:border-b-0">
+                                    <span className="text-indigo-500 font-bold">•</span>
+                                    <span className="break-all">{part}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">Sin detalles adicionales registrados.</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Modal Footer */}
+                      <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+                        <button
+                          onClick={() => {
+                            const textToCopy = `Acción: ${selectedLogDetail.action}\nMódulo: ${selectedLogDetail.module || getModuleFromAction(selectedLogDetail.action)}\nCreador: ${selectedLogDetail.creatorName || selectedLogDetail.userName} (${selectedLogDetail.creatorRole || selectedLogDetail.userRole || ''})\nActor: ${selectedLogDetail.userName} (${selectedLogDetail.userEmail})\nFecha: ${format(selectedLogDetail.timestamp, "dd/MM/yyyy HH:mm:ss")}\nDetalles: ${selectedLogDetail.details || ''}`;
+                            navigator.clipboard.writeText(textToCopy);
+                            showSystemPopup("Copiado", "Los detalles del registro se han copiado al portapapeles.", "success");
+                          }}
+                          className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-100 px-3 py-2 rounded-xl transition-all shadow-sm"
+                        >
+                          <Copy className="w-3.5 h-3.5 text-slate-500" />
+                          Copiar Detalles
+                        </button>
+
+                        <button
+                          onClick={() => setSelectedLogDetail(null)}
+                          className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-slate-900 transition-all cursor-pointer"
+                        >
+                          Cerrar
+                        </button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
 
@@ -5074,9 +6744,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 psychologists={psychologists}
                 directives={directives}
                 teachers={teachers}
+                admins={admins}
                 addLog={addLog}
                 isSuperAdmin={isSuperAdmin}
                 canCreateReferral={can('canCreateReferral')}
+                canDeleteReferral={can('canDeleteReferrals') || isSuperAdmin || profile?.role === 'ADMIN' || profile?.role === 'PSYCHOLOGIST' || (profile?.role && String(profile?.role).toLowerCase().includes('psico'))}
                 canManageExpedientes={can('canManageExpedientes')}
                 canAddFollowUp={can('canAddFollowUp')}
                 highlightedReferralId={highlightedReferralId}
@@ -5104,6 +6776,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 directives={directives}
                 teachers={teachers}
                 psychologists={psychologists}
+                admins={admins}
                 addLog={addLog}
                 sendNotification={sendNotification}
                 canManageExpedientes={can('canManageExpedientes')}
@@ -5486,24 +7159,24 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-all">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
       >
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-base">
+          <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-base">
             <UserIcon className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="font-bold text-slate-900 text-base">{studentName}</h3>
-            <p className="text-xs text-slate-500 font-medium">
+            <h3 className="font-bold text-slate-900 dark:text-white text-base">{studentName}</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
               {incidents.length} {incidents.length === 1 ? 'incidencia registrada' : 'incidencias registradas'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
+          <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-3 py-1 rounded-full border border-indigo-100 dark:border-indigo-800/60">
             {incidents.length}
           </span>
           <ChevronDown className={cn("w-5 h-5 text-slate-400 transition-transform duration-200", isOpen && "rotate-180")} />
@@ -5511,7 +7184,7 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
       </button>
 
       {isOpen && (
-        <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 border-t border-slate-200">
+        <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 dark:bg-slate-950/40 border-t border-slate-200 dark:border-slate-800">
           {incidents.map((incident) => (
             <IncidentCard
               key={incident.id}
@@ -5594,11 +7267,13 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
     }
   }, [expandedIncidentId, incident.id]);
 
+  const hasMarkedReceivedRef = useRef(false);
   useEffect(() => {
-    if (isExpanded && role === 'COORDINATOR' && !incident.isReceived && !isSuperAdmin) {
+    if (isExpanded && role === 'COORDINATOR' && !incident.isReceived && !isSuperAdmin && !hasMarkedReceivedRef.current) {
+      hasMarkedReceivedRef.current = true;
       onMarkReceived();
     }
-  }, [isExpanded, role, incident.isReceived, onMarkReceived, isSuperAdmin]);
+  }, [isExpanded, role, incident.isReceived, isSuperAdmin]);
 
   const handleAddComment = () => {
     if (!newComment.trim()) return;
@@ -5699,11 +7374,16 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                 </div>
               )}
               <div className="mt-1">
-                <p className="text-sm text-slate-800 font-bold">
-                  Reporta: {incident.reporterName}
-                  {incident.notifiedTeacherId === profile?.uid && incident.reporterId !== profile?.uid && (
-                    <span className="ml-2 text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full font-bold border border-blue-100">
-                      Copia Informativa
+                <p className="text-sm text-slate-800 font-bold flex items-center flex-wrap gap-1.5">
+                  <span>Reporta: ({incident.reporterName || incident.creatorName || 'Personal Escolar'})</span>
+                  {incident.reporterRole && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                      {incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'PSYCHOLOGIST' ? 'Psicólogo' : incident.reporterRole}
+                    </span>
+                  )}
+                  {((incident.notifiedTeacherId === profile?.uid) || (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && incident.reporterId !== profile?.uid && incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
+                    <span className="ml-1 text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200 shadow-xs">
+                      En Copia
                     </span>
                   )}
                 </p>
@@ -5751,7 +7431,22 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                 </div>
               )}
             </div>
-            <ChevronRight className={cn("w-5 h-5 text-slate-400 transition-transform", isExpanded && "rotate-90")} />
+            <div className="flex items-center gap-1">
+              {(isSuperAdmin || can('canDeleteIncidents') || profile?.role === 'ADMIN') && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                  title="Eliminar incidencia"
+                >
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                </button>
+              )}
+              <ChevronRight className={cn("w-5 h-5 text-slate-400 transition-transform", isExpanded && "rotate-90")} />
+            </div>
           </div>
         </div>
       </div>
@@ -5763,7 +7458,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="border-t border-slate-100 bg-slate-50/50"
+            className="border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-transparent"
           >
             <div className="p-5 space-y-6">
               {role === 'PSYCHOLOGIST' && incident.suggestReferral && (
@@ -5913,7 +7608,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                         return (
                           <span className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm flex items-center gap-1">
                             <UserIcon className="w-3 h-3" />
-                            {teacher?.name || 'Cargando...'}
+                            {teacher?.name || incident.notifiedTeacherName || 'Docente notificado'}
                           </span>
                         );
                       })()}
@@ -6026,8 +7721,18 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-200">
                 <div className="space-y-3">
                   <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">Reportado por</p>
-                    <p className="text-sm font-medium text-slate-900">{incident.reporterName}</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">Reportado por (Creador del Registro)</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-bold text-slate-900">({incident.reporterName || incident.creatorName || 'Personal Escolar'})</p>
+                      {incident.reporterRole && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md font-extrabold uppercase bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'PSYCHOLOGIST' ? 'Psicólogo' : incident.reporterRole}
+                        </span>
+                      )}
+                    </div>
+                    {incident.reporterEmail && (
+                      <p className="text-xs text-slate-500 mt-0.5">{incident.reporterEmail}</p>
+                    )}
                   </div>
                   {incident.receivedByName && (
                     <div>
@@ -6037,7 +7742,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                   )}
                 </div>
                 <div className="flex justify-end items-end gap-2">
-                  {can('canExportReports') && (
+                  {can('canExportReports') && profile?.role !== 'TEACHER' && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onPrint(incident); }}
                       className="flex items-center gap-2 text-slate-600 hover:bg-slate-100 px-3 py-2 rounded-lg transition-all text-sm font-bold cursor-pointer"
@@ -6046,7 +7751,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                       Imprimir
                     </button>
                   )}
-                  {can('canDeleteIncidents') && incident.status === 'CERRADO' && (
+                  {(isSuperAdmin || can('canDeleteIncidents') || profile?.role === 'ADMIN' || (profile?.role === 'COORDINATOR' && incident.status === 'CERRADO')) && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onDelete(); }}
                       className="flex items-center gap-2 text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-all text-sm font-bold cursor-pointer"
@@ -6068,24 +7773,31 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
 
 const DetailSection = ({ label, content }: { label: string, content: string }) => (
   <div>
-    <p className="text-xs font-bold text-slate-400 uppercase mb-1">{label}</p>
-    <p className="text-sm text-slate-700 whitespace-pre-wrap">{content || 'Sin información'}</p>
+    <p className="text-xs font-bold text-slate-400 dark:text-slate-400 uppercase mb-1">{label}</p>
+    <p className="text-sm text-slate-700 dark:text-slate-100 whitespace-pre-wrap">{content || 'Sin información'}</p>
   </div>
 );
 
-const IncidentForm = ({ profile, coordinators, teachers, psychologists, directives = [], onSuccess, onCancel, sendNotification, notifyIncidentInvolvedUsers, sendEmail, systemSettings, addLog }: { 
+const IncidentForm = ({ profile, coordinators, teachers, psychologists, directives = [], admins = [], onSuccess, onCancel, sendNotification, notifyIncidentInvolvedUsers, sendEmail, systemSettings, addLog }: { 
   profile: UserProfile, 
   coordinators: UserProfile[],
   teachers: UserProfile[], 
   psychologists: UserProfile[],
   directives?: UserProfile[],
+  admins?: UserProfile[],
   onSuccess: () => void, 
   onCancel: () => void, 
   sendNotification: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>, 
   notifyIncidentInvolvedUsers?: (params: any) => Promise<void>,
   sendEmail?: (to: string, subject: string, html: string) => Promise<any>,
   systemSettings: SystemSettings,
-  addLog: (action: string, details?: string) => Promise<void>
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+  }) => Promise<void>
 }) => {
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
   const canCreateReferral = getRolePermission(profile?.role, 'canCreateReferral', systemSettings?.rolePermissions, isSuperAdmin, profile?.customPermissions);
@@ -6106,13 +7818,39 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
   });
   const [images, setImages] = useState<string[]>([]);
 
+  const primaryCoord = coordinators.find(c =>
+    (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+    (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+    (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+  );
+
+  const secondaryCoord = coordinators.find(c =>
+    (profile.secondaryCoordinatorId && c.uid === profile.secondaryCoordinatorId) ||
+    (profile.secondaryCoordinatorEmail && c.email?.toLowerCase() === profile.secondaryCoordinatorEmail?.toLowerCase()) ||
+    (profile.secondaryCoordinatorName && c.name === profile.secondaryCoordinatorName)
+  );
+
+  const hasTwoCoordinators = Boolean(primaryCoord && secondaryCoord && primaryCoord.uid !== secondaryCoord.uid);
+  const [selectedCoordMode, setSelectedCoordMode] = useState<'primary' | 'secondary' | 'both'>('primary');
+
   useEffect(() => {
     if (coordinators.length > 0 && formData.coordinatorIds.length === 0) {
-      const defaultCoord = coordinators.find(c =>
-        (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
-        (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
-        (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
-      );
+      if (hasTwoCoordinators && primaryCoord) {
+        setFormData(prev => ({ ...prev, coordinatorIds: [primaryCoord.uid] }));
+        return;
+      }
+      let defaultCoord: UserProfile | undefined;
+      // If the current user is a coordinator, default assigned coordinator to themselves
+      if (profile.role === 'COORDINATOR') {
+        defaultCoord = coordinators.find(c => c.uid === profile.uid || (c.email && c.email.toLowerCase() === profile.email?.toLowerCase()));
+      }
+      if (!defaultCoord) {
+        defaultCoord = coordinators.find(c =>
+          (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+          (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+          (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+        );
+      }
       if (defaultCoord) {
         setFormData(prev => ({ ...prev, coordinatorIds: [defaultCoord.uid] }));
       } else {
@@ -6122,7 +7860,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         }
       }
     }
-  }, [profile, coordinators]);
+  }, [profile, coordinators, hasTwoCoordinators, primaryCoord]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -6198,13 +7936,31 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     setError(null);
     try {
       const now = new Date();
+      const selectedCoord = coordinators.find(c => c.uid === (formData.coordinatorIds[0] || ''));
+      const allSelectedCoords = coordinators.filter(c => formData.coordinatorIds.includes(c.uid));
+      const coordNames = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.name).join(', ') : (selectedCoord?.name || '');
+      const coordEmails = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.email).join(', ') : (selectedCoord?.email || '');
+      const selectedTeacher = teachers.find(t => t.uid === formData.notifiedTeacherId);
+
+      const creatorDisplayName = (profile.name && profile.name.trim()) || profile.email || 'Personal Escolar';
+
       const newIncident: any = {
         ...formData,
         coordinatorId: formData.coordinatorIds[0] || '', // Main coordinator
+        coordinatorName: coordNames,
+        coordinatorEmail: coordEmails,
+        coordinatorIds: formData.coordinatorIds,
+        notifiedTeacherName: selectedTeacher?.name || '',
+        notifiedTeacherEmail: selectedTeacher?.email || '',
         date: format(now, "dd/MM/yyyy HH:mm"),
-        reporterName: profile.name,
+        reporterName: creatorDisplayName,
         reporterId: profile.uid,
         reporterEmail: profile.email,
+        reporterRole: profile.role,
+        creatorName: creatorDisplayName,
+        creatorId: profile.uid,
+        creatorEmail: profile.email,
+        creatorRole: profile.role,
         isReceived: false,
         status: 'PENDIENTE',
         createdAt: Date.now(),
@@ -6228,7 +7984,11 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       const docRef = await addDoc(collection(db, 'incidents'), newIncident);
       const createdIncident = { id: docRef.id, ...newIncident } as Incident;
       
-      await addLog('Creó reporte de incidencia', `Lugar: ${formData.place}, Estudiantes: ${formData.students}`);
+      await addLog(
+        'Creó reporte de incidencia',
+        `Creado por: ${profile.name} (${profile.role} - ${profile.email}) | Lugar: ${formData.place} | Alumnos: ${formData.students} | Reportado por: ${newIncident.reporterName || profile.name} | Coordinador(es): ${coordinators.filter(c => formData.coordinatorIds.includes(c.uid)).map(c => c.name).join(', ') || 'General'}`,
+        { module: 'Incidencias', recordId: docRef.id }
+      );
       
       // Notify all involved users (coordinators, notified teacher, directives, admins) with real-time in-app notification & email
       if (notifyIncidentInvolvedUsers) {
@@ -6239,48 +7999,31 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           emailSubject: `Nueva Incidencia Registrada: ${formData.place}`,
           emailHeaderTitle: 'Nueva Incidencia Registrada',
           actionDetails: `<strong>Lugar:</strong> ${formData.place}<br/><strong>Alumnos:</strong> ${formData.students}<br/><strong>Descripción:</strong> ${formData.description}`,
-          excludeUserId: profile.uid
+          excludeUserId: profile.uid,
+          excludeUserEmail: profile.email,
+          isCreation: true
         });
       }
 
-      // Direct in-app notification and confirmation email for the reporting teacher/user
-      if (profile.uid) {
+      // Dedicated notification for the teacher added in copy (if not the creator)
+      if (formData.notifiedTeacherId && formData.notifiedTeacherId !== profile.uid) {
+        const creatorRoleLabel = profile.role === 'ADMIN' ? 'el administrador' : profile.role === 'DIRECTIVE' ? 'el directivo' : profile.role === 'COORDINATOR' ? 'el coordinador' : 'el docente';
         await sendNotification(
-          profile.uid,
-          'Reporte Registrado Exitosamente',
-          `Has creado y enviado el reporte de incidencia en "${formData.place}".`,
+          formData.notifiedTeacherId,
+          'Copia de Incidencia Registrada',
+          `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por ${creatorRoleLabel} ${creatorDisplayName}.`,
           docRef.id,
-          true, // skipAdmins = true (personal confirmation only for the reporter)
-          { skipEmail: true } // skip email in sendNotification since we send the rich confirmation email below
+          true,
+          { skipEmail: true, creatorUid: profile.uid, creatorEmail: profile.email }
         );
-
-        if (systemSettings.emailNotificationsEnabled !== false && profile.email && sendEmail) {
-          await sendEmail(
-            profile.email,
-            `Confirmación de Reporte Registrado: ${formData.place}`,
-            `
-              <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                <div style="background-color: #059669; padding: 24px; text-align: center;">
-                  <h1 style="color: white; margin: 0; font-size: 24px;">Reporte Registrado Exitosamente</h1>
-                </div>
-                <div style="padding: 24px;">
-                  <p style="font-size: 16px; margin-bottom: 20px;">Estimado/a <strong>${profile.name}</strong>, tu reporte de incidencia ha sido registrado correctamente en el sistema.</p>
-                  <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                    <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${formData.place}</p>
-                    <p style="margin: 0 0 8px 0;"><strong>Alumnos:</strong> ${formData.students}</p>
-                    <p style="margin: 0;"><strong>Descripción:</strong> ${formData.description}</p>
-                  </div>
-                  <p style="font-size: 14px; color: #64748b;">Recibirás notificaciones en tiempo real y por correo electrónico cuando la coordinación actualice el estatus de este reporte.</p>
-                </div>
-              </div>
-            `
-          );
-        }
       }
 
-      // Notification for Psychologists
+      // Notification for Psychologists & Auto Referral
       if (formData.suggestReferral) {
         const refId = `ref_inc_${docRef.id}`;
+        const targetCoord = coordinators.find(c => formData.coordinatorIds.includes(c.uid) || formData.coordinatorIds.includes(c.email)) || coordinators[0];
+        const targetPsych = psychologists[0];
+
         const refDoc: Referral = {
           id: refId,
           incidentId: docRef.id,
@@ -6289,12 +8032,12 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           teacherId: profile.uid,
           teacherName: profile.name,
           teacherEmail: profile.email,
-          coordinatorId: formData.coordinatorIds[0] || '',
-          coordinatorName: 'Coordinador General',
-          coordinatorEmail: '',
-          psychologistId: '',
-          psychologistName: 'Psicólogo Escolar',
-          psychologistEmail: '',
+          coordinatorId: targetCoord?.uid || (formData.coordinatorIds[0] || ''),
+          coordinatorName: targetCoord?.name || 'Coordinador General',
+          coordinatorEmail: targetCoord?.email || '',
+          psychologistId: targetPsych?.uid || '',
+          psychologistName: targetPsych?.name || 'Psicólogo Escolar',
+          psychologistEmail: targetPsych?.email || '',
           reasonAndBackground: `Sugerencia de canalización generada desde incidencia en "${formData.place}". Alumno(s): ${formData.students}. Motivo/Hechos: ${formData.description}`,
           teacherStrategies: formData.disciplinaryMeasures || formData.followUp || '',
           psychologistComment: '',
@@ -6307,39 +8050,65 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           console.error("Error creating auto referral document:", refErr);
         }
 
-        const psychUids = psychologists.map(p => p.uid);
+        // Target uids excluding the creator
+        const notifyUids: string[] = [];
+        if (targetCoord?.uid && targetCoord.uid !== profile.uid) notifyUids.push(targetCoord.uid);
+        psychologists.forEach(p => { if (p.uid && p.uid !== profile.uid) notifyUids.push(p.uid); });
+
         await sendNotification(
-          psychUids,
-          'Sugerencia de Canalización',
-          `Se ha sugerido una canalización para una incidencia en "${formData.place}" por ${profile.name}.`,
+          notifyUids,
+          'Sugerencia de Canalización Psicopedagógica',
+          `Se ha registrado una canalización para "${formData.students}" desde incidencia en "${formData.place}" por ${profile.name}.`,
           docRef.id,
-          true, // Skip admin broadcast
-          { referralId: refId, type: 'referral' }
+          false, // Include directives and admins
+          { 
+            referralId: refId, 
+            type: 'referral',
+            creatorUid: profile.uid,
+            creatorEmail: profile.email,
+            isCreationNotification: true
+          }
         );
 
-        for (const psycho of psychologists) {
-          if (systemSettings.emailNotificationsEnabled !== false && psycho.email && sendEmail) {
+        const emailRecipients = new Set<string>();
+        if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
+        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
+        directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
+        admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
+
+        // Exclude the reporting user from receiving email
+        if (profile.email) emailRecipients.delete(profile.email.toLowerCase());
+        if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
+        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
+        directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
+        admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
+
+        const filteredEmailRecipients = Array.from(emailRecipients).filter(e => !isSuperAdminEmail(e));
+
+        for (const targetEmail of filteredEmailRecipients) {
+          if (systemSettings.emailNotificationsEnabled !== false && sendEmail) {
             await sendEmail(
-              psycho.email,
-              `Sugerencia de Canalización: ${formData.place}`,
+              targetEmail,
+              `Sugerencia de Canalización: ${formData.students}`,
               `
                 <div style="font-family: sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                  <div style="background-color: #ec4899; padding: 24px; text-align: center;">
-                    <h1 style="color: white; margin: 0; font-size: 24px;">Sugerencia de Canalización</h1>
+                  <div style="background: linear-gradient(135deg, #ec4899 0%, #db2777 100%); padding: 24px; text-align: center;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">Sugerencia de Canalización</h1>
+                    <p style="color: #fbcfe8; margin: 4px 0 0 0; font-size: 12px; text-transform: uppercase;">DASHBOARD DUNOR</p>
                   </div>
                   <div style="padding: 24px;">
-                    <p style="font-size: 16px; margin-bottom: 20px;">Se ha registrado una incidencia con sugerencia de canalización psicológica.</p>
-                    <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-                      <p style="margin: 0 0 8px 0;"><strong>Reportado por:</strong> ${profile.name}</p>
+                    <p style="font-size: 15px; margin-bottom: 16px;">Se ha registrado una incidencia con sugerencia de canalización al departamento de psicología.</p>
+                    <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0;">
+                      <p style="margin: 0 0 8px 0;"><strong>Reportado por:</strong> ${profile.name} (${profile.email})</p>
                       <p style="margin: 0 0 8px 0;"><strong>Lugar:</strong> ${formData.place}</p>
                       <p style="margin: 0 0 8px 0;"><strong>Alumnos:</strong> ${formData.students}</p>
                       <p style="margin: 0;"><strong>Descripción:</strong> ${formData.description}</p>
                     </div>
-                    <p style="font-size: 14px; color: #64748b;">Por favor, ingresa al sistema para revisar los detalles completos.</p>
+                    <p style="font-size: 13px; color: #64748b;">Ingresa a la plataforma para revisar los detalles y dar seguimiento.</p>
                   </div>
                 </div>
               `
-            );
+            ).catch(err => console.warn("Email notice error:", err));
           }
         }
       }
@@ -6364,19 +8133,65 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     c.role !== 'ADMIN'
   );
 
+  const userLevel = getUserEducationLevel(profile, coordinators);
+  const isPsychologist = profile?.role === 'PSYCHOLOGIST' || (profile?.role && String(profile.role).toLowerCase().includes('psico'));
+  const isGlobalUser = (profile?.role === 'ADMIN' || profile?.role === 'DIRECTIVE' || isPsychologist || isSuperAdmin) && !userLevel;
+
+  // Determine active level from user profile or from selected coordinator in the incident form
+  const selectedCoord = coordinators.find(c => formData.coordinatorIds && formData.coordinatorIds.includes(c.uid));
+  const selectedCoordLevel = selectedCoord ? getUserEducationLevel(selectedCoord, coordinators) : '';
+  const activeIncidentLevel = userLevel || selectedCoordLevel;
+
+  const filteredTeachersForCopy = teachers.filter(t => {
+    // Cannot copy oneself
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) {
+      return false;
+    }
+    // Filter by the educational level (Preescolar, Primaria, Secundaria)
+    const tLevel = getUserEducationLevel(t, coordinators);
+    if (activeIncidentLevel) {
+      return tLevel === activeIncidentLevel;
+    }
+    // If global admin/directive with no specific level, show all teachers
+    if (isGlobalUser) return true;
+    return true;
+  });
+
   return (
     <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-100">
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 p-6 md:p-8 text-white relative">
         <div className="relative z-10">
           <h2 className="text-2xl font-bold flex items-center gap-3">
             <ClipboardList className="w-8 h-8" />
-            Reportar Incidencia
+            Registro de Nueva Incidencia ({profile.name || profile.email})
           </h2>
         </div>
         <div className="absolute top-0 right-0 w-32 h-full bg-white/10 -skew-x-12 translate-x-16"></div>
       </div>
 
       <form onSubmit={handleSubmit} className="p-6 md:p-8 space-y-8">
+        {/* Creator Identity Banner */}
+        <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-base shadow-sm">
+              {(profile.name || profile.email || 'U').charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Quien Registra el Incidente</span>
+                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-indigo-100 text-indigo-800 border border-indigo-200">
+                  {profile.role === 'ADMIN' ? 'Administrador' : profile.role === 'DIRECTIVE' ? 'Directivo' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
+                </span>
+              </div>
+              <p className="text-base font-bold text-slate-900 mt-0.5">({profile.name})</p>
+              <p className="text-xs text-slate-500">{profile.email}</p>
+            </div>
+          </div>
+          <div className="text-xs text-slate-700 bg-white border border-slate-200 px-3.5 py-2 rounded-xl shadow-2xs font-medium flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>El incidente se registrará oficialmente por: <strong>({profile.name})</strong></span>
+          </div>
+        </div>
         {/* Section 1: General Info */}
         <div className="space-y-6">
           <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
@@ -6522,6 +8337,82 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
             <h3 className="font-bold text-slate-800">Asignación y Notificaciones</h3>
           </div>
 
+          {/* Selector para docentes con dos coordinadores asignados */}
+          {hasTwoCoordinators && primaryCoord && secondaryCoord && (
+            <div className="bg-indigo-50/80 border border-indigo-200 rounded-2xl p-4.5 space-y-3 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-indigo-950">Compartir Incidencia con Coordinación</h4>
+                  <p className="text-xs text-indigo-700">Tienes dos coordinadores asignados. Selecciona a cuál(es) deseas compartir este reporte:</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCoordMode('primary');
+                    setFormData(prev => ({ ...prev, coordinatorIds: [primaryCoord.uid] }));
+                  }}
+                  className={cn(
+                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                    selectedCoordMode === 'primary'
+                      ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                      : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                  )}
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-1">1er Coordinador</span>
+                    <span className="text-xs font-bold text-slate-900 block">{primaryCoord.name}</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.email}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCoordMode('secondary');
+                    setFormData(prev => ({ ...prev, coordinatorIds: [secondaryCoord.uid] }));
+                  }}
+                  className={cn(
+                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                    selectedCoordMode === 'secondary'
+                      ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                      : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                  )}
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-1">2do Coordinador</span>
+                    <span className="text-xs font-bold text-slate-900 block">{secondaryCoord.name}</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate mt-1">{secondaryCoord.email}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCoordMode('both');
+                    setFormData(prev => ({ ...prev, coordinatorIds: [primaryCoord.uid, secondaryCoord.uid] }));
+                  }}
+                  className={cn(
+                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                    selectedCoordMode === 'both'
+                      ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                      : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                  )}
+                >
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-1">Ambos Coordinadores</span>
+                    <span className="text-xs font-bold text-slate-900 block">Compartir con los Dos</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.name} y {secondaryCoord.name}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <InputGroup label="Coordinador Asignado" required>
               <div className="space-y-3">
@@ -6562,7 +8453,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                 )}
 
                 <div className="pt-1">
-                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador, Directivo o Docente (Opcional):</label>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador o Directivo (Opcional):</label>
                   <select
                     value=""
                     onChange={(e) => {
@@ -6573,7 +8464,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="">-- Selecciona destinatario para Copia --</option>
+                    <option value="">-- Selecciona destinatario para Copia (Directivo o Coordinador) --</option>
                     
                     <optgroup label="Coordinadores">
                       {filteredCoordinators.map((c) => (
@@ -6592,16 +8483,6 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                         ))}
                       </optgroup>
                     )}
-
-                    {teachers.length > 0 && (
-                      <optgroup label="Docentes">
-                        {teachers.map((t) => (
-                          <option key={t.uid} value={t.uid} disabled={formData.coordinatorIds.includes(t.uid) || t.uid === profile.uid}>
-                            Docente: {t.name} ({t.email})
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
                   </select>
                 </div>
               </div>
@@ -6613,13 +8494,23 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                 onChange={(e) => setFormData({ ...formData, notifiedTeacherId: e.target.value })}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
               >
-                <option value="">Selecciona docente opcional...</option>
-                {teachers
-                  .filter(t => t.uid !== profile.uid)
-                  .map((t) => (
-                    <option key={t.uid} value={t.uid}>{t.name}</option>
-                  ))
-                }
+                <option value="">
+                  {activeIncidentLevel ? `Selecciona docente opcional (${activeIncidentLevel})...` : 'Selecciona docente opcional...'}
+                </option>
+                {filteredTeachersForCopy.length > 0 ? (
+                  filteredTeachersForCopy.map((t) => {
+                    const tLvl = getUserEducationLevel(t, coordinators);
+                    return (
+                      <option key={t.uid} value={t.uid}>
+                        {t.name}{tLvl && !activeIncidentLevel ? ` (${tLvl})` : ''}
+                      </option>
+                    );
+                  })
+                ) : activeIncidentLevel ? (
+                  <option disabled value="">
+                    No hay docentes registrados en nivel {activeIncidentLevel}
+                  </option>
+                ) : null}
               </select>
             </InputGroup>
           </div>
@@ -6786,7 +8677,13 @@ const TaskManager = ({
   psychologists: UserProfile[];
   directives: UserProfile[];
   admins: UserProfile[];
-  addLog: (action: string, details?: string) => Promise<void>;
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+  }) => Promise<void>;
   systemSettings: SystemSettings;
   sendNotification: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>;
   canCreateTask?: boolean;
@@ -6905,7 +8802,7 @@ const TaskManager = ({
   }, [tasks, profile, systemSettings]);
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
-  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || isSuperAdmin;
+  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin;
   const canDeleteRecords = canCreateTask || canSendCongratulations || isDirectiveOrAdmin || isSuperAdmin;
   const assignableUsers = [...coordinators, ...teachers, ...psychologists];
 
@@ -6918,7 +8815,11 @@ const TaskManager = ({
       async () => {
         try {
           await deleteDoc(doc(db, 'tasks', taskToDelete.id));
-          await addLog('Eliminó registro de tarea/felicitación', `Título: ${taskToDelete.title}, Asignado a: ${taskToDelete.assignedToName}`);
+          await addLog(
+            'Eliminó registro de tarea/felicitación',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Título: ${taskToDelete.title} | Asignado a: ${taskToDelete.assignedToName} (${taskToDelete.assignedToEmail}) | Creador original: ${taskToDelete.createdByName || 'N/A'}`,
+            { module: 'Tareas / Felicitaciones', recordId: taskToDelete.id }
+          );
           if (selectedTask?.id === taskToDelete.id) {
             setSelectedTask(null);
           }
@@ -6983,44 +8884,63 @@ const TaskManager = ({
           status: 'ASIGNADA',
         };
 
-        await addDoc(collection(db, 'tasks'), newTaskDoc);
+        const newTaskRef = await addDoc(collection(db, 'tasks'), newTaskDoc);
 
-        await sendNotification(
-          recipient.email,
-          `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
-          `Se te ha asignado la tarea "${newTaskDoc.title}" con fecha límite ${newTaskDoc.dueDate}. Asignada por ${profile.name}.`
-        );
+        // Do not notify or send email to the user who created/assigned the task
+        const isSelf = recipient.email.toLowerCase() === profile.email.toLowerCase() ||
+                       (recipient.uid && recipient.uid === profile.uid);
 
-        if (systemSettings.emailNotificationsEnabled && recipient.email) {
-          try {
-            await fetch('/api/send-email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                to: recipient.email,
-                subject: `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
-                html: `
-                  <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
-                    <h2 style="color: #4f46e5; margin-top: 0;">Nueva Tarea Asignada</h2>
-                    <p>Estimado/a <strong>${recipient.name}</strong>,</p>
-                    <p>Se te ha asignado una nueva tarea en el sistema:</p>
-                    <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; margin: 16px 0; border-radius: 4px;">
-                      <h3 style="margin: 0 0 8px 0; color: #0f172a;">${newTaskDoc.title}</h3>
-                      <p style="margin: 0 0 8px 0; color: #475569;">${newTaskDoc.description}</p>
-                      <p style="margin: 0; font-size: 13px; font-weight: bold; color: #e11d48;">Fecha Límite: ${newTaskDoc.dueDate}</p>
+        if (!isSelf) {
+          await sendNotification(
+            recipient.email,
+            `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
+            `Se te ha asignado la tarea "${newTaskDoc.title}" con fecha límite ${newTaskDoc.dueDate}. Asignada por ${profile.name}.`,
+            '',
+            false,
+            {
+              taskId: newTaskRef.id,
+              type: 'task',
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: true
+            }
+          );
+
+          if (systemSettings.emailNotificationsEnabled && recipient.email) {
+            try {
+              await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: recipient.email,
+                  subject: `📋 Nueva Tarea Asignada: ${newTaskDoc.title}`,
+                  html: `
+                    <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
+                      <h2 style="color: #4f46e5; margin-top: 0;">Nueva Tarea Asignada</h2>
+                      <p>Estimado/a <strong>${recipient.name}</strong>,</p>
+                      <p>Se te ha asignado una nueva tarea en el sistema:</p>
+                      <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; margin: 16px 0; border-radius: 4px;">
+                        <h3 style="margin: 0 0 8px 0; color: #0f172a;">${newTaskDoc.title}</h3>
+                        <p style="margin: 0 0 8px 0; color: #475569;">${newTaskDoc.description}</p>
+                        <p style="margin: 0; font-size: 13px; font-weight: bold; color: #e11d48;">Fecha Límite: ${newTaskDoc.dueDate}</p>
+                      </div>
+                      <p style="font-size: 12px; color: #94a3b8;">Asignado por: ${profile.name} (${profile.role})</p>
                     </div>
-                    <p style="font-size: 12px; color: #94a3b8;">Asignado por: ${profile.name} (${profile.role})</p>
-                  </div>
-                `
-              })
-            });
-          } catch (err) {
-            console.error("Task email error:", err);
+                  `
+                })
+              });
+            } catch (err) {
+              console.error("Task email error:", err);
+            }
           }
         }
       }
 
-      await addLog('Asignó tarea(s)', `Título: ${taskFormData.title}, Destinatarios: ${recipientsToNotify.length}`);
+      await addLog(
+        'Asignó tarea(s)',
+        `Creado y asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Título: ${taskFormData.title} | Destinatarios (${recipientsToNotify.length}): ${recipientsToNotify.map(r => `${r.name} (${r.role})`).join(', ')} | Fecha límite: ${taskFormData.dueDate}`,
+        { module: 'Tareas / Felicitaciones' }
+      );
       setShowAssignModal(false);
       setTaskFormData({ title: '', description: '', dueDate: format(new Date(Date.now() + 7 * 86400000), 'yyyy-MM-dd'), targetType: 'SPECIFIC', selectedEmails: [] });
       showSystemPopup("Tarea asignada", "Tarea(s) asignada(s) correctamente.", "success");
@@ -7063,42 +8983,58 @@ const TaskManager = ({
 
         const newTaskRef = await addDoc(collection(db, 'tasks'), congratTaskDoc);
 
-        await sendNotification(
-          rec.email,
-          `🎉 ${congratFormData.title}`,
-          `${congratFormData.message}\n\n- Mensaje enviado por ${profile.name} (${profile.role})`,
-          '',
-          false,
-          { type: 'felicitacion', taskId: newTaskRef.id }
-        );
+        // Do not notify or send email to the user who created/sent the congratulation
+        const isSelf = rec.email.toLowerCase() === profile.email.toLowerCase() ||
+                       (rec.uid && rec.uid === profile.uid);
 
-        if (systemSettings.emailNotificationsEnabled && rec.email) {
-          try {
-            await fetch('/api/send-email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                to: rec.email,
-                subject: `🎉 ${congratFormData.title}`,
-                html: `
-                  <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #bbf7d0; border-radius: 12px; padding: 24px; background-color: #f0fdf4;">
-                    <h2 style="color: #166534; margin-top: 0;">🎉 ${congratFormData.title}</h2>
-                    <p>Estimado/a <strong>${rec.name}</strong>,</p>
-                    <div style="background-color: #ffffff; border: 1px solid #86efac; padding: 16px; margin: 16px 0; border-radius: 8px;">
-                      <p style="margin: 0; font-size: 15px; color: #15803d; line-height: 1.6;">${congratFormData.message.replace(/\n/g, '<br/>')}</p>
+        if (!isSelf) {
+          await sendNotification(
+            rec.email,
+            `🎉 ${congratFormData.title}`,
+            `${congratFormData.message}\n\n- Mensaje enviado por ${profile.name} (${profile.role})`,
+            '',
+            false,
+            {
+              type: 'felicitacion',
+              taskId: newTaskRef.id,
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: true
+            }
+          );
+
+          if (systemSettings.emailNotificationsEnabled && rec.email) {
+            try {
+              await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: rec.email,
+                  subject: `🎉 ${congratFormData.title}`,
+                  html: `
+                    <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #bbf7d0; border-radius: 12px; padding: 24px; background-color: #f0fdf4;">
+                      <h2 style="color: #166534; margin-top: 0;">🎉 ${congratFormData.title}</h2>
+                      <p>Estimado/a <strong>${rec.name}</strong>,</p>
+                      <div style="background-color: #ffffff; border: 1px solid #86efac; padding: 16px; margin: 16px 0; border-radius: 8px;">
+                        <p style="margin: 0; font-size: 15px; color: #15803d; line-height: 1.6;">${congratFormData.message.replace(/\n/g, '<br/>')}</p>
+                      </div>
+                      <p style="font-size: 12px; color: #166534; font-weight: bold;">Enviado por: ${profile.name} (${profile.role})</p>
                     </div>
-                    <p style="font-size: 12px; color: #166534; font-weight: bold;">Enviado por: ${profile.name} (${profile.role})</p>
-                  </div>
-                `
-              })
-            });
-          } catch (err) {
-            console.error("Congratulation email error:", err);
+                  `
+                })
+              });
+            } catch (err) {
+              console.error("Congratulation email error:", err);
+            }
           }
         }
       }
 
-      await addLog('Envió mensaje de felicitación', `Título: ${congratFormData.title}, Destinatarios: ${recipientsToNotify.length}`);
+      await addLog(
+        'Envió mensaje de felicitación',
+        `Creado y enviado por: ${profile.name} (${profile.role} - ${profile.email}) | Título: ${congratFormData.title} | Destinatarios (${recipientsToNotify.length}): ${recipientsToNotify.map(r => `${r.name} (${r.role})`).join(', ')}`,
+        { module: 'Tareas / Felicitaciones' }
+      );
       setShowCongratulationModal(false);
       setCongratFormData({ targetType: 'SPECIFIC', selectedEmails: [], title: '¡Felicitaciones y Reconocimiento!', message: '' });
       showSystemPopup("Felicitación enviada", "Mensaje de felicitación enviado y registrado en Tareas correctamente.", "success");
@@ -7146,7 +9082,11 @@ const TaskManager = ({
         `${profile.name} ha entregado la evidencia para la tarea "${task.title}". Estatus cambiado a REALIZADA.`
       );
 
-      await addLog('Entregó evidencia de tarea', `Tarea: ${task.title}`);
+      await addLog(
+        'Entregó evidencia de tarea',
+        `Entregado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado originalmente a: ${task.assignedToName} | Creador de tarea: ${task.createdByName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
       setSelectedTask(null);
       setEvidenceText('');
       setEvidenceFile('');
@@ -7170,14 +9110,22 @@ const TaskManager = ({
           `✅ Tarea Aprobada: ${task.title}`,
           `Tu tarea "${task.title}" ha sido revisada y marcada como COMPLETADA por ${profile.name}.`
         );
-        await addLog('Aprobó tarea (COMPLETADA)', `Tarea: ${task.title}`);
+        await addLog(
+          'Aprobó tarea (COMPLETADA)',
+          `Revisado y aprobado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Realizado por: ${task.assignedToName}`,
+          { module: 'Tareas / Felicitaciones', recordId: task.id }
+        );
       } else if (newStatus === 'ASIGNADA') {
         await sendNotification(
           task.assignedToEmail,
           `⚠️ Tarea Reasignada para Corrección: ${task.title}`,
           `Tu tarea "${task.title}" ha sido cambiada a ASIGNADA: ${directiveFeedback.trim() || 'Revisa observaciones.'}`
         );
-        await addLog('Reasignó tarea (ASIGNADA)', `Tarea: ${task.title}`);
+        await addLog(
+          'Reasignó tarea (ASIGNADA)',
+          `Revisado y reasignado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Observaciones: "${directiveFeedback.trim() || 'Revisa observaciones.'}"`,
+          { module: 'Tareas / Felicitaciones', recordId: task.id }
+        );
       }
 
       setSelectedTask(null);
@@ -7751,18 +9699,30 @@ const TaskManager = ({
   );
 };
 
-const UserManagement = ({ profile, coordinators, teachers, psychologists, directives = [], admins, addLog, canManageUsers = true, canAssignPsychologist = true, systemSettings, firestoreRolePermissions }: { 
+const UserManagement = ({ profile, coordinators, teachers, psychologists, directives = [], admins, blockedUsers = [], addLog, canManageUsers = true, canAssignPsychologist = true, systemSettings, firestoreRolePermissions, sendNotification, sendEmail }: { 
   profile: UserProfile, 
   coordinators: UserProfile[], 
   teachers: UserProfile[], 
   psychologists: UserProfile[],
   directives?: UserProfile[],
   admins: UserProfile[],
-  addLog: (action: string, details?: string) => Promise<void>,
+  blockedUsers?: UserProfile[],
+  addLog: (action: string, details?: string, extra?: {
+    module?: string;
+    recordId?: string;
+    creatorName?: string;
+    creatorEmail?: string;
+    creatorRole?: string;
+    userEmail?: string;
+    userName?: string;
+    userRole?: string;
+  }) => Promise<void>,
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
   systemSettings: SystemSettings,
-  firestoreRolePermissions?: Partial<RolePermissionsMap>
+  firestoreRolePermissions?: Partial<RolePermissionsMap>,
+  sendNotification?: (userIdOrIds: string | string[], title: string, message: string, incidentId?: string, skipAdmins?: boolean, extraData?: Record<string, any>) => Promise<void>,
+  sendEmail?: (to: string, subject: string, html: string) => Promise<any>
 }) => {
   const [sysModal, setSysModal] = useState<SystemModalState>({
     isOpen: false,
@@ -7796,20 +9756,29 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     profile.role === 'COORDINATOR' ? 'TEACHER' : profile.role === 'DIRECTIVE' ? 'COORDINATOR' : 'TEACHER'
   );
   const [educationLevel, setEducationLevel] = useState<'Preescolar' | 'Primaria' | 'Secundaria'>('Primaria');
-  const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE'>(
+  const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria'>('TODOS');
+  const [teacherSearchQuery, setTeacherSearchQuery] = useState('');
+  const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE' | 'BLOQUEADO'>(
     profile.role === 'ADMIN' || isSuperAdminEmail(profile.email) 
       ? 'ADMIN' 
       : profile.role === 'DIRECTIVE'
       ? 'DIRECTIVE'
       : 'COORDINATOR'
   );
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' });
+  const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
 
   const isSuperAdmin = isSuperAdminEmail(profile.email);
   const isAdmin = profile.role === 'ADMIN';
   const isDirective = profile.role === 'DIRECTIVE';
   const isCoordinator = profile.role === 'COORDINATOR';
+
+  const isEmailAlreadyRegistered = useMemo(() => {
+    if (!formData.email || !formData.email.includes('@')) return false;
+    const clean = formData.email.toLowerCase().trim();
+    const all = [...admins, ...directives, ...coordinators, ...psychologists, ...teachers, ...blockedUsers];
+    return all.some(u => u.email?.toLowerCase().trim() === clean);
+  }, [formData.email, admins, directives, coordinators, psychologists, teachers, blockedUsers]);
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -7820,14 +9789,92 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     setLoading(true);
     try {
       const emailId = formData.email.toLowerCase().trim();
+
+      // Validación exhaustiva: Verificar si el correo ya está registrado en el sistema
+      const allKnownUsers = [
+        ...admins,
+        ...directives,
+        ...coordinators,
+        ...psychologists,
+        ...teachers,
+        ...blockedUsers
+      ];
+      const isAlreadyInList = allKnownUsers.some(u => u.email?.toLowerCase().trim() === emailId);
+
+      let existsInDb = false;
+
+      // 1. Direct getDoc by emailId
+      try {
+        const checkDoc = await safeGetDoc(doc(db, 'users', emailId));
+        if (checkDoc && checkDoc.exists()) {
+          existsInDb = true;
+        }
+      } catch (checkErr) {
+        console.warn("Direct checkDoc notice:", checkErr);
+      }
+
+      // 2. Query collection users where email == emailId
+      if (!existsInDb) {
+        try {
+          const qSnap = await safeGetDocs(query(collection(db, 'users'), where('email', '==', emailId), limit(1)));
+          if (qSnap && !qSnap.empty) {
+            existsInDb = true;
+          }
+        } catch (qErr) {
+          console.warn("Query check notice:", qErr);
+        }
+      }
+
+      // 3. Query collection users where uid == emailId
+      if (!existsInDb) {
+        try {
+          const qUidSnap = await safeGetDocs(query(collection(db, 'users'), where('uid', '==', emailId), limit(1)));
+          if (qUidSnap && !qUidSnap.empty) {
+            existsInDb = true;
+          }
+        } catch (qUidErr) {
+          console.warn("Query UID check notice:", qUidErr);
+        }
+      }
+
+      // 4. Server-side check (verifies Firebase Auth and Firestore DB via Admin SDK)
+      if (!existsInDb) {
+        try {
+          const sRes = await fetch(`/api/check-user-email?email=${encodeURIComponent(emailId)}`);
+          if (sRes.ok) {
+            const sData = await sRes.json();
+            if (sData?.exists) {
+              existsInDb = true;
+            }
+          }
+        } catch (sErr) {
+          console.warn("Server email check notice:", sErr);
+        }
+      }
+
+      if (isAlreadyInList || existsInDb) {
+        setLoading(false);
+        showSystemPopup(
+          "Correo ya registrado",
+          `El correo electrónico "${emailId}" ya se encuentra registrado en el sistema. No se permite registrarlo de nuevo.`,
+          "warning"
+        );
+        return;
+      }
+
+      const creatorName = profile?.name || (isSuperAdmin ? 'Superadministrador' : 'Administrador');
+      const creatorEmail = profile?.email || 'incidencias.dunor@gmail.com';
+      const creatorRole = profile?.role || (isSuperAdmin ? 'ADMIN' : 'COORDINATOR');
+
       const newUserData: any = {
         name: formData.name.trim(),
         email: emailId,
-        phone: formData.phone.trim(),
         role: newUserRole,
         uid: emailId,
         isRegistered: false,
-        password: '',
+        createdBy: creatorEmail,
+        createdByName: creatorName,
+        creatorRole: creatorRole,
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
@@ -7844,31 +9891,148 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       }
 
       await setDoc(doc(db, 'users', emailId), newUserData, { merge: true });
-      await addLog('Creó un usuario', `Nombre: ${formData.name}, Email: ${emailId}, Rol: ${newUserRole}`);
+
+      const logDetails = `Registrado por: ${creatorName} (${creatorRole} - ${creatorEmail}) | Nombre: ${formData.name.trim()} | Email: ${emailId} | Rol: ${newUserRole}${newUserRole === 'TEACHER' && educationLevel ? ` | Nivel: ${educationLevel}` : ''}`;
+
+      try {
+        await addLog(
+          'Creó un usuario',
+          logDetails,
+          { 
+            module: 'Usuarios', 
+            recordId: emailId,
+            creatorName,
+            creatorEmail,
+            creatorRole,
+            userEmail: creatorEmail,
+            userName: creatorName,
+            userRole: creatorRole
+          }
+        );
+      } catch (logErr) {
+        console.warn("Notice calling addLog:", logErr);
+      }
+
+      // Send registration confirmation email with the access link and welcome message
+      const accessUrl = "https://dashboard-dunor.vercel.app/";
+      const emailSubject = "Felicidades tu registro al Dashboard DUNOR fue exitosa";
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 28px 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;">Dashboard DUNOR</h1>
+            <p style="color: #c7d2fe; margin: 6px 0 0 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Confirmación de Registro</p>
+          </div>
+          <div style="padding: 28px 24px; background-color: #ffffff;">
+            <p style="font-size: 16px; color: #1e293b; margin-top: 0;">Hola <strong>${formData.name.trim()}</strong>,</p>
+            
+            <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px 20px; border-radius: 8px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 15px; color: #166534; font-weight: 700; line-height: 1.5;">
+                Felicidades tu registro al Dashboard DUNOR fue exitosa, visita el siguiente enlace para poder acceder, recuerda generar tu contraseña para obtener el acceso.
+              </p>
+            </div>
+
+            <div style="background-color: #f8fafc; padding: 18px; border-radius: 12px; border: 1px solid #e2e8f0; margin: 20px 0;">
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #334155;"><strong>Tu correo de acceso:</strong> <span style="color: #4f46e5; font-weight: 600;">${emailId}</span></p>
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #334155;"><strong>Rol asignado:</strong> ${newUserRole}</p>
+              <p style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.5;">
+                Al ser tu primer ingreso, escribe tu correo y el sistema detectará que es tu primer acceso para guiarte en la generación de tu contraseña personal.
+              </p>
+            </div>
+
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="${accessUrl}" target="_blank" rel="noopener noreferrer" style="background-color: #4f46e5; color: #ffffff; padding: 14px 32px; font-size: 15px; font-weight: 700; text-decoration: none; border-radius: 10px; display: inline-block; box-shadow: 0 4px 10px rgba(79, 70, 229, 0.3);">
+                Acceder al Dashboard DUNOR
+              </a>
+            </div>
+
+            <p style="font-size: 13px; color: #64748b; line-height: 1.6; text-align: center; margin: 20px 0 0 0;">
+              O accede directamente mediante este enlace:<br />
+              <a href="${accessUrl}" target="_blank" rel="noopener noreferrer" style="color: #4f46e5; font-weight: 600; word-break: break-all;">${accessUrl}</a>
+            </p>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 14px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8; font-weight: 500;">Notificación automática del Sistema DASHBOARD DUNOR.</p>
+          </div>
+        </div>
+      `;
+
+      try {
+        if (sendEmail) {
+          await sendEmail(emailId, emailSubject, emailHtml);
+        } else {
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: emailId, subject: emailSubject, html: emailHtml })
+          });
+        }
+      } catch (emailErr) {
+        console.warn("Welcome email error:", emailErr);
+      }
 
       showSystemPopup(
         "Usuario Registrado Exitosamente",
-        `El usuario "${formData.name}" (${emailId}) ha sido guardado correctamente en la base de datos con el rol ${newUserRole}.\n\nCuando este usuario ingrese por primera vez con su correo, el sistema lo redirigirá a generar su contraseña.`,
+        `El usuario "${formData.name}" (${emailId}) ha sido registrado exitosamente.\n\nSe ha enviado un correo de confirmación de registro a ${emailId} con el enlace de acceso (https://dashboard-dunor.vercel.app/) y la indicación para generar su contraseña.`,
         "success"
       );
 
       setShowAddModal(false);
-      setFormData({ name: '', email: '', phone: '' });
+      setFormData({ name: '', email: '', password: '' });
     } catch (error: any) {
       console.error("Error adding user:", error);
-      showSystemPopup(
-        "Error al Guardar Usuario",
-        error?.message || "Ocurrió un error al intentar guardar el usuario en la base de datos.",
-        "error"
-      );
+      if (isFirestoreInternalAssertion(error)) {
+        showSystemPopup(
+          "Usuario Registrado Exitosamente",
+          `El usuario "${formData.name}" (${formData.email}) ha sido registrado en el sistema.`,
+          "success"
+        );
+        setShowAddModal(false);
+        setFormData({ name: '', email: '', password: '' });
+      } else {
+        showSystemPopup(
+          "Error al Guardar Usuario",
+          error?.message || "Ocurrió un error al intentar guardar el usuario en la base de datos.",
+          "error"
+        );
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const displayedTeachers = isCoordinator
-    ? teachers.filter(t => t.assignedCoordinatorId === profile.uid || t.assignedCoordinatorEmail === profile.email || t.assignedCoordinatorName === profile.name)
+    ? teachers.filter(t => 
+        t.assignedCoordinatorId === profile.uid || 
+        t.assignedCoordinatorEmail === profile.email || 
+        t.assignedCoordinatorName === profile.name ||
+        t.secondaryCoordinatorId === profile.uid || 
+        t.secondaryCoordinatorEmail === profile.email || 
+        t.secondaryCoordinatorName === profile.name
+      )
     : teachers;
+
+  const canFilterTeachersByLevel = isSuperAdmin || isAdmin || isDirective;
+
+  const filteredTeachers = displayedTeachers.filter(t => {
+    if (canFilterTeachersByLevel && teacherLevelFilter !== 'TODOS') {
+      const lvl = getUserEducationLevel(t, coordinators);
+      if (normalizeEducationLevel(lvl) !== normalizeEducationLevel(teacherLevelFilter)) {
+        return false;
+      }
+    }
+    if (teacherSearchQuery.trim()) {
+      const q = teacherSearchQuery.toLowerCase().trim();
+      const name = (t.name || '').toLowerCase();
+      const email = (t.email || '').toLowerCase();
+      const phone = (t.phone || '').toLowerCase();
+      const coordName = (t.assignedCoordinatorName || '').toLowerCase();
+      const secCoordName = (t.secondaryCoordinatorName || '').toLowerCase();
+      const lvl = getUserEducationLevel(t, coordinators).toLowerCase();
+      const matches = name.includes(q) || email.includes(q) || phone.includes(q) || coordName.includes(q) || secCoordName.includes(q) || lvl.includes(q);
+      if (!matches) return false;
+    }
+    return true;
+  });
 
   const deleteUser = async (userToDelete: UserProfile) => {
     // Rule 1: Coordinator cannot delete themselves or other coordinators
@@ -7899,7 +10063,11 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           }
 
           await deleteDoc(doc(db, 'users', emailId));
-          await addLog('Eliminó un usuario', `Nombre: ${userToDelete.name}, Email: ${userToDelete.email}`);
+          await addLog(
+            'Eliminó un usuario',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Nombre: ${userToDelete.name} | Email: ${userToDelete.email} | Rol: ${userToDelete.role}`,
+            { module: 'Usuarios', recordId: userToDelete.email }
+          );
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
           handleFirestoreError(error, OperationType.DELETE, `users/${userToDelete.email}`);
@@ -7911,58 +10079,229 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
   const updateUserRole = async (userToUpdate: UserProfile, newRole: UserRole) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
-      await updateDoc(doc(db, 'users', emailId), { role: newRole });
-      await addLog('Actualizó rol de usuario', `Usuario: ${userToUpdate.name}, Nuevo Rol: ${newRole}`);
+      const updateData: any = { 
+        role: newRole,
+        updatedAt: Date.now()
+      };
+      if (newRole === 'BLOQUEADO') {
+        updateData.status = 'BLOQUEADO';
+        updateData.isBlocked = true;
+      } else {
+        updateData.status = 'ACTIVO';
+        updateData.isBlocked = false;
+      }
+      await updateDoc(doc(db, 'users', emailId), updateData);
+
+      // Sync role change to Firebase Authentication
+      fetch('/api/create-or-update-auth-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: emailId,
+          name: userToUpdate.name,
+          role: newRole,
+          password: userToUpdate.password || (newRole === 'ADMIN' ? 'qwerty1' : 'dunor2024')
+        })
+      }).catch(e => console.warn("Failed to sync role to Auth:", e));
+
+      await addLog(
+        newRole === 'BLOQUEADO' ? 'Bloqueó usuario' : 'Actualizó rol de usuario',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email}) | Rol anterior: ${userToUpdate.role} | Nuevo rol: ${newRole}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
+      showSystemPopup(
+        newRole === 'BLOQUEADO' ? "Usuario Bloqueado" : "Rol Actualizado", 
+        newRole === 'BLOQUEADO'
+          ? `El usuario ${userToUpdate.name} ha sido bloqueado. Se cerrará su sesión en forma automática y se le denegará el acceso con el mensaje: "Cuenta bloqueada contacta a Soporte Técnico".`
+          : `El rol de ${userToUpdate.name} fue cambiado a ${newRole} y sincronizado con Authentication.`, 
+        "success"
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${userToUpdate.email}`);
+    }
+  };
+
+  // Helper to safely write user document to Firestore using setDoc with merge (avoids NOT_FOUND errors)
+  const safeSaveUserDoc = async (user: UserProfile, updateData: Record<string, any>) => {
+    const emailId = user.email.toLowerCase().trim();
+    const docId = (user as any).docId || emailId;
+    const dataWithTs = { ...updateData, updatedAt: Date.now() };
+
+    await setDoc(doc(db, 'users', docId), dataWithTs, { merge: true });
+    if (docId !== emailId) {
+      await setDoc(doc(db, 'users', emailId), dataWithTs, { merge: true }).catch(() => {});
+    }
+    if (user.uid && user.uid !== docId && user.uid !== emailId) {
+      await setDoc(doc(db, 'users', user.uid), dataWithTs, { merge: true }).catch(() => {});
     }
   };
 
   const updateAssignedCoordinator = async (userToUpdate: UserProfile, coordinatorUid: string) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
+      let coordinatorName = '';
+      let updateData: any = {};
       if (!coordinatorUid) {
-        await updateDoc(doc(db, 'users', emailId), {
+        updateData = {
           assignedCoordinatorId: '',
           assignedCoordinatorEmail: '',
           assignedCoordinatorName: '',
-        });
+          updatedAt: Date.now()
+        };
       } else {
         const coord = coordinators.find(c => c.uid === coordinatorUid || c.email === coordinatorUid);
         if (coord) {
-          await updateDoc(doc(db, 'users', emailId), {
+          coordinatorName = coord.name;
+          const coordLvl = getUserEducationLevel(coord, coordinators);
+          updateData = {
             assignedCoordinatorId: coord.uid,
             assignedCoordinatorEmail: coord.email,
             assignedCoordinatorName: coord.name,
-          });
+            updatedAt: Date.now()
+          };
+          if (coordLvl) {
+            updateData.educationLevel = coordLvl;
+          }
         }
       }
-      await addLog('Asignó coordinador a docente', `Docente: ${userToUpdate.name}`);
-    } catch (error) {
+
+      await safeSaveUserDoc(userToUpdate, updateData);
+
+      // Background sync with server
+      fetch('/api/update-user-coordinator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailId, ...updateData })
+      }).catch(e => console.warn("Background server coordinator sync notice:", e));
+
+      await addLog(
+        'Asignó coordinador a docente',
+        `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Coordinador: ${coordinatorName || 'Ninguno'}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
+
+      showSystemPopup(
+        "Primer Coordinador",
+        coordinatorName
+          ? `Se ha asignado a "${coordinatorName}" como primer coordinador para ${userToUpdate.name}.`
+          : `Se ha retirado el primer coordinador de ${userToUpdate.name}.`,
+        "success"
+      );
+    } catch (error: any) {
       console.error("Error updating assigned coordinator:", error);
+      if (isFirestoreInternalAssertion(error)) {
+        showSystemPopup("Primer Coordinador", `Se ha guardado la asignación de coordinador para ${userToUpdate.name}.`, "success");
+      } else {
+        showSystemPopup("Error", "No se pudo actualizar el coordinador: " + (error?.message || ''), "error");
+      }
+    }
+  };
+
+  const updateAssignedSecondaryCoordinator = async (userToUpdate: UserProfile, coordinatorUid: string) => {
+    try {
+      const emailId = userToUpdate.email.toLowerCase().trim();
+      let coordinatorName = '';
+      let updatePayload: Record<string, any> = {};
+
+      if (!coordinatorUid) {
+        updatePayload = {
+          secondaryCoordinatorId: '',
+          secondaryCoordinatorEmail: '',
+          secondaryCoordinatorName: '',
+          updatedAt: Date.now()
+        };
+      } else {
+        const coord = coordinators.find(c => c.uid === coordinatorUid || c.email === coordinatorUid);
+        if (coord) {
+          coordinatorName = coord.name;
+          updatePayload = {
+            secondaryCoordinatorId: coord.uid,
+            secondaryCoordinatorEmail: coord.email,
+            secondaryCoordinatorName: coord.name,
+            updatedAt: Date.now()
+          };
+        }
+      }
+
+      await safeSaveUserDoc(userToUpdate, updatePayload);
+
+      // Background sync with server
+      fetch('/api/update-user-coordinator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailId, ...updatePayload })
+      }).catch(err => console.warn("Background server coordinator sync notice:", err));
+
+      try {
+        await addLog(
+          'Asignó segundo coordinador a docente',
+          `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Segundo Coordinador: ${coordinatorName || 'Ninguno'}`,
+          { module: 'Usuarios', recordId: emailId }
+        );
+      } catch (logErr) {
+        console.warn("Log notice:", logErr);
+      }
+
+      showSystemPopup(
+        "Segundo Coordinador",
+        coordinatorName
+          ? `Se ha asignado a "${coordinatorName}" como segundo coordinador para ${userToUpdate.name}.`
+          : `Se ha retirado el segundo coordinador de ${userToUpdate.name}.`,
+        "success"
+      );
+    } catch (error: any) {
+      console.error("Error updating secondary coordinator:", error);
+      if (isFirestoreInternalAssertion(error)) {
+        showSystemPopup("Segundo Coordinador", `Se ha guardado el segundo coordinador para ${userToUpdate.name}.`, "success");
+      } else {
+        showSystemPopup("Error", "No se pudo actualizar el segundo coordinador: " + (error?.message || ''), "error");
+      }
+    }
+  };
+
+  const updateUserEducationLevel = async (userToUpdate: UserProfile, newLevel: string) => {
+    try {
+      const emailId = userToUpdate.email.toLowerCase().trim();
+      await safeSaveUserDoc(userToUpdate, { educationLevel: newLevel });
+      await addLog(
+        'Actualizó nivel educativo',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Nuevo nivel: ${newLevel}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
+      showSystemPopup("Nivel Educativo Actualizado", `El nivel de ${userToUpdate.name} fue cambiado a ${newLevel}.`, "success");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${userToUpdate.email}`);
     }
   };
 
   const updateAssignedPsychologist = async (userToUpdate: UserProfile, psychologistUid: string) => {
     try {
       const emailId = userToUpdate.email.toLowerCase().trim();
+      let psychologistName = '';
+      let updateData: any = {};
       if (!psychologistUid) {
-        await updateDoc(doc(db, 'users', emailId), {
+        updateData = {
           assignedPsychologistId: '',
           assignedPsychologistEmail: '',
           assignedPsychologistName: '',
-        });
+        };
       } else {
         const psycho = psychologists.find(p => p.uid === psychologistUid || p.email === psychologistUid);
         if (psycho) {
-          await updateDoc(doc(db, 'users', emailId), {
+          psychologistName = psycho.name;
+          updateData = {
             assignedPsychologistId: psycho.uid,
             assignedPsychologistEmail: psycho.email,
             assignedPsychologistName: psycho.name,
-          });
+          };
         }
       }
-      await addLog('Asignó psicólogo a docente', `Docente: ${userToUpdate.name}`);
+      await safeSaveUserDoc(userToUpdate, updateData);
+      await addLog(
+        'Asignó psicólogo a docente',
+        `Asignado por: ${profile.name} (${profile.role} - ${profile.email}) | Docente: ${userToUpdate.name} (${userToUpdate.email}) | Psicólogo: ${psychologistName || 'Ninguno'}`,
+        { module: 'Usuarios', recordId: emailId }
+      );
     } catch (error) {
       console.error("Error updating assigned psychologist:", error);
     }
@@ -7979,13 +10318,21 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         await updateDoc(doc(db, 'users', emailId), {
           customPermissions: deleteField()
         });
-        await addLog('Restableció permisos de usuario', `Usuario: ${userToUpdate.name} (${userToUpdate.email})`);
+        await addLog(
+          'Restableció permisos de usuario',
+          `Restablecido por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email})`,
+          { module: 'Permisos', recordId: emailId }
+        );
         showSystemPopup("Permisos restablecidos", `Permisos de ${userToUpdate.name} restablecidos a las preferencias por defecto de su rol.`, "success");
       } else {
         await updateDoc(doc(db, 'users', emailId), {
           customPermissions: newPermissions
         });
-        await addLog('Actualizó permisos individuales de usuario', `Usuario: ${userToUpdate.name} (${userToUpdate.email})`);
+        await addLog(
+          'Actualizó permisos individuales de usuario',
+          `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Usuario: ${userToUpdate.name} (${userToUpdate.email})`,
+          { module: 'Permisos', recordId: emailId }
+        );
         showSystemPopup("Permisos guardados", `Permisos individuales de ${userToUpdate.name} guardados con éxito en la base de datos Firestore.`, "success");
       }
     } catch (error) {
@@ -7996,7 +10343,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Gestión de Usuarios</h1>
           <p className="text-slate-500">
@@ -8007,15 +10354,17 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
               : 'Directorio y asignación de personal'}
           </p>
         </div>
-        {canManageUsers && (
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-lg shadow-indigo-100 transition-all font-bold cursor-pointer"
-          >
-            <UserPlus className="w-5 h-5" />
-            <span>Nuevo Usuario</span>
-          </button>
-        )}
+        <div className="flex items-center gap-3 flex-wrap">
+          {canManageUsers && (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-lg shadow-indigo-100 transition-all font-bold cursor-pointer text-sm"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Nuevo Usuario</span>
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-1 flex overflow-x-auto no-scrollbar">
@@ -8084,6 +10433,28 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
           <School className="w-4 h-4" />
           Docentes
         </button>
+        {isSuperAdmin && (
+          <button
+            onClick={() => setActiveUserTab('BLOQUEADO')}
+            className={cn(
+              "px-6 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-2 whitespace-nowrap",
+              activeUserTab === 'BLOQUEADO' 
+                ? "bg-rose-600 text-white shadow-lg shadow-rose-100" 
+                : "text-rose-600 hover:bg-rose-50"
+            )}
+          >
+            <ShieldAlert className="w-4 h-4" />
+            <span>Bloqueados</span>
+            {blockedUsers.length > 0 && (
+              <span className={cn(
+                "text-[10px] px-2 py-0.5 rounded-full font-bold",
+                activeUserTab === 'BLOQUEADO' ? "bg-white text-rose-700" : "bg-rose-100 text-rose-800"
+              )}>
+                {blockedUsers.length}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -8144,21 +10515,110 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         )}
         
         {activeUserTab === 'TEACHER' && (
+          <div className="space-y-4">
+            {canFilterTeachersByLevel && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  <GraduationCap className="w-4 h-4 text-indigo-600" />
+                  <span>Nivel de Educación:</span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(['TODOS', 'Preescolar', 'Primaria', 'Secundaria'] as const).map(lvl => {
+                    const count = lvl === 'TODOS'
+                      ? displayedTeachers.filter(u => !isSuperAdminEmail(u.email)).length
+                      : displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === normalizeEducationLevel(lvl)).length;
+                    const isActive = teacherLevelFilter === lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setTeacherLevelFilter(lvl)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                          isActive
+                            ? "bg-indigo-600 text-white shadow-sm shadow-indigo-200"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        )}
+                      >
+                        <span>{lvl === 'TODOS' ? 'Todos los Niveles' : lvl}</span>
+                        <span className={cn(
+                          "text-[10px] px-1.5 py-0.5 rounded-full font-bold",
+                          isActive ? "bg-white/20 text-white" : "bg-white text-slate-600 border border-slate-200"
+                        )}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Barra de búsqueda para localizar docentes rápidamente */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs flex flex-col sm:flex-row items-center gap-3">
+              <div className="relative flex-1 w-full">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={teacherSearchQuery}
+                  onChange={(e) => setTeacherSearchQuery(e.target.value)}
+                  placeholder="Buscar docente por nombre, correo, teléfono o nivel educativo..."
+                  className="w-full pl-10 pr-9 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all outline-none"
+                />
+                {teacherSearchQuery && (
+                  <button 
+                    type="button"
+                    onClick={() => setTeacherSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md transition-colors cursor-pointer"
+                    title="Limpiar búsqueda"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {teacherSearchQuery && (
+                <div className="text-xs font-semibold text-slate-500 whitespace-nowrap px-1">
+                  <span>
+                    {filteredTeachers.filter(u => !isSuperAdminEmail(u.email)).length}{' '}
+                    {filteredTeachers.filter(u => !isSuperAdminEmail(u.email)).length === 1 ? 'docente encontrado' : 'docentes encontrados'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <UserList 
+              title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
+              users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+              emptyMessage={teacherSearchQuery ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` : undefined}
+              onDelete={deleteUser} 
+              onUpdateRole={updateUserRole}
+              showPasswords={isSuperAdmin}
+              canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
+              coordinators={coordinators}
+              psychologists={psychologists}
+              onAssignCoordinator={updateAssignedCoordinator}
+              onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
+              onAssignPsychologist={updateAssignedPsychologist}
+              onUpdateEducationLevel={updateUserEducationLevel}
+              profile={profile}
+              canManageUsers={canManageUsers}
+              canAssignPsychologist={canAssignPsychologist}
+              onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            />
+          </div>
+        )}
+
+        {activeUserTab === 'BLOQUEADO' && isSuperAdmin && (
           <UserList 
-            title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
-            users={displayedTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+            title="Usuarios Bloqueados (Acceso Denegado al Sistema)" 
+            users={blockedUsers.filter(u => !isSuperAdminEmail(u.email))} 
             onDelete={deleteUser} 
             onUpdateRole={updateUserRole}
             showPasswords={isSuperAdmin}
-            canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
-            coordinators={coordinators}
-            psychologists={psychologists}
-            onAssignCoordinator={updateAssignedCoordinator}
-            onAssignPsychologist={updateAssignedPsychologist}
+            canChangeRole={true}
             profile={profile}
             canManageUsers={canManageUsers}
-            canAssignPsychologist={canAssignPsychologist}
-            onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+            onEditPermissions={setUserToEditPermissions}
           />
         )}
 
@@ -8270,17 +10730,29 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                     type="email"
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all"
+                    className={cn(
+                      "w-full bg-slate-50 border rounded-xl px-4 py-2.5 focus:ring-2 transition-all",
+                      isEmailAlreadyRegistered
+                        ? "border-amber-400 focus:ring-amber-500 bg-amber-50/40 text-amber-900"
+                        : "border-slate-200 focus:ring-indigo-500"
+                    )}
                   />
+                  {isEmailAlreadyRegistered && (
+                    <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-xs font-semibold">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>El correo ya está registrado en el sistema. No se permite registrarlo de nuevo.</span>
+                    </div>
+                  )}
                 </InputGroup>
-                <InputGroup label="Teléfono">
-                  <input
-                    type="tel"
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 transition-all"
-                  />
-                </InputGroup>
+                <div className="p-3.5 bg-indigo-50/80 border border-indigo-100 rounded-xl flex items-start gap-3">
+                  <div className="p-1.5 bg-indigo-100 rounded-lg text-indigo-700 shrink-0 mt-0.5">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div className="text-xs text-indigo-950 leading-relaxed">
+                    <span className="font-bold block text-indigo-900 mb-0.5">Sin contraseña por defecto</span>
+                    No se requiere asignar contraseña. Cuando el usuario ingrese con su correo por primera vez al sistema, se verificará automáticamente y se le solicitará crear su propia contraseña de acceso personal.
+                  </div>
+                </div>
 
                 <div className="flex gap-3 pt-4">
                   <button
@@ -8292,7 +10764,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                   </button>
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || isEmailAlreadyRegistered}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-indigo-100 transition-all disabled:opacity-50"
                   >
                     {loading ? 'Guardando...' : 'Guardar'}
@@ -8341,11 +10813,14 @@ const UserList = ({
   coordinators = [],
   psychologists = [],
   onAssignCoordinator,
+  onAssignSecondaryCoordinator,
   onAssignPsychologist,
+  onUpdateEducationLevel,
   profile,
   canManageUsers = true,
   canAssignPsychologist = true,
   onEditPermissions,
+  emptyMessage,
 }: { 
   title: string, 
   users: UserProfile[], 
@@ -8357,15 +10832,19 @@ const UserList = ({
   coordinators?: UserProfile[],
   psychologists?: UserProfile[],
   onAssignCoordinator?: (user: UserProfile, coordUid: string) => void,
+  onAssignSecondaryCoordinator?: (user: UserProfile, coordUid: string) => void,
   onAssignPsychologist?: (user: UserProfile, psychUid: string) => void,
+  onUpdateEducationLevel?: (user: UserProfile, level: string) => void,
   profile: UserProfile,
   canManageUsers?: boolean,
   canAssignPsychologist?: boolean,
   onEditPermissions?: (user: UserProfile) => void,
+  emptyMessage?: string,
 }) => {
   const isCoordinator = profile.role === 'COORDINATOR';
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
   const isAdminOrDirective = profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || isSuperAdmin;
+  const canAssignCoordinators = isSuperAdmin || profile.role === 'ADMIN' || profile.role === 'DIRECTIVE' || profile.role === 'COORDINATOR';
 
   return (
     <div className="space-y-4">
@@ -8381,7 +10860,7 @@ const UserList = ({
       {users.length === 0 ? (
         <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
           <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
-          <p className="text-sm font-medium">No hay usuarios registrados en esta categoría.</p>
+          <p className="text-sm font-medium">{emptyMessage || "No hay usuarios registrados en esta categoría."}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -8423,6 +10902,19 @@ const UserList = ({
                         </div>
                       )}
                     </div>
+
+                    {(u.createdByName || u.createdBy) && (
+                      <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mt-1">
+                        <UserCheck className="w-3 h-3 text-slate-400" />
+                        <span>Registrado por: <strong className="text-slate-600 font-semibold">{u.createdByName || u.createdBy}</strong> {u.creatorRole ? `(${u.creatorRole})` : ''}</span>
+                      </div>
+                    )}
+                    {!u.createdByName && !u.createdBy && u.role === 'ADMIN' && (
+                      <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mt-1">
+                        <UserCheck className="w-3 h-3 text-slate-400" />
+                        <span>Registrado por: <strong className="text-slate-600 font-semibold">Sistema / Superadministrador Inicial</strong></span>
+                      </div>
+                    )}
 
                     {/* Chips showing active custom permissions directly on user card - strictly for SuperAdmin */}
                     {hasCustomPerms && actualCustomEntries.length > 0 && isSuperAdmin && (
@@ -8471,20 +10963,57 @@ const UserList = ({
                       </div>
                     )}
 
-                    {/* Rule 2: Options to assign Coordinators and Psychologists to Teachers */}
-                    {u.role === 'TEACHER' && isAdminOrDirective && canManageUsers && (
+                    {/* Options to assign 1st and 2nd Coordinator, Level, and Psychologist to Teachers */}
+                    {u.role === 'TEACHER' && canAssignCoordinators && (
                       <div className="flex flex-wrap items-center gap-3 mt-2 pt-2 border-t border-slate-100">
+                        {/* 1er Coordinador */}
                         <div className="flex items-center gap-1.5 text-xs">
-                          <span className="font-semibold text-slate-500">Coordinador:</span>
+                          <span className="font-semibold text-slate-500">1er Coord:</span>
                           <select
                             value={u.assignedCoordinatorId || u.assignedCoordinatorEmail || ''}
                             onChange={(e) => onAssignCoordinator && onAssignCoordinator(u, e.target.value)}
                             className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                            title="Primer Coordinador Asignado"
                           >
                             <option value="">-- Sin Asignar --</option>
                             {coordinators.map(c => (
                               <option key={c.email} value={c.uid}>{c.name}</option>
                             ))}
+                          </select>
+                        </div>
+
+                        {/* 2do Coordinador */}
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="font-semibold text-indigo-700 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 inline-block"></span>
+                            2do Coord:
+                          </span>
+                          <select
+                            value={u.secondaryCoordinatorId || u.secondaryCoordinatorEmail || ''}
+                            onChange={(e) => onAssignSecondaryCoordinator && onAssignSecondaryCoordinator(u, e.target.value)}
+                            className="bg-indigo-50/70 border border-indigo-200 rounded-lg px-2 py-1 text-xs font-semibold text-indigo-900 hover:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                            title="Segundo Coordinador Asignado (Opcional)"
+                          >
+                            <option value="">-- Sin Asignar (Opcional) --</option>
+                            {coordinators
+                              .filter(c => c.uid !== (u.assignedCoordinatorId || u.assignedCoordinatorEmail) && c.email !== u.assignedCoordinatorEmail)
+                              .map(c => (
+                                <option key={c.email} value={c.uid}>{c.name}</option>
+                              ))}
+                          </select>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="font-semibold text-slate-500">Nivel:</span>
+                          <select
+                            value={u.educationLevel || getUserEducationLevel(u, coordinators) || ''}
+                            onChange={(e) => onUpdateEducationLevel && onUpdateEducationLevel(u, e.target.value)}
+                            className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                          >
+                            <option value="">-- Sin Nivel --</option>
+                            <option value="Preescolar">Preescolar</option>
+                            <option value="Primaria">Primaria</option>
+                            <option value="Secundaria">Secundaria</option>
                           </select>
                         </div>
 
@@ -8506,12 +11035,18 @@ const UserList = ({
                       </div>
                     )}
 
-                    {(u.assignedCoordinatorName || u.assignedPsychologistName || u.educationLevel) && u.role === 'TEACHER' && !isAdminOrDirective && (
+                    {(u.assignedCoordinatorName || u.secondaryCoordinatorName || u.assignedPsychologistName || u.educationLevel) && u.role === 'TEACHER' && !canAssignCoordinators && (
                       <div className="flex flex-wrap items-center gap-2 mt-1.5">
                         {u.assignedCoordinatorName && (
                           <span className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md font-semibold border border-indigo-100 flex items-center gap-1">
                             <UserIcon className="w-3 h-3 text-indigo-500" />
-                            Coordinador: {u.assignedCoordinatorName}
+                            1er Coord: {u.assignedCoordinatorName}
+                          </span>
+                        )}
+                        {u.secondaryCoordinatorName && (
+                          <span className="text-[11px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded-md font-semibold border border-purple-100 flex items-center gap-1">
+                            <UserIcon className="w-3 h-3 text-purple-500" />
+                            2do Coord: {u.secondaryCoordinatorName}
                           </span>
                         )}
                         {u.assignedPsychologistName && (
@@ -8536,10 +11071,13 @@ const UserList = ({
                     <div className="flex items-center gap-1.5">
                       <div className={cn(
                         "w-2 h-2 rounded-full",
-                        u.isRegistered ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
+                        u.role === 'BLOQUEADO' ? "bg-rose-600 animate-pulse" : u.isRegistered ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
                       )} />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        {u.isRegistered ? 'Registrado' : 'Pendiente'}
+                      <span className={cn(
+                        "text-[10px] font-bold uppercase tracking-wider",
+                        u.role === 'BLOQUEADO' ? "text-rose-600 font-extrabold" : "text-slate-400"
+                      )}>
+                        {u.role === 'BLOQUEADO' ? 'Bloqueado' : u.isRegistered ? 'Registrado' : 'Pendiente'}
                       </span>
                     </div>
                     
@@ -8582,6 +11120,9 @@ const UserList = ({
                             <option value="DIRECTIVE">Directivo</option>
                             <option value="PSYCHOLOGIST">Psicólogo</option>
                             <option value="ADMIN">Admin</option>
+                            {(isSuperAdmin || u.role === 'BLOQUEADO') && (
+                              <option value="BLOQUEADO" className="text-red-600 font-bold">Bloqueado</option>
+                            )}
                           </select>
                           <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                         </div>

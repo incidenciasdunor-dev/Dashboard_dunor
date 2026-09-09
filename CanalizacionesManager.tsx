@@ -12,7 +12,9 @@ import {
   Send,
   X,
   CheckCircle2,
-  BrainCircuit
+  BrainCircuit,
+  Trash2,
+  UserCheck
 } from 'lucide-react';
 import {
   Referral,
@@ -20,9 +22,9 @@ import {
   normalizeUserRole
 } from '../types';
 import { SystemModal, SystemModalState } from './SystemModal';
-import { doc, setDoc, updateDoc, addDoc, collection } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, addDoc, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { cn } from '../lib/utils';
+import { cn, getUserEducationLevel } from '../lib/utils';
 
 interface CanalizacionesManagerProps {
   referrals: Referral[];
@@ -31,9 +33,11 @@ interface CanalizacionesManagerProps {
   psychologists: UserProfile[];
   directives?: UserProfile[];
   teachers?: UserProfile[];
+  admins?: UserProfile[];
   addLog: (action: string, details?: string) => Promise<void>;
   isSuperAdmin?: boolean;
   canCreateReferral?: boolean;
+  canDeleteReferral?: boolean;
   canManageExpedientes?: boolean;
   canAddFollowUp?: boolean;
   onOpenExpedienteFromReferral?: (referral: Referral) => void;
@@ -48,9 +52,11 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   psychologists,
   directives = [],
   teachers = [],
+  admins = [],
   addLog,
   isSuperAdmin,
   canCreateReferral = true,
+  canDeleteReferral,
   canManageExpedientes = true,
   canAddFollowUp = true,
   onOpenExpedienteFromReferral,
@@ -61,6 +67,22 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
 
+  const normRole = normalizeUserRole(profile.role);
+  const isSuperUser = Boolean(
+    isSuperAdmin || 
+    normRole === 'ADMIN' || 
+    (profile?.email && (profile.email.toLowerCase().includes('dunor') || profile.email.toLowerCase() === 'mi_yorch@hotmail.com'))
+  );
+  const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
+  const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
+  const canDeleteReferralActual = Boolean(
+    canDeleteReferral || 
+    isSuperUser ||
+    isSuperAdmin || 
+    isPsychologistUser || 
+    normRole === 'ADMIN'
+  );
+
   const [sysModal, setSysModal] = useState<SystemModalState>({
     isOpen: false,
     title: '',
@@ -70,6 +92,16 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
   const showAlert = (title: string, message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
     setSysModal({ isOpen: true, title, message, type });
+  };
+
+  const showConfirm = (
+    title: string,
+    message: string,
+    onConfirm: () => void,
+    type: 'confirm' | 'danger' = 'confirm',
+    confirmText = 'Confirmar'
+  ) => {
+    setSysModal({ isOpen: true, type, title, message, onConfirm, confirmText });
   };
 
   // Effect to auto-expand and scroll to highlighted referral when redirected from notifications
@@ -101,14 +133,24 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [savingCommentId, setSavingCommentId] = useState<string | null>(null);
   const [saveSuccessId, setSaveSuccessId] = useState<string | null>(null);
 
-  // Helper to determine the linked coordinator
+  // Helper to determine the linked coordinators
+  const primaryCoord = coordinators.find(c =>
+    (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+    (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+    (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+  );
+
+  const secondaryCoord = coordinators.find(c =>
+    (profile.secondaryCoordinatorId && c.uid === profile.secondaryCoordinatorId) ||
+    (profile.secondaryCoordinatorEmail && c.email?.toLowerCase() === profile.secondaryCoordinatorEmail?.toLowerCase()) ||
+    (profile.secondaryCoordinatorName && c.name === profile.secondaryCoordinatorName)
+  );
+
+  const hasTwoCoordinators = Boolean(primaryCoord && secondaryCoord && primaryCoord.uid !== secondaryCoord.uid);
+  const [selectedCoordMode, setSelectedCoordMode] = useState<'primary' | 'secondary' | 'both'>('primary');
+
   const getLinkedCoordinatorEmail = () => {
-    const linked = coordinators.find(c =>
-      (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
-      (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
-      (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
-    );
-    if (linked) return linked.email;
+    if (primaryCoord) return primaryCoord.email;
     if (profile.role === 'COORDINATOR') {
       const selfCoord = coordinators.find(c => c.uid === profile.uid || c.email?.toLowerCase() === profile.email?.toLowerCase());
       if (selfCoord) return selfCoord.email;
@@ -122,23 +164,80 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     gradeGroup: '',
     coordinatorEmail: getLinkedCoordinatorEmail(),
     additionalRecipients: [] as { uid?: string; email: string; name: string; role: string }[],
-    psychologistEmail: profile.assignedPsychologistEmail || (psychologists[0]?.email || ''),
+    psychologistEmail: isPsychologistUser ? (profile.email || '') : (profile.assignedPsychologistEmail || (psychologists[0]?.email || '')),
     reasonAndBackground: '',
     teacherStrategies: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Active educational level logic for referral registration:
+  // 1. First check if current user profile has a specific educational level (Preescolar, Primaria, Secundaria)
+  const profileLevel = getUserEducationLevel(profile, coordinators);
+
+  // 2. If the user doesn't have a fixed profile level (e.g., Admin, Psychologist, Directive),
+  // determine it from the assigned/selected coordinator for this referral:
+  const selectedCoordinator = coordinators.find(c =>
+    c.email?.toLowerCase() === formData.coordinatorEmail?.toLowerCase() ||
+    c.uid === formData.coordinatorEmail
+  );
+  const coordinatorLevel = selectedCoordinator ? getUserEducationLevel(selectedCoordinator, coordinators) : '';
+
+  // The active educational level that governs this referral registration:
+  const activeReferralLevel = profileLevel || coordinatorLevel;
+
+  // Filter teachers for copy:
+  // For psychologists (and global administrators), all teachers from all 3 levels (Preescolar, Primaria, Secundaria) appear.
+  // For other users (e.g. teachers), only teachers of their specific level appear.
+  const isAllLevelsViewer = isPsychologistUser || normRole === 'ADMIN' || isSuperAdmin;
+
+  const filteredTeachersForCopy = (teachers || []).filter(t => {
+    // Cannot copy oneself
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) {
+      return false;
+    }
+    if (isAllLevelsViewer) {
+      return true;
+    }
+    // Teacher's level
+    const tLevel = getUserEducationLevel(t, coordinators);
+    if (activeReferralLevel) {
+      return tLevel === activeReferralLevel;
+    }
+    return true;
+  });
+
+  // Categorized teachers for multi-level views (psychologists / admins)
+  const preescolarTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return getUserEducationLevel(t, coordinators) === 'Preescolar';
+  });
+
+  const primariaTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return getUserEducationLevel(t, coordinators) === 'Primaria';
+  });
+
+  const secundariaTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return getUserEducationLevel(t, coordinators) === 'Secundaria';
+  });
+
+  const otherTeachers = (teachers || []).filter(t => {
+    if (t.uid === profile.uid || (profile.email && t.email?.toLowerCase() === profile.email.toLowerCase())) return false;
+    return !getUserEducationLevel(t, coordinators);
+  });
+
   useEffect(() => {
     if (isModalOpen) {
       const defaultCoord = getLinkedCoordinatorEmail();
-      const defaultPsych = profile.assignedPsychologistEmail || (psychologists[0]?.email || '');
+      const defaultPsych = isPsychologistUser ? (profile.email || '') : (profile.assignedPsychologistEmail || (psychologists[0]?.email || ''));
       setFormData(prev => ({
         ...prev,
         coordinatorEmail: prev.coordinatorEmail || defaultCoord,
-        psychologistEmail: prev.psychologistEmail || defaultPsych
+        psychologistEmail: isPsychologistUser ? (profile.email || '') : (prev.psychologistEmail || defaultPsych)
       }));
     }
-  }, [isModalOpen, profile, coordinators, psychologists]);
+  }, [isModalOpen, profile, coordinators, psychologists, isPsychologistUser]);
 
   // Toggle card details
   const toggleDetails = (id: string) => {
@@ -152,7 +251,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     return expandedCardIds[id] !== false; // Default expanded
   };
 
-  // Filter referrals
+  // Filter referrals according to strict access control rules (Requirement 4)
   const filteredReferrals = referrals.filter(ref => {
     const term = searchTerm.toLowerCase();
     const matchesTerm = (
@@ -165,23 +264,98 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
     if (!matchesTerm) return false;
 
-    // Filter by assigned psychologist if current user is a psychologist
-    if (profile.role === 'PSYCHOLOGIST' && !isSuperAdmin) {
-      const userEmail = profile.email.toLowerCase();
-      const userUid = profile.uid;
-      // If there's only 1 psychologist in total, show all
-      if (psychologists.length <= 1) return true;
+    const normRole = normalizeUserRole(profile.role);
+    const userEmail = (profile.email || '').toLowerCase().trim();
+    const userUid = profile.uid;
 
-      // Otherwise match assigned psychologist email/ID or unassigned
+    // 1. Directives, Admins, and SuperAdmins have visibility of all canalizaciones
+    if (isSuperAdmin || normRole === 'ADMIN' || normRole === 'DIRECTIVE') {
+      return true;
+    }
+
+    // 2. Psychologists: visible if assigned to them, unassigned, or in additionalRecipients (or if only 1 psychologist)
+    if (normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'))) {
+      if (psychologists.length <= 1) return true;
       const isAssignedToMe = 
         (ref.psychologistEmail && ref.psychologistEmail.toLowerCase() === userEmail) ||
         (ref.psychologistId && ref.psychologistId === userUid) ||
         (!ref.psychologistEmail && !ref.psychologistId);
-      return isAssignedToMe;
+      const isCc = ref.additionalRecipients?.some(r => 
+        (r.email && r.email.toLowerCase() === userEmail) || (r.uid && r.uid === userUid)
+      );
+      return isAssignedToMe || Boolean(isCc);
     }
 
-    return true;
+    // 3. Coordinators: visible if assigned to them, unassigned, or in additionalRecipients
+    if (normRole === 'COORDINATOR') {
+      const isAssignedToMe = 
+        (ref.coordinatorEmail && ref.coordinatorEmail.toLowerCase() === userEmail) ||
+        (ref.coordinatorId && ref.coordinatorId === userUid) ||
+        (!ref.coordinatorEmail && !ref.coordinatorId);
+      const isCc = ref.additionalRecipients?.some(r => 
+        (r.email && r.email.toLowerCase() === userEmail) || (r.uid && r.uid === userUid)
+      );
+      return isAssignedToMe || Boolean(isCc);
+    }
+
+    // 4. Teachers (Docentes): STRICT ACCESS CONTROL:
+    // Only visible to the teacher who registered it, OR if included in additionalRecipients ("copia a docente")
+    // "ningun otro docente debe de poder visualizar los registros de otro docente, a menos que este como copia a docente"
+    if (normRole === 'TEACHER') {
+      const isAuthor = 
+        (ref.teacherId && ref.teacherId === userUid) ||
+        (ref.teacherEmail && ref.teacherEmail.toLowerCase() === userEmail);
+      const isCc = ref.additionalRecipients?.some(r => 
+        (r.email && r.email.toLowerCase() === userEmail) || (r.uid && r.uid === userUid)
+      );
+      return Boolean(isAuthor || isCc);
+    }
+
+    // Any other custom role fallback: only author or copy recipient
+    const isAuthor = 
+      (ref.teacherId && ref.teacherId === userUid) ||
+      (ref.teacherEmail && ref.teacherEmail.toLowerCase() === userEmail);
+    const isCc = ref.additionalRecipients?.some(r => 
+      (r.email && r.email.toLowerCase() === userEmail) || (r.uid && r.uid === userUid)
+    );
+    return Boolean(isAuthor || isCc);
   });
+
+  // Handle delete referral (Psychologist / Admin)
+  const handleDeleteReferral = (ref: Referral) => {
+    showConfirm(
+      'Eliminar Canalización',
+      `¿Estás seguro de que deseas eliminar permanentemente la canalización del alumno "${ref.studentName}" (${ref.gradeGroup || 'S/G'})? Esta acción no se puede deshacer.`,
+      async () => {
+        try {
+          await deleteDoc(doc(db, 'referrals', ref.id));
+
+          // Si la canalización provenía de una incidencia escolar vinculada, restablecemos el estatus de canalización
+          if (ref.incidentId) {
+            try {
+              await updateDoc(doc(db, 'incidents', ref.incidentId), {
+                referralStatus: null
+              });
+            } catch (incErr) {
+              console.warn("No se pudo actualizar el estatus de la incidencia vinculada:", incErr);
+            }
+          }
+
+          await addLog(
+            'Eliminación de Canalización',
+            `Eliminado por: ${profile.name} (${profile.role} - ${profile.email}) | Canalización del alumno: ${ref.studentName} (${ref.gradeGroup || 'S/G'}) | Remitente original: ${ref.createdByName || ref.teacherName || 'Docente'}`
+          );
+
+          showAlert('Canalización Eliminada', `La canalización de "${ref.studentName}" ha sido eliminada exitosamente.`, 'success');
+        } catch (err) {
+          console.error("Error deleting referral:", err);
+          showAlert('Error', 'Ocurrió un error al intentar eliminar la canalización. Por favor inténtalo de nuevo.', 'error');
+        }
+      },
+      'danger',
+      'Eliminar'
+    );
+  };
 
   // Handle create referral
   const handleCreateReferral = async (e: React.FormEvent) => {
@@ -195,21 +369,31 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     try {
       const id = 'ref_' + Date.now();
       const selectedCoord = coordinators.find(c => c.email === formData.coordinatorEmail);
-      const selectedPsych = psychologists.find(p => p.email === formData.psychologistEmail);
+      const selectedPsych = isPsychologistUser 
+        ? { uid: profile.uid, name: profile.name, email: profile.email }
+        : psychologists.find(p => p.email === formData.psychologistEmail);
+
+      const creatorRoleName = isPsychologistUser ? 'Psicólogo' : (profile.role === 'TEACHER' ? 'Docente' : (profile.role || 'Usuario'));
 
       const newRef: Referral = {
         id,
         studentName: formData.studentName.trim(),
         gradeGroup: formData.gradeGroup.trim() || 'S/G',
         teacherId: profile.uid || profile.email,
-        teacherName: profile.name || 'Docente',
+        teacherName: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
         teacherEmail: profile.email,
+        createdByName: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
+        createdByEmail: profile.email,
+        createdByRole: isPsychologistUser ? 'PSYCHOLOGIST' : (profile.role || 'TEACHER'),
+        referredByName: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
+        referredBy: profile.name || (isPsychologistUser ? 'Psicólogo' : 'Docente'),
+        referredByRole: isPsychologistUser ? 'PSYCHOLOGIST' : (profile.role || 'TEACHER'),
         coordinatorId: selectedCoord?.uid,
         coordinatorName: selectedCoord?.name || 'Coordinador General',
         coordinatorEmail: selectedCoord?.email || formData.coordinatorEmail,
-        psychologistId: selectedPsych?.uid,
-        psychologistName: selectedPsych?.name || (psychologists[0]?.name || 'Psicólogo Escolar'),
-        psychologistEmail: selectedPsych?.email || (psychologists[0]?.email || formData.psychologistEmail),
+        psychologistId: isPsychologistUser ? (profile.uid || profile.email) : (selectedPsych?.uid || ''),
+        psychologistName: isPsychologistUser ? profile.name : (selectedPsych?.name || (psychologists[0]?.name || 'Psicólogo Escolar')),
+        psychologistEmail: isPsychologistUser ? profile.email : (selectedPsych?.email || (psychologists[0]?.email || formData.psychologistEmail)),
         reasonAndBackground: formData.reasonAndBackground.trim(),
         teacherStrategies: formData.teacherStrategies.trim(),
         psychologistComment: '',
@@ -219,24 +403,81 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       };
 
       await setDoc(doc(db, 'referrals', id), newRef);
-      await addLog('Nueva Canalización', `Se canalizó al alumno ${newRef.studentName} (${newRef.gradeGroup}) a Psicología.`);
+      await addLog(
+        'Nueva Canalización',
+        `Creado por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${newRef.studentName} (${newRef.gradeGroup}) | Creador/Responsable: ${newRef.createdByName || newRef.teacherName} | Psicólogo: ${newRef.psychologistName} | Coordinador: ${newRef.coordinatorName || 'General'}`
+      );
 
-      // Send in-app and email notifications
-      if (sendNotification) {
-        const targetRecipients: string[] = [];
-        if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
-        else if (selectedCoord?.email) targetRecipients.push(selectedCoord.email.toLowerCase());
+      // Send in-app and email notifications (Requirements 3 & 4):
+      // Visible and notified to:
+      // 1. The teacher who registered it
+      // 2. The assigned psychologist
+      // 3. The assigned coordinator
+      // 4. All directives
+      // 5. All administrators
+      // 6. Any additional recipients (copia a docente / directivo / coordinador)
 
-        if (selectedPsych?.uid) targetRecipients.push(selectedPsych.uid);
-        else if (selectedPsych?.email) targetRecipients.push(selectedPsych.email.toLowerCase());
+      const targetRecipients: string[] = [];
+      const recipientEmails = new Set<string>();
 
-        formData.additionalRecipients.forEach(r => {
-          if (r.uid) targetRecipients.push(r.uid);
-          else if (r.email) targetRecipients.push(r.email.toLowerCase());
-        });
+      // Note: The teacher/user who creates the referral is strictly excluded from receiving creation notifications and emails.
 
+      // 1. Coordinador Asignado (ÚNICAMENTE al coordinador asignado al reporte/canalización)
+      if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
+      if (newRef.coordinatorEmail) {
+        targetRecipients.push(newRef.coordinatorEmail.toLowerCase());
+        recipientEmails.add(newRef.coordinatorEmail.toLowerCase());
+      }
+
+      // 2. Assigned Psychologist
+      if (selectedPsych?.uid) targetRecipients.push(selectedPsych.uid);
+      if (newRef.psychologistEmail) {
+        targetRecipients.push(newRef.psychologistEmail.toLowerCase());
+        recipientEmails.add(newRef.psychologistEmail.toLowerCase());
+      }
+
+      // 3. Directives
+      directives.forEach(d => {
+        if (d.uid) targetRecipients.push(d.uid);
+        if (d.email) {
+          targetRecipients.push(d.email.toLowerCase());
+          recipientEmails.add(d.email.toLowerCase());
+        }
+      });
+
+      // 4. Administrators
+      admins.forEach(a => {
+        if (a.uid) targetRecipients.push(a.uid);
+        if (a.email) {
+          targetRecipients.push(a.email.toLowerCase());
+          recipientEmails.add(a.email.toLowerCase());
+        }
+      });
+
+      // 5. Additional recipients (Copia a docente / directivo)
+      formData.additionalRecipients.forEach(r => {
+        if (r.uid) targetRecipients.push(r.uid);
+        if (r.email) {
+          targetRecipients.push(r.email.toLowerCase());
+          recipientEmails.add(r.email.toLowerCase());
+        }
+      });
+
+      // Strictly exclude creator from notification recipients & emails
+      const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
+      const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
+
+      const filteredRecipients = targetRecipients.filter(t => {
+        const clean = t.toLowerCase().trim();
+        return clean !== myUid && clean !== myEmail;
+      });
+
+      if (myEmail) recipientEmails.delete(myEmail);
+      if (myUid) recipientEmails.delete(myUid);
+
+      if (sendNotification && filteredRecipients.length > 0) {
         await sendNotification(
-          targetRecipients,
+          filteredRecipients,
           'Nueva Canalización Psicopedagógica',
           `Se ha registrado una canalización para el estudiante "${newRef.studentName}" (${newRef.gradeGroup}) por ${profile.name}.`,
           '',
@@ -244,9 +485,63 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           { 
             referralId: id, 
             type: 'referral',
+            creatorUid: profile.uid,
+            creatorEmail: profile.email,
+            isCreationNotification: true,
             detailsHtml: `<strong>Estudiante:</strong> ${newRef.studentName} (${newRef.gradeGroup})<br/><strong>Remitido por:</strong> ${profile.name}<br/><strong>Motivo:</strong> ${newRef.reasonAndBackground}`
           }
         );
+      }
+
+      // Send dedicated notification email to each recipient
+      const emailSubject = `📋 Nueva Canalización Psicopedagógica: ${newRef.studentName} (${newRef.gradeGroup})`;
+      const copiesList = formData.additionalRecipients.length > 0 
+        ? formData.additionalRecipients.map(r => `${r.name} (${r.role})`).join(', ') 
+        : 'Ninguno';
+
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800;">📋 Nueva Canalización Psicopedagógica</h1>
+            <p style="color: #c7d2fe; margin: 4px 0 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase;">DASHBOARD DUNOR</p>
+          </div>
+          <div style="padding: 24px; background-color: #ffffff;">
+            <p style="font-size: 15px; color: #334155; margin-top: 0;">
+              Se ha registrado una nueva canalización en el departamento de Psicología:
+            </p>
+            <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; border-radius: 8px; margin: 20px 0;">
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Estudiante:</strong> ${newRef.studentName} (${newRef.gradeGroup})</p>
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Docente que canaliza:</strong> ${profile.name} (${profile.email})</p>
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Coordinador Asignado:</strong> ${newRef.coordinatorName}</p>
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Psicólogo Asignado:</strong> ${newRef.psychologistName}</p>
+              ${formData.additionalRecipients.length > 0 ? `<p style="margin: 0 0 8px 0; font-size: 14px;"><strong>En copia a:</strong> ${copiesList}</p>` : ''}
+              <p style="margin: 0 0 8px 0; font-size: 14px;"><strong>Motivo y Hechos:</strong> ${newRef.reasonAndBackground}</p>
+              ${newRef.teacherStrategies ? `<p style="margin: 0; font-size: 14px;"><strong>Estrategias previas:</strong> ${newRef.teacherStrategies}</p>` : ''}
+            </div>
+            <p style="font-size: 13px; color: #64748b; text-align: center; margin: 20px 0 0 0;">
+              Ingresa al sistema para consultar el seguimiento completo y registrar observaciones.
+            </p>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 14px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8; font-weight: 500;">Notificación confidencial del Sistema Escolar DUNOR.</p>
+          </div>
+        </div>
+      `;
+
+      for (const email of recipientEmails) {
+        try {
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: email,
+              subject: emailSubject,
+              html: emailHtml
+            })
+          });
+        } catch (mailErr) {
+          console.error("Error sending canalización email to:", email, mailErr);
+        }
       }
 
       setIsModalOpen(false);
@@ -270,6 +565,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
   // Save psychologist comment
   const handleSavePsychologistComment = async (ref: Referral) => {
+    if (!isPsychologistUser) {
+      showAlert('Acceso Restringido', 'Únicamente el usuario psicólogo puede realizar o modificar comentarios en canalizaciones.', 'warning');
+      return;
+    }
     const commentVal = editingComments[ref.id] !== undefined ? editingComments[ref.id] : (ref.psychologistComment || '');
     setSavingCommentId(ref.id);
     try {
@@ -291,7 +590,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
       await addLog(
         'Respuesta de Psicología en Canalización',
-        `El psicólogo actualizó el comentario para la canalización de ${ref.studentName}: "${commentVal.slice(0, 50)}..."`
+        `Registrado por: ${profile.name} (${profile.role} - ${profile.email}) | Alumno: ${ref.studentName} (${ref.gradeGroup}) | Docente que canalizó: ${ref.teacherName} | Comentario: "${commentVal.slice(0, 100)}..."`
       );
 
       // Requirement 1: Notify the teacher who submitted referral and the assigned coordinator
@@ -311,6 +610,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         if (cObj?.uid) recipientUids.add(cObj.uid);
       }
 
+      // Exclude psychologist from receiving their own comment notification
+      if (profile.uid) recipientUids.delete(profile.uid);
+      if (profile.email) recipientUids.delete(profile.email.toLowerCase());
+
       const notifTitle = 'Comentario del Psicólogo en Canalización';
       const notifMessage = `El área de Psicología (${profile.name}) ha publicado un comentario para la canalización del alumno "${ref.studentName}": "${commentVal.slice(0, 80)}${commentVal.length > 80 ? '...' : ''}"`;
 
@@ -321,7 +624,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           notifMessage,
           ref.incidentId || '',
           false, // skipAdmins = false so directives & admins receive it too
-          { referralId: ref.id, type: 'referral' }
+          { referralId: ref.id, type: 'referral', creatorUid: profile.uid, creatorEmail: profile.email }
         );
       } else {
         for (const uid of recipientUids) {
@@ -386,15 +689,6 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     }
   };
 
-  const normRole = normalizeUserRole(profile.role);
-  const isPsychologistUser = normRole === 'PSYCHOLOGIST' ||
-    normRole === 'ADMIN' ||
-    isSuperAdmin ||
-    (profile.role && String(profile.role).toLowerCase().includes('psico')) ||
-    (profile.role && String(profile.role).toLowerCase().includes('orienta'));
-
-  const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
-
   return (
     <div className="space-y-6">
       {/* Header Section */}
@@ -417,8 +711,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           <button
             type="button"
             onClick={() => {
-              // Pre-select only psychologist if only 1 exists
-              const defaultPsychEmail = profile.assignedPsychologistEmail || (psychologists.length === 1 ? psychologists[0].email : (psychologists[0]?.email || ''));
+              // Pre-select psychologist: self if psychologist user
+              const defaultPsychEmail = isPsychologistUser
+                ? (profile.email || '')
+                : (profile.assignedPsychologistEmail || (psychologists.length === 1 ? psychologists[0].email : (psychologists[0]?.email || '')));
               const defaultCoordEmail = profile.assignedCoordinatorEmail || (coordinators[0]?.email || '');
               setFormData(prev => ({
                 ...prev,
@@ -500,17 +796,29 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenExpedienteFromReferral(ref)}
-                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 dark:hover:bg-emerald-900/60"
                       >
                         <FileText className="w-3.5 h-3.5" />
                         <span>Abrir / Vincular Expediente</span>
                       </button>
                     )}
 
+                    {canDeleteReferralActual && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteReferral(ref)}
+                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
+                        title="Eliminar canalización"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                        <span>Eliminar</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => toggleDetails(ref.id)}
-                      className="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-100 transition-all"
+                      className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
                     >
                       <span>{expanded ? 'Ocultar detalles' : 'Ver detalles'}</span>
                       {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -525,13 +833,17 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                   </h2>
                   <div className="text-xs text-slate-600 flex items-center gap-x-6 gap-y-1 flex-wrap font-medium">
                     <span>
-                      <strong className="text-slate-800">Docente:</strong> {ref.teacherName}
+                      <strong className="text-slate-800">
+                        {ref.createdByRole === 'PSYCHOLOGIST' || ref.referredByRole === 'PSYCHOLOGIST' || (ref.teacherEmail && psychologists.some(p => p.email?.toLowerCase() === ref.teacherEmail?.toLowerCase()))
+                          ? 'Psicólogo (Creador):'
+                          : 'Docente (Creador):'}
+                      </strong> {ref.createdByName || ref.referredByName || ref.teacherName}
                     </span>
                     <span>
                       <strong className="text-slate-800">Coordinador:</strong> {ref.coordinatorName || 'Coordinador General'}
                     </span>
                     <span>
-                      <strong className="text-slate-800">Psicólogo:</strong> {ref.psychologistName || 'Psicólogo Escolar'}
+                      <strong className="text-slate-800">Psicólogo Asignado:</strong> {ref.psychologistName || 'Psicólogo Escolar'}
                     </span>
                   </div>
                   {ref.additionalRecipients && ref.additionalRecipients.length > 0 && (
@@ -618,6 +930,20 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                         </div>
                       )}
                     </div>
+
+                    {canDeleteReferralActual && (
+                      <div className="flex justify-end pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteReferral(ref)}
+                          className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
+                          title="Eliminar canalización permanentemente"
+                        >
+                          <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                          <span>Eliminar Canalización</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -650,6 +976,13 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
             </div>
 
             <form onSubmit={handleCreateReferral} className="space-y-4">
+              <div className="flex items-center gap-2.5 p-3 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl text-xs text-indigo-950 font-medium">
+                <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                <span>
+                  <strong>Creador del registro:</strong> {profile.name} ({isPsychologistUser ? 'Psicólogo' : (profile.role === 'TEACHER' ? 'Docente' : (profile.role || 'Usuario'))} - {profile.email})
+                </span>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -680,53 +1013,194 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                 </div>
               </div>
 
+              {/* Selector para docentes con dos coordinadores asignados */}
+              {hasTwoCoordinators && primaryCoord && secondaryCoord && (
+                <div className="bg-indigo-50/85 border border-indigo-200 rounded-2xl p-4 space-y-2.5 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <UserCheck className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">Compartir Canalización con Coordinación</h4>
+                      <p className="text-[11px] text-indigo-700">Tienes dos coordinadores asignados. Elige a cuál de ellos se le compartirá este registro:</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCoordMode('primary');
+                        setFormData(prev => ({
+                          ...prev,
+                          coordinatorEmail: primaryCoord.email,
+                          additionalRecipients: prev.additionalRecipients.filter(r => r.email !== secondaryCoord.email && r.uid !== secondaryCoord.uid)
+                        }));
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                        selectedCoordMode === 'primary'
+                          ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                          : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                      )}
+                    >
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-0.5">1er Coordinador</span>
+                        <span className="text-xs font-bold text-slate-900 block">{primaryCoord.name}</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.email}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCoordMode('secondary');
+                        setFormData(prev => ({
+                          ...prev,
+                          coordinatorEmail: secondaryCoord.email,
+                          additionalRecipients: prev.additionalRecipients.filter(r => r.email !== primaryCoord.email && r.uid !== primaryCoord.uid)
+                        }));
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                        selectedCoordMode === 'secondary'
+                          ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                          : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                      )}
+                    >
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-0.5">2do Coordinador</span>
+                        <span className="text-xs font-bold text-slate-900 block">{secondaryCoord.name}</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 truncate mt-1">{secondaryCoord.email}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCoordMode('both');
+                        setFormData(prev => ({
+                          ...prev,
+                          coordinatorEmail: primaryCoord.email,
+                          additionalRecipients: [
+                            ...prev.additionalRecipients.filter(r => r.email !== secondaryCoord.email && r.uid !== secondaryCoord.uid),
+                            {
+                              uid: secondaryCoord.uid,
+                              email: secondaryCoord.email,
+                              name: secondaryCoord.name,
+                              role: 'Coordinador'
+                            }
+                          ]
+                        }));
+                      }}
+                      className={cn(
+                        "p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between",
+                        selectedCoordMode === 'both'
+                          ? "bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20"
+                          : "bg-white/70 border-indigo-100 hover:bg-white text-slate-700"
+                      )}
+                    >
+                      <div>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 block mb-0.5">Ambos Coordinadores</span>
+                        <span className="text-xs font-bold text-slate-900 block">Compartir con los Dos</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 truncate mt-1">{primaryCoord.name} & {secondaryCoord.name}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                     Coordinador Asignado *
                   </label>
-                  {(() => {
-                    const activeCoord = coordinators.find(c => c.email === formData.coordinatorEmail) || coordinators.find(c =>
-                      (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
-                      (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
-                      (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
-                    ) || coordinators[0];
-
-                    return (
-                      <div className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-800 flex items-center justify-between select-none cursor-not-allowed">
-                        <div className="flex items-center gap-2 truncate">
-                          <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
-                          <span className="truncate">
-                            {activeCoord?.name || 'Coordinación General'} {activeCoord?.email ? `(${activeCoord.email})` : ''}
-                          </span>
-                        </div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-200 flex-shrink-0 ml-1">
-                          Predeterminado
+                  {hasTwoCoordinators && primaryCoord && secondaryCoord ? (
+                    <div className="w-full px-3.5 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl text-xs font-semibold text-indigo-900 flex items-center justify-between">
+                      <div className="flex items-center gap-2 truncate">
+                        <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        <span className="truncate">
+                          {selectedCoordMode === 'both'
+                            ? `Ambos: ${primaryCoord.name} y ${secondaryCoord.name}`
+                            : selectedCoordMode === 'secondary'
+                            ? secondaryCoord.name
+                            : primaryCoord.name}
                         </span>
                       </div>
-                    );
-                  })()}
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 flex-shrink-0 ml-1">
+                        {selectedCoordMode === 'both' ? 'Doble' : 'Seleccionado'}
+                      </span>
+                    </div>
+                  ) : profile.assignedCoordinatorEmail || profile.assignedCoordinatorId ? (
+                    (() => {
+                      const activeCoord = coordinators.find(c => c.email?.toLowerCase() === formData.coordinatorEmail?.toLowerCase()) || coordinators.find(c =>
+                        (profile.assignedCoordinatorId && c.uid === profile.assignedCoordinatorId) ||
+                        (profile.assignedCoordinatorEmail && c.email?.toLowerCase() === profile.assignedCoordinatorEmail?.toLowerCase()) ||
+                        (profile.assignedCoordinatorName && c.name === profile.assignedCoordinatorName)
+                      ) || coordinators[0];
+
+                      return (
+                        <div className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-800 flex items-center justify-between select-none cursor-not-allowed">
+                          <div className="flex items-center gap-2 truncate">
+                            <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                            <span className="truncate">
+                              {activeCoord?.name || 'Coordinación General'} {activeCoord?.email ? `(${activeCoord.email})` : ''}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-white px-2 py-0.5 rounded border border-slate-200 flex-shrink-0 ml-1">
+                            Predeterminado
+                          </span>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <select
+                      value={formData.coordinatorEmail}
+                      onChange={(e) => setFormData({ ...formData, coordinatorEmail: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      {coordinators.map(c => {
+                        const cLvl = getUserEducationLevel(c, coordinators);
+                        return (
+                          <option key={c.uid || c.email} value={c.email}>
+                            Coordinador: {c.name} {cLvl ? `(${cLvl})` : ''} ({c.email})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                     Psicólogo Asignado *
                   </label>
-                  <select
-                    value={formData.psychologistEmail}
-                    onChange={(e) => setFormData({ ...formData, psychologistEmail: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    {psychologists.length === 0 ? (
-                      <option value="">Psicólogo Escolar</option>
-                    ) : (
-                      psychologists.map(p => (
-                        <option key={p.uid || p.email} value={p.email}>
-                          {p.name} ({p.email})
-                        </option>
-                      ))
-                    )}
-                  </select>
+                  {isPsychologistUser ? (
+                    <div className="w-full px-3.5 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl text-xs font-semibold text-indigo-900 flex items-center justify-between">
+                      <div className="flex items-center gap-2 truncate">
+                        <User className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        <span className="truncate">{profile.name} (Tú)</span>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 flex-shrink-0 ml-1">
+                        Creador
+                      </span>
+                    </div>
+                  ) : (
+                    <select
+                      value={formData.psychologistEmail}
+                      onChange={(e) => setFormData({ ...formData, psychologistEmail: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      {psychologists.length === 0 ? (
+                        <option value="">Psicólogo Escolar</option>
+                      ) : (
+                        psychologists.map(p => (
+                          <option key={p.uid || p.email} value={p.email}>
+                            {p.name} ({p.email})
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -783,6 +1257,9 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                     } else if (roleType === 'teach') {
                       found = teachers.find(t => t.uid === uidOrEmail || t.email === uidOrEmail);
                       roleLabel = 'Docente';
+                    } else if (roleType === 'admin') {
+                      found = admins.find(a => a.uid === uidOrEmail || a.email === uidOrEmail);
+                      roleLabel = 'Administrador';
                     }
 
                     if (found && found.email) {
@@ -828,14 +1305,111 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                     </optgroup>
                   )}
 
-                  {teachers.length > 0 && (
-                    <optgroup label="Docentes">
-                      {teachers.map(t => (
-                        <option key={`teach::${t.uid || t.email}`} value={`teach::${t.uid || t.email}`}>
-                          Docente: {t.name} ({t.email})
+                  {isAllLevelsViewer ? (
+                    (teachers || []).length === 0 ? (
+                      <optgroup label="Docentes">
+                        <option disabled value="">
+                          No hay docentes registrados en el sistema
                         </option>
-                      ))}
-                    </optgroup>
+                      </optgroup>
+                    ) : (
+                      <>
+                        {preescolarTeachers.length > 0 && (
+                          <optgroup label="Docentes (Preescolar)">
+                            {preescolarTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+
+                        {primariaTeachers.length > 0 && (
+                          <optgroup label="Docentes (Primaria)">
+                            {primariaTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+
+                        {secundariaTeachers.length > 0 && (
+                          <optgroup label="Docentes (Secundaria)">
+                            {secundariaTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+
+                        {otherTeachers.length > 0 && (
+                          <optgroup label={
+                            (preescolarTeachers.length > 0 || primariaTeachers.length > 0 || secundariaTeachers.length > 0)
+                              ? "Docentes (General / Otros)"
+                              : "Docentes Registrados"
+                          }>
+                            {otherTeachers.map(t => {
+                              const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                              return (
+                                <option
+                                  key={`teach::${t.uid || t.email}`}
+                                  value={`teach::${t.uid || t.email}`}
+                                  disabled={isAlreadyAdded}
+                                >
+                                  Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        )}
+                      </>
+                    )
+                  ) : (
+                    filteredTeachersForCopy.length > 0 ? (
+                      <optgroup label={activeReferralLevel ? `Docentes (${activeReferralLevel})` : "Docentes"}>
+                        {filteredTeachersForCopy.map(t => {
+                          const isAlreadyAdded = formData.additionalRecipients.some(r => r.email?.toLowerCase() === t.email?.toLowerCase());
+                          return (
+                            <option
+                              key={`teach::${t.uid || t.email}`}
+                              value={`teach::${t.uid || t.email}`}
+                              disabled={isAlreadyAdded}
+                            >
+                              Docente: {t.name} ({t.email}){isAlreadyAdded ? ' (Ya agregado)' : ''}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    ) : activeReferralLevel ? (
+                      <optgroup label={`Docentes (${activeReferralLevel})`}>
+                        <option disabled value="">
+                          No hay docentes registrados en nivel {activeReferralLevel}
+                        </option>
+                      </optgroup>
+                    ) : null
                   )}
                 </select>
               </div>

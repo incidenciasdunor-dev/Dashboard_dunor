@@ -1,4 +1,4 @@
-export type UserRole = 'ADMIN' | 'COORDINATOR' | 'TEACHER' | 'PSYCHOLOGIST' | 'DIRECTIVE';
+export type UserRole = 'ADMIN' | 'COORDINATOR' | 'TEACHER' | 'PSYCHOLOGIST' | 'DIRECTIVE' | 'BLOQUEADO';
 export type IncidentStatus = 'PENDIENTE' | 'RECIBIDO' | 'EN_SEGUIMIENTO' | 'CERRADO';
 export type TaskStatus = 'ASIGNADA' | 'RECIBIDA' | 'REALIZADA' | 'COMPLETADA';
 
@@ -10,19 +10,29 @@ export interface FollowUpComment {
 
 export interface UserProfile {
   uid: string;
+  docId?: string;
   name: string;
   email: string;
   phone?: string;
   role: UserRole;
+  status?: string;
+  isBlocked?: boolean;
   assignedCoordinatorId?: string;
   assignedCoordinatorEmail?: string;
   assignedCoordinatorName?: string;
+  secondaryCoordinatorId?: string;
+  secondaryCoordinatorEmail?: string;
+  secondaryCoordinatorName?: string;
   assignedPsychologistId?: string;
   assignedPsychologistEmail?: string;
   assignedPsychologistName?: string;
   educationLevel?: 'Preescolar' | 'Primaria' | 'Secundaria' | string;
   isRegistered?: boolean;
   password?: string;
+  createdBy?: string;
+  createdByName?: string;
+  creatorRole?: string;
+  createdAt?: number;
   updatedAt?: number;
   customPermissions?: Partial<RolePermissions>;
 }
@@ -47,6 +57,7 @@ export interface RolePermissions {
   // Acciones y Funciones Específicas
   canEditIncidents: boolean;
   canDeleteIncidents: boolean;
+  canDeleteReferrals?: boolean;
   canChangeStatus: boolean;
   canAssignPsychologist: boolean;
   canAddFollowUp: boolean;
@@ -71,11 +82,12 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canViewReferrals: true,
     canCreateReferral: true,
     canViewExpedientes: true,
-    canManageExpedientes: true,
+    canManageExpedientes: false,
     canViewInformes: true,
 
     canEditIncidents: true,
     canDeleteIncidents: true,
+    canDeleteReferrals: true,
     canChangeStatus: true,
     canAssignPsychologist: true,
     canAddFollowUp: true,
@@ -89,7 +101,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     canViewIncidents: true,
     canCreateIncident: true,
     canViewTasks: true,
-    canCreateTask: false,
+    canCreateTask: true,
     canViewUsers: true,
     canViewLogs: false,
     canViewSettings: true,
@@ -101,11 +113,12 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: true,
     canDeleteIncidents: false,
+    canDeleteReferrals: false,
     canChangeStatus: true,
     canAssignPsychologist: true,
     canAddFollowUp: true,
     canExportReports: true,
-    canSendCongratulations: false,
+    canSendCongratulations: true,
     canManageUsers: true,
     canSendMassMessages: false,
   },
@@ -126,6 +139,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
+    canDeleteReferrals: false,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: false,
@@ -151,10 +165,11 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
+    canDeleteReferrals: false,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,
-    canExportReports: true,
+    canExportReports: false,
     canSendCongratulations: false,
     canManageUsers: false,
     canSendMassMessages: false,
@@ -176,10 +191,37 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
+    canDeleteReferrals: true,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,
     canExportReports: true,
+    canSendCongratulations: false,
+    canManageUsers: false,
+    canSendMassMessages: false,
+  },
+  BLOQUEADO: {
+    canViewNotifications: false,
+    canViewIncidents: false,
+    canCreateIncident: false,
+    canViewTasks: false,
+    canCreateTask: false,
+    canViewUsers: false,
+    canViewLogs: false,
+    canViewSettings: false,
+    canViewReferrals: false,
+    canCreateReferral: false,
+    canViewExpedientes: false,
+    canManageExpedientes: false,
+    canViewInformes: false,
+
+    canEditIncidents: false,
+    canDeleteIncidents: false,
+    canDeleteReferrals: false,
+    canChangeStatus: false,
+    canAssignPsychologist: false,
+    canAddFollowUp: false,
+    canExportReports: false,
     canSendCongratulations: false,
     canManageUsers: false,
     canSendMassMessages: false,
@@ -189,6 +231,8 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 export const normalizeUserRole = (roleStr?: string | null): UserRole | undefined => {
   if (!roleStr) return undefined;
   const rUpper = String(roleStr).toUpperCase().trim();
+  if (rUpper === 'BLOQUEADO' || rUpper === 'BLOCKED' || rUpper === 'BLOQUEADA' || rUpper === 'BLOQUEAR') return 'BLOQUEADO';
+  if (rUpper.includes('BLOQ') || rUpper.includes('BLOCK')) return 'BLOQUEADO';
   if (rUpper === 'ADMIN' || rUpper === 'ADMINISTRADOR' || rUpper === 'ADMINISTRADORA' || rUpper === 'ADMINISTRACION' || rUpper === 'ADMINISTRACIÓN') return 'ADMIN';
   if (rUpper === 'DIRECTIVE' || rUpper === 'DIRECTIVO' || rUpper === 'DIRECTIVA' || rUpper === 'DIRECCION' || rUpper === 'DIRECCIÓN' || rUpper === 'DIRECTOR' || rUpper === 'DIRECTORA') return 'DIRECTIVE';
   if (rUpper === 'COORDINATOR' || rUpper === 'COORDINADOR' || rUpper === 'COORDINADORA' || rUpper === 'COORDINACION' || rUpper === 'COORDINACIÓN') return 'COORDINATOR';
@@ -217,6 +261,9 @@ export const getRolePermission = (
   }
 
   const normRole = normalizeUserRole(role);
+  if (normRole === 'BLOQUEADO') {
+    return false;
+  }
   const effectiveRole: UserRole | undefined = normRole || (isSuperAdmin ? 'ADMIN' : undefined);
   const isAdminOrSuperWithoutRole = isSuperAdmin && (normRole === 'ADMIN' || !normRole);
 
@@ -300,9 +347,18 @@ export interface Incident {
   reporterName: string;
   reporterId: string;
   reporterEmail?: string;
+  reporterRole?: string;
+  creatorName?: string;
+  creatorEmail?: string;
+  creatorRole?: string;
+  creatorId?: string;
   coordinatorId: string;
   coordinatorIds?: string[];
+  coordinatorName?: string;
+  coordinatorEmail?: string;
   notifiedTeacherId?: string;
+  notifiedTeacherName?: string;
+  notifiedTeacherEmail?: string;
   suggestReferral?: boolean;
   referralStatus?: 'SUGGESTED' | 'IN_PROGRESS';
   referralComments?: string;
@@ -323,6 +379,12 @@ export interface Log {
   action: string;
   userEmail: string;
   userName: string;
+  userRole?: string;
+  creatorName?: string;
+  creatorEmail?: string;
+  creatorRole?: string;
+  module?: string;
+  recordId?: string;
   timestamp: number;
   details?: string;
 }
@@ -336,19 +398,40 @@ export interface Referral {
   teacherName: string;
   teacherEmail: string;
   coordinatorId?: string;
+  coordinatorIds?: string[];
   coordinatorName?: string;
   coordinatorEmail?: string;
+  secondaryCoordinatorId?: string;
+  secondaryCoordinatorName?: string;
+  secondaryCoordinatorEmail?: string;
   psychologistId?: string;
   psychologistName?: string;
   psychologistEmail?: string;
   reasonAndBackground: string;
   teacherStrategies: string;
   psychologistComment?: string;
+  referredByName?: string;
+  referredBy?: string;
+  referredByRole?: string;
+  createdByName?: string;
+  createdByEmail?: string;
+  createdByRole?: string;
   additionalRecipients?: { uid?: string; email: string; name: string; role: string }[];
   status?: 'PENDIENTE' | 'EN_VALORACION' | 'ATENDIDO';
   createdAt: number;
   updatedAt?: number;
 }
+
+export const SUPER_ADMIN_EMAILS = [
+  'mi_yorch@hotmail.com',
+  'incidencias.dunor@gmail.com'
+];
+
+export const isSuperAdminEmail = (email?: string | null): boolean => {
+  if (!email) return false;
+  const clean = email.toLowerCase().trim();
+  return SUPER_ADMIN_EMAILS.includes(clean);
+};
 
 export interface Expediente {
   id: string;
@@ -370,7 +453,7 @@ export interface Expediente {
   psychologistId: string;
   psychologistName: string;
   psychologistEmail: string;
-  status?: 'EN_PROCESO' | 'CASO_CONCLUIDO';
+  status?: 'EN_PROCESO' | 'CASO_CONCLUIDO' | 'CONCLUIDO' | 'DERIVADO_EXTERNO';
   createdAt: number;
   updatedAt: number;
 }

@@ -180,6 +180,16 @@ if (typeof window !== 'undefined') {
     enableNetwork(db).catch((e) => console.error('Error re-enabling Firestore network on online:', e));
   });
 
+  window.addEventListener('focus', () => {
+    enableNetwork(db).catch(() => {});
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      enableNetwork(db).catch(() => {});
+    }
+  });
+
   window.addEventListener('error', (event) => {
     const msg = extractErrorString(event.message) + ' ' + extractErrorString(event.error);
     if (isFirestoreInternalAssertion(msg) || isFirestoreInternalAssertion(event.error)) {
