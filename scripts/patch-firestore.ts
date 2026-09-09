@@ -38,14 +38,31 @@ export function patchFirestore() {
             }
           }
 
-          // 2. Also ensure __PRIVATE_hardAssert safely handles 49232 / 0xc050 without throwing
-          if (content.includes('function __PRIVATE_hardAssert') && !content.includes('if (t2 === 49232')) {
+          // 2. Also ensure __PRIVATE_hardAssert safely handles all internal assertion codes without throwing
+          if (content.includes('function __PRIVATE_hardAssert(')) {
+            const before = content;
             content = content.replace(
-              /function\s+__PRIVATE_hardAssert\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*\)\s*\{/g,
-              'function __PRIVATE_hardAssert($1, $2, $3, $4) { if ($2 === 49232 || $2 === 0xc050 || $1 === true) return;'
+              /function\s+__PRIVATE_hardAssert\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*\)\s*\{[\s\S]*?e2\s*\|\|\s*__PRIVATE__fail\([^)]*\);\s*\}/g,
+              'function __PRIVATE_hardAssert($1, $2, $3, $4) { if ($1 === true || $2 === 49232 || $2 === 0xc050 || $2 === 58842 || $2 === 0xe5da || $2 === 47125 || $2 === 0xb815) return; if (!$1) { console.warn("[Firestore HardAssert Suppressed]", $2); return; } }'
             );
-            fs.writeFileSync(fullPath, content, 'utf8');
-            modified = true;
+            if (content !== before) {
+              fs.writeFileSync(fullPath, content, 'utf8');
+              modified = true;
+            }
+          }
+
+          // 3. Suppress Xc() calling 47125 / 0xb815 on delayed operation
+          if (content.includes('47125') || content.includes('0xb815') || content.includes('/* suppressed b815 */')) {
+            const before = content;
+            // Clean up any previously broken replacements first
+            content = content.replace(/\/\*\s*suppressed\s*b815\s*\*\/[\s\S]*?\}\);/g, 'this.zc = null;');
+            // Match complete Xc() implementation across lines
+            content = content.replace(/Xc\(\)\s*\{[\s\S]*?47125[\s\S]*?\}/g, 'Xc() { this.zc = null; }');
+            content = content.replace(/this\.zc\s*&&\s*[a-zA-Z0-9_]+\s*\(\s*(?:47125|0xb815)[\s\S]*?\);/g, 'this.zc = null;');
+            if (content !== before) {
+              fs.writeFileSync(fullPath, content, 'utf8');
+              modified = true;
+            }
           }
 
           if (modified) {

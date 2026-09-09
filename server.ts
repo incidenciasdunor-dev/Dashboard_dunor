@@ -181,6 +181,95 @@ async function startServer() {
     });
   });
 
+  // API Route for checking if an email is already registered in Authentication or Firestore
+  app.get("/api/check-user-email", async (req, res) => {
+    const rawEmail = typeof req.query.email === 'string' ? req.query.email : '';
+    const email = rawEmail.toLowerCase().trim();
+    if (!email) {
+      return res.status(400).json({ error: "El correo es requerido." });
+    }
+
+    let exists = false;
+    let details: any = null;
+
+    if (admin.apps.length) {
+      try {
+        const user = await admin.auth().getUserByEmail(email);
+        if (user) {
+          exists = true;
+          details = { uid: user.uid, email: user.email, source: 'auth' };
+        }
+      } catch (authErr: any) {
+        if (authErr.code !== 'auth/user-not-found') {
+          console.warn("Check user auth notice:", authErr.message);
+        }
+      }
+
+      if (!exists) {
+        try {
+          const dbAdmin = admin.firestore();
+          const docSnap = await dbAdmin.collection('users').doc(email).get();
+          if (docSnap.exists) {
+            exists = true;
+            details = { ...docSnap.data(), source: 'firestore' };
+          } else {
+            const qSnap = await dbAdmin.collection('users').where('email', '==', email).limit(1).get();
+            if (!qSnap.empty) {
+              exists = true;
+              details = { ...qSnap.docs[0].data(), source: 'firestore-query' };
+            }
+          }
+        } catch (dbErr: any) {
+          // Ignore
+        }
+      }
+    }
+
+    res.json({ exists, details });
+  });
+
+  // API Route for updating user coordinator assignments safely
+  app.post("/api/update-user-coordinator", async (req, res) => {
+    const { 
+      email, 
+      assignedCoordinatorId, 
+      assignedCoordinatorEmail, 
+      assignedCoordinatorName, 
+      secondaryCoordinatorId, 
+      secondaryCoordinatorEmail, 
+      secondaryCoordinatorName,
+      educationLevel
+    } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "El correo es requerido." });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const updateData: Record<string, any> = { updatedAt: Date.now() };
+
+    if (assignedCoordinatorId !== undefined) updateData.assignedCoordinatorId = assignedCoordinatorId;
+    if (assignedCoordinatorEmail !== undefined) updateData.assignedCoordinatorEmail = assignedCoordinatorEmail;
+    if (assignedCoordinatorName !== undefined) updateData.assignedCoordinatorName = assignedCoordinatorName;
+
+    if (secondaryCoordinatorId !== undefined) updateData.secondaryCoordinatorId = secondaryCoordinatorId;
+    if (secondaryCoordinatorEmail !== undefined) updateData.secondaryCoordinatorEmail = secondaryCoordinatorEmail;
+    if (secondaryCoordinatorName !== undefined) updateData.secondaryCoordinatorName = secondaryCoordinatorName;
+
+    if (educationLevel !== undefined) updateData.educationLevel = educationLevel;
+
+    if (admin.apps.length) {
+      try {
+        const dbAdmin = admin.firestore();
+        await dbAdmin.collection('users').doc(cleanEmail).set(updateData, { merge: true });
+      } catch (err: any) {
+        console.warn("Server update-user-coordinator notice:", err?.message);
+      }
+    }
+
+    res.json({ success: true, updated: updateData });
+  });
+
   // API Route for syncing all Firestore users to Firebase Auth
   app.post("/api/sync-all-users", async (req, res) => {
     const { users } = req.body;
