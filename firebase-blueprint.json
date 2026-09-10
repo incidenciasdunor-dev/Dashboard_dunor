@@ -97,6 +97,29 @@
         "details": { "type": "string", "description": "Optional additional details" }
       },
       "required": ["action", "userEmail", "userName", "timestamp"]
+    },
+    "TeacherMessage": {
+      "title": "TeacherMessage",
+      "description": "Ephemeral 6-hour internal chat message between teachers.",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string", "description": "Unique conversation ID between two teachers" },
+        "senderUid": { "type": "string", "description": "UID of teacher sending message" },
+        "senderName": { "type": "string", "description": "Name of sender" },
+        "senderEmail": { "type": "string", "format": "email", "description": "Email of sender" },
+        "receiverUid": { "type": "string", "description": "UID of teacher receiving message" },
+        "receiverName": { "type": "string", "description": "Name of receiver" },
+        "receiverEmail": { "type": "string", "format": "email", "description": "Email of receiver" },
+        "text": { "type": "string", "description": "Message content" },
+        "fileData": { "type": "string", "description": "Optional attached file or image data" },
+        "fileName": { "type": "string", "description": "Optional attached file name" },
+        "fileType": { "type": "string", "description": "Type of attached file" },
+        "fileSize": { "type": "number", "description": "Size in bytes" },
+        "createdAt": { "type": "number", "description": "Timestamp of creation" },
+        "expiresAt": { "type": "number", "description": "Timestamp when message expires (6 hours)" },
+        "read": { "type": "boolean", "description": "Whether message has been read" }
+      },
+      "required": ["conversationId", "senderUid", "receiverUid", "createdAt", "expiresAt"]
     }
   },
   "firestore": {
@@ -119,6 +142,10 @@
     "/logs/{logId}": {
       "schema": "Log",
       "description": "System activity logs"
+    },
+    "/teacher_messages/{messageId}": {
+      "schema": "TeacherMessage",
+      "description": "Teacher internal ephemeral chat messages"
     }
   }
 }

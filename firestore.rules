@@ -61,6 +61,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Chat interno docente (mensajes efímeros 6 horas)
+    match /teacher_messages/{messageId} {
+      allow read, write: if true;
+    }
+
     // Fallback general seguro
     match /{document=**} {
       allow read, write: if true;

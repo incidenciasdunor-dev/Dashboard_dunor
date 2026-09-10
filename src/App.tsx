@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop, MessageSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn, getUserEducationLevel, normalizeEducationLevel, areStudentNamesEquivalent, normalizeStudentName, normalizeSearchText, pickBetterStudentDisplayName, formatStudentNameTitleCase, getStudentNameTokens } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -20,6 +20,7 @@ import { InformeManager } from './components/InformeManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 import { SystemModal, SystemModalState } from './components/SystemModal';
+import { TeacherSecretChat } from './components/TeacherSecretChat';
 import {
   isNotificationSupported,
   getNotificationPermission,
@@ -2079,6 +2080,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [chatOpenPartner, setChatOpenPartner] = useState<UserProfile | null>(null);
   const [liveToast, setLiveToast] = useState<{
     id: string;
     title: string;
@@ -2087,6 +2089,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     incidentId?: string;
     referralId?: string;
     taskId?: string;
+    type?: string;
+    chatPartnerUid?: string;
+    chatPartnerEmail?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -2233,6 +2238,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     const titleLower = (notif?.title || '').toLowerCase();
     const msgLower = (notif?.message || '').toLowerCase();
+
+    // Notificación de Chat Docente Secreto
+    if (notif?.type === 'teacher_chat') {
+      const partnerUid = notif.chatPartnerUid || notif.senderUid || notif.creatorUid;
+      const partnerEmail = notif.chatPartnerEmail || notif.senderEmail || notif.creatorEmail;
+      const partner = teachers.find(t => 
+        (partnerUid && t.uid === partnerUid) || 
+        (partnerEmail && t.email?.toLowerCase() === String(partnerEmail).toLowerCase())
+      );
+      if (partner) {
+        setChatOpenPartner(partner);
+      }
+      return;
+    }
 
     const isReferralNotif = 
       notif?.type === 'referral' ||
@@ -2620,15 +2639,18 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     });
 
-    const notificationData = {
+    const determinedCreatorUid = extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification && profile?.uid ? profile.uid : '') || '';
+    const determinedCreatorEmail = extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification && profile?.email ? profile.email : '') || '';
+
+    const notificationData: Record<string, any> = {
       title,
       message,
       incidentId: incidentId || '',
       read: false,
       createdAt: Date.now(),
-      ...extraData,
-      creatorUid: extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification ? profile?.uid : undefined),
-      creatorEmail: extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification ? profile?.email : undefined),
+      ...(extraData || {}),
+      creatorUid: determinedCreatorUid,
+      creatorEmail: determinedCreatorEmail,
       isCreationNotification: Boolean(extraData?.isCreationNotification)
     };
 
@@ -2734,10 +2756,19 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     for (const userId of finalTargetUserIds) {
       if (!userId) continue;
       try {
-        await addDoc(collection(db, 'notifications'), {
+        const docToSave: Record<string, any> = {
           ...notificationData,
           userId
+        };
+
+        // Remove any undefined keys to guarantee Firestore addDoc never throws 'Unsupported field value: undefined'
+        Object.keys(docToSave).forEach((key) => {
+          if (docToSave[key] === undefined) {
+            delete docToSave[key];
+          }
         });
+
+        await addDoc(collection(db, 'notifications'), docToSave);
       } catch (e) {
         console.error("Error sending notification doc to:", userId, e);
       }
@@ -3006,8 +3037,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       await sendNotification(finalTargetIds, title, message, incident.id, false, {
         ...extraData,
         skipEmail: true,
-        creatorUid: excludeUserId || profile?.uid,
-        creatorEmail: excludeUserEmail || profile?.email,
+        creatorUid: excludeUserId || profile?.uid || '',
+        creatorEmail: excludeUserEmail || profile?.email || '',
         isCreationNotification: isCreation
       });
     }
@@ -3375,6 +3406,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           return false;
         }
 
+        // 0.1 CHAT SECRETO ENTRE DOCENTES
+        // Únicamente relevante para el docente destinatario directo (no administradores, no directores, no coordinadores)
+        if (d.type === 'teacher_chat' || titleLower.includes('💬 mensaje de')) {
+          return Boolean(isDirectTarget && role === 'TEACHER');
+        }
+
         // Descartar confirmaciones personales de creación
         if (
           titleLower.includes('reporte registrado exitosamente') ||
@@ -3604,10 +3641,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               timestamp: Date.now(),
               incidentId: data.incidentId,
               referralId: data.referralId,
-              taskId: data.taskId
+              taskId: data.taskId,
+              type: data.type,
+              chatPartnerUid: data.chatPartnerUid,
+              chatPartnerEmail: data.chatPartnerEmail
             });
 
-            showSystemNotification(data.title || 'Aviso de Incidencia - DUNOR', {
+            showSystemNotification(data.title || 'Aviso - DUNOR', {
               body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
               icon: '/logo_dunor.png',
               badge: '/logo_dunor.png',
@@ -3615,7 +3655,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               data: {
                 incidentId: data.incidentId,
                 referralId: data.referralId,
-                taskId: data.taskId
+                taskId: data.taskId,
+                type: data.type,
+                chatPartnerUid: data.chatPartnerUid,
+                chatPartnerEmail: data.chatPartnerEmail
               }
             }).catch((e) => {
               console.warn('Native system notification delivery error:', e);
@@ -3655,6 +3698,41 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     });
     return () => unsubscribe();
   }, [activeUser, profile, isSuperAdmin]);
+
+  // REQUISITO 1: Si una tarea ya está en estatus de realizada y se llega la fecha límite, pasa en automático a completada
+  useEffect(() => {
+    if (!activeUser || !profile || !tasks || tasks.length === 0) return;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+    tasks.forEach(async (task) => {
+      if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate) {
+        try {
+          await updateDoc(doc(db, 'tasks', task.id), {
+            status: 'COMPLETADA',
+            completedAt: Date.now(),
+            autoCompleted: true,
+            autoCompletedReason: 'Fecha límite alcanzada en estatus REALIZADA'
+          });
+
+          await addLog(
+            'Tarea Completada Automáticamente por Fecha Límite',
+            `La tarea "${task.title}" (asignada a: ${task.assignedToName}) estaba en estatus REALIZADA y al llegar su fecha límite (${task.dueDate}) pasó automáticamente a COMPLETADA.`,
+            { module: 'Tareas / Felicitaciones', recordId: task.id }
+          );
+
+          if (task.assignedToEmail) {
+            await sendNotification(
+              task.assignedToEmail,
+              `✅ Tarea Completada Automáticamente: ${task.title}`,
+              `Tu tarea "${task.title}" estaba en estatus REALIZADA y al cumplirse su fecha límite (${task.dueDate}) ha pasado en automático a COMPLETADA.`
+            );
+          }
+        } catch (e) {
+          console.warn('Notice updating realizada task to completed on deadline:', e);
+        }
+      }
+    });
+  }, [tasks, activeUser, profile]);
 
   useEffect(() => {
     if (!activeUser || !profile) return;
@@ -5631,9 +5709,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                               {selectedNotifications.includes(notif.id) && <CheckCircle2 className="w-3 h-3 text-white" />}
                             </div>
                           )}
-                          <h3 className={cn("font-bold", notif.read ? "text-slate-700" : "text-indigo-900")}>
-                            {notif.title}
-                          </h3>
+                          <div className="flex items-center gap-2">
+                            {notif.type === 'teacher_chat' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 flex items-center gap-1">
+                                <MessageSquare className="w-3 h-3" />
+                                Chat
+                              </span>
+                            )}
+                            <h3 className={cn("font-bold", notif.read ? "text-slate-700" : "text-indigo-900")}>
+                              {notif.title}
+                            </h3>
+                          </div>
                         </div>
                         <span className="text-[10px] text-slate-400 font-medium">
                           {format(notif.createdAt, "dd/MM HH:mm")}
@@ -7136,6 +7222,65 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           </div>
         )}
       </AnimatePresence>
+
+      {/* Floating In-App Live Toast Notification Banner */}
+      <AnimatePresence>
+        {liveToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              handleNotificationClick(liveToast);
+              setLiveToast(null);
+            }}
+            className="fixed bottom-6 right-6 z-[99990] max-w-sm w-full bg-slate-900/95 dark:bg-slate-950/95 text-white p-4 rounded-2xl shadow-2xl border border-indigo-500/30 backdrop-blur-md cursor-pointer hover:border-indigo-400 transition-all group"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-indigo-600/30 border border-indigo-400/30 flex items-center justify-center shrink-0 text-indigo-400 group-hover:scale-105 transition-transform">
+                {liveToast.type === 'teacher_chat' ? (
+                  <MessageSquare className="w-5 h-5 text-emerald-400" />
+                ) : (
+                  <Bell className="w-5 h-5 text-indigo-400" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold text-white truncate tracking-wide">
+                    {liveToast.title}
+                  </h4>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLiveToast(null);
+                    }}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-300 line-clamp-2 mt-0.5">
+                  {liveToast.message}
+                </p>
+                <div className="flex items-center gap-1.5 mt-2 text-[10px] text-indigo-300 font-medium">
+                  <span>Toca para abrir</span>
+                  <span>→</span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Teacher Secret Internal Chat (Exclusivo para el rol de docente con activación secreta en las 4 esquinas) */}
+      <TeacherSecretChat
+        currentUser={profile}
+        allUsers={teachers}
+        sendNotification={sendNotification}
+        externalOpenPartner={chatOpenPartner}
+        onCloseExternal={() => setChatOpenPartner(null)}
+      />
     </ErrorBoundary>
   );
 }
@@ -8761,9 +8906,11 @@ const TaskManager = ({
 
   const isTaskOverdue = (task: Task) => {
     if (task.status === 'COMPLETADA') return false;
+    // Si una tarea ya está en estatus de realizada y se llega la fecha límite, cuenta como completada
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate) return false;
     if (!task.dueDate) return false;
     if (task.title.includes('🎉') || task.title.toLowerCase().includes('felicitac') || task.title.toLowerCase().includes('reconocimiento')) return false;
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
     return todayStr > task.dueDate;
   };
 
@@ -8785,7 +8932,42 @@ const TaskManager = ({
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
     tasks.forEach(async (task) => {
-      if (task.status !== 'COMPLETADA' && task.dueDate) {
+      // 1. REQUISITO: Si una tarea ya está en estatus de realizada y se llega la fecha límite, esta pasa en automático a completada
+      if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate) {
+        try {
+          await updateDoc(doc(db, 'tasks', task.id), {
+            status: 'COMPLETADA',
+            completedAt: Date.now(),
+            autoCompleted: true,
+            autoCompletedReason: 'Fecha límite alcanzada en estatus REALIZADA'
+          });
+
+          await sendNotification(
+            task.assignedToEmail,
+            `✅ Tarea Completada Automáticamente: ${task.title}`,
+            `Tu tarea "${task.title}" (en estatus Realizada) alcanzó su fecha límite (${task.dueDate}) y ha pasado automáticamente a COMPLETADA.`
+          );
+
+          if (task.createdByEmail && task.createdByEmail.toLowerCase() !== task.assignedToEmail?.toLowerCase()) {
+            await sendNotification(
+              task.createdByEmail,
+              `✅ Tarea Completada Automáticamente: ${task.title}`,
+              `La tarea "${task.title}" asignada a ${task.assignedToName} estaba en estatus REALIZADA y al llegar su fecha límite (${task.dueDate}) pasó automáticamente a COMPLETADA.`
+            );
+          }
+
+          await addLog(
+            'Tarea Completada Automáticamente por Fecha Límite',
+            `La tarea "${task.title}" asignada a ${task.assignedToName} (${task.assignedToEmail}) estaba en estatus REALIZADA y al llegar su fecha límite (${task.dueDate}) pasó automáticamente a COMPLETADA.`,
+            { module: 'Tareas / Felicitaciones', recordId: task.id }
+          );
+        } catch (autoErr) {
+          console.warn("Auto-completion on deadline error in TaskManager:", autoErr);
+        }
+        return;
+      }
+
+      if (task.status !== 'COMPLETADA' && task.status !== 'REALIZADA' && task.dueDate) {
         const isDueOrOverdue = todayStr >= task.dueDate;
         if (isDueOrOverdue && !task.overdueReminderSent) {
           try {
@@ -9177,13 +9359,29 @@ const TaskManager = ({
     }
   };
 
-  const filteredTasks = tasks.filter(t => {
+  const filteredTasks = tasks.map(t => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (t.status === 'REALIZADA' && t.dueDate && todayStr >= t.dueDate) {
+      return { ...t, status: 'COMPLETADA' as TaskStatus };
+    }
+    return t;
+  }).filter(t => {
     if (taskFilter === 'ALL') return true;
     if (taskFilter === 'INCUMPLIDA') return isTaskOverdue(t);
     return t.status === taskFilter;
   });
 
   const getStatusBadge = (task: Task) => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const isAutoCompleted = task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate;
+    if (isAutoCompleted || task.status === 'COMPLETADA') {
+      return (
+        <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+          <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+          {isAutoCompleted ? 'Completada (Auto)' : 'Completada'}
+        </span>
+      );
+    }
     if (isTaskOverdue(task)) {
       return (
         <span className="bg-red-100 dark:bg-red-950/80 text-red-800 dark:text-red-200 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 flex items-center gap-1 shadow-sm">
@@ -9198,8 +9396,6 @@ const TaskManager = ({
         return <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-800 flex items-center gap-1"><Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Re-asignada</span>;
       case 'REALIZADA':
         return <span className="bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-200 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-200 dark:border-purple-800 flex items-center gap-1"><FileText className="w-3 h-3 text-purple-600 dark:text-purple-400" /> Realizada</span>;
-      case 'COMPLETADA':
-        return <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> Completada</span>;
       default:
         return null;
     }

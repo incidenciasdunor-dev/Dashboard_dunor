@@ -457,3 +457,22 @@ export interface Expediente {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface TeacherMessage {
+  id: string;
+  conversationId: string;
+  senderUid: string;
+  senderName: string;
+  senderEmail: string;
+  receiverUid: string;
+  receiverName: string;
+  receiverEmail: string;
+  text: string;
+  fileData?: string;
+  fileName?: string;
+  fileType?: 'image' | 'file';
+  fileSize?: number;
+  createdAt: number;
+  expiresAt: number;
+  read?: boolean;
+}
