@@ -21,6 +21,7 @@ import {
   UserProfile,
   normalizeUserRole
 } from '../types';
+import { normalizeSearchText } from '../lib/utils';
 import { SystemModal, SystemModalState } from './SystemModal';
 import { doc, setDoc, updateDoc, addDoc, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -253,13 +254,13 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
 
   // Filter referrals according to strict access control rules (Requirement 4)
   const filteredReferrals = referrals.filter(ref => {
-    const term = searchTerm.toLowerCase();
+    const term = normalizeSearchText(searchTerm);
     const matchesTerm = (
-      ref.studentName?.toLowerCase().includes(term) ||
-      ref.gradeGroup?.toLowerCase().includes(term) ||
-      ref.teacherName?.toLowerCase().includes(term) ||
-      ref.psychologistName?.toLowerCase().includes(term) ||
-      ref.coordinatorName?.toLowerCase().includes(term)
+      normalizeSearchText(ref.studentName).includes(term) ||
+      normalizeSearchText(ref.gradeGroup).includes(term) ||
+      normalizeSearchText(ref.teacherName).includes(term) ||
+      normalizeSearchText(ref.psychologistName).includes(term) ||
+      normalizeSearchText(ref.coordinatorName).includes(term)
     );
 
     if (!matchesTerm) return false;

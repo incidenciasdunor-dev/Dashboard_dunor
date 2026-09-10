@@ -10,7 +10,7 @@ import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, ord
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
 import { format } from 'date-fns';
-import { cn, getUserEducationLevel, normalizeEducationLevel } from './lib/utils';
+import { cn, getUserEducationLevel, normalizeEducationLevel, areStudentNamesEquivalent, normalizeStudentName, normalizeSearchText, pickBetterStudentDisplayName, formatStudentNameTitleCase, getStudentNameTokens } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAppStructurePdf } from './lib/generateAppStructurePdf';
@@ -5336,11 +5336,11 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                     }
 
                     if (!searchTerm.trim()) return true;
-                    const term = searchTerm.toLowerCase().trim();
-                    const studentsMatch = incident.students?.toLowerCase().includes(term);
-                    const placeMatch = incident.place?.toLowerCase().includes(term);
-                    const descMatch = incident.description?.toLowerCase().includes(term);
-                    const reporterMatch = incident.reporterName?.toLowerCase().includes(term);
+                    const term = normalizeSearchText(searchTerm);
+                    const studentsMatch = normalizeSearchText(incident.students).includes(term);
+                    const placeMatch = normalizeSearchText(incident.place).includes(term);
+                    const descMatch = normalizeSearchText(incident.description).includes(term);
+                    const reporterMatch = normalizeSearchText(incident.reporterName).includes(term);
                     return studentsMatch || placeMatch || descMatch || reporterMatch;
                   });
 
@@ -5356,26 +5356,68 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   }
 
                   if (isGroupedByStudent) {
-                    const studentMap = new Map<string, Incident[]>();
+                    interface StudentGroupItem {
+                      id: string;
+                      displayName: string;
+                      incidents: Incident[];
+                    }
+
+                    const groups: StudentGroupItem[] = [];
+
                     filteredIncidents.forEach(inc => {
                       const rawName = inc.students?.trim() || 'Sin Nombre';
-                      const names = rawName.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+                      // Separar múltiples alumnos por coma, punto y coma, salto de línea, barra o " y " / " e "
+                      const names = rawName
+                        .split(/[,;\n/]+|\s+y\s+|\s+e\s+/i)
+                        .map(s => s.trim())
+                        .filter(Boolean);
+
                       if (names.length === 0) {
-                        const existing = studentMap.get('Sin Nombre') || [];
-                        existing.push(inc);
-                        studentMap.set('Sin Nombre', existing);
-                      } else {
-                        names.forEach(name => {
-                          const existing = studentMap.get(name) || [];
-                          if (!existing.some(i => i.id === inc.id)) {
-                            existing.push(inc);
-                          }
-                          studentMap.set(name, existing);
-                        });
+                        names.push('Sin Nombre');
                       }
+
+                      names.forEach(name => {
+                        const isSinNombre = !name || name.toLowerCase() === 'sin nombre' || name.toLowerCase() === 'n/a';
+                        if (isSinNombre) {
+                          const existing = groups.find(g => g.displayName === 'Sin Nombre');
+                          if (existing) {
+                            if (!existing.incidents.some(i => i.id === inc.id)) {
+                              existing.incidents.push(inc);
+                            }
+                          } else {
+                            groups.push({
+                              id: 'sin-nombre',
+                              displayName: 'Sin Nombre',
+                              incidents: [inc]
+                            });
+                          }
+                          return;
+                        }
+
+                        // Coincidencia flexible: insensible a acentos, mayúsculas/minúsculas y subconjuntos de nombres
+                        const existing = groups.find(g => 
+                          g.displayName !== 'Sin Nombre' && areStudentNamesEquivalent(g.displayName, name)
+                        );
+
+                        if (existing) {
+                          if (!existing.incidents.some(i => i.id === inc.id)) {
+                            existing.incidents.push(inc);
+                          }
+                          existing.displayName = pickBetterStudentDisplayName(existing.displayName, name);
+                        } else {
+                          groups.push({
+                            id: normalizeStudentName(name) || 'sin-nombre',
+                            displayName: formatStudentNameTitleCase(name),
+                            incidents: [inc]
+                          });
+                        }
+                      });
                     });
 
-                    const studentEntries = Array.from(studentMap.entries()).sort((a, b) => b[1].length - a[1].length);
+                    // Ordenar por cantidad de incidencias descendente y luego alfabéticamente
+                    const studentEntries = groups
+                      .sort((a, b) => b.incidents.length - a.incidents.length || a.displayName.localeCompare(b.displayName))
+                      .map(g => [g.displayName, g.incidents] as [string, Incident[]]);
 
                     return (
                       <div className="space-y-4">
@@ -10056,9 +10098,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       levelKey: 'Preescolar' as const,
       title: 'Docentes de Preescolar',
       description: 'Educación Preescolar / Kínder',
-      badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-      headerBg: 'bg-gradient-to-r from-emerald-50 via-teal-50/40 to-white border-emerald-200/80',
-      iconColor: 'text-emerald-700 bg-emerald-100 border-emerald-200',
+      badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800',
       icon: Sparkles,
       teachers: preescolarTeachers,
       emptyText: teacherSearchQuery 
@@ -10070,9 +10112,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       levelKey: 'Primaria' as const,
       title: 'Docentes de Primaria',
       description: 'Educación Primaria (1° a 6° grado)',
-      badgeColor: 'bg-sky-100 text-sky-800 border-sky-300',
-      headerBg: 'bg-gradient-to-r from-sky-50 via-blue-50/40 to-white border-sky-200/80',
-      iconColor: 'text-sky-700 bg-sky-100 border-sky-200',
+      badgeColor: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 border-sky-200 dark:border-sky-800',
       icon: GraduationCap,
       teachers: primariaTeachers,
       emptyText: teacherSearchQuery 
@@ -10084,9 +10126,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       levelKey: 'Secundaria' as const,
       title: 'Docentes de Secundaria',
       description: 'Educación Secundaria (1° a 3° grado)',
-      badgeColor: 'bg-purple-100 text-purple-800 border-purple-300',
-      headerBg: 'bg-gradient-to-r from-purple-50 via-indigo-50/40 to-white border-purple-200/80',
-      iconColor: 'text-purple-700 bg-purple-100 border-purple-200',
+      badgeColor: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 border-purple-200 dark:border-purple-800',
       icon: School,
       teachers: secundariaTeachers,
       emptyText: teacherSearchQuery 
@@ -10098,9 +10140,9 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
       levelKey: 'SinNivel' as const,
       title: 'Docentes sin Nivel Asignado',
       description: 'Selecciona el nivel educativo (Preescolar, Primaria o Secundaria) para clasificar a cada docente',
-      badgeColor: 'bg-amber-100 text-amber-800 border-amber-300',
-      headerBg: 'bg-gradient-to-r from-amber-50 via-orange-50/40 to-white border-amber-200/80',
-      iconColor: 'text-amber-700 bg-amber-100 border-amber-200',
+      badgeColor: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800',
       icon: AlertCircle,
       teachers: sinNivelTeachers,
       emptyText: teacherSearchQuery
@@ -10697,14 +10739,14 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <h3 className="font-bold text-slate-900 text-base">
+                              <h3 className="font-bold text-slate-900 dark:text-white text-base">
                                 {group.title}
                               </h3>
                               <span className={cn("text-xs font-black px-2.5 py-0.5 rounded-full border shadow-2xs", group.badgeColor)}>
                                 {group.teachers.length}
                               </span>
                             </div>
-                            <p className="text-xs text-slate-600 font-medium">{group.description}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">{group.description}</p>
                           </div>
                         </div>
                       </div>

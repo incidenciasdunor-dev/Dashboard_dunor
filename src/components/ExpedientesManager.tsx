@@ -36,7 +36,7 @@ import {
 } from '../types';
 import { doc, setDoc, updateDoc, deleteDoc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { cn } from '../lib/utils';
+import { cn, normalizeSearchText, areStudentNamesEquivalent } from '../lib/utils';
 import { SystemModal, SystemModalState } from './SystemModal';
 
 interface ExpedientesManagerProps {
@@ -938,11 +938,11 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   };
 
   const filteredExpedientes = expedientes.filter(exp => {
-    const term = searchTerm.toLowerCase();
+    const term = normalizeSearchText(searchTerm);
     return (
-      exp.studentName?.toLowerCase().includes(term) ||
-      exp.gradeGroup?.toLowerCase().includes(term) ||
-      exp.psychologistName?.toLowerCase().includes(term)
+      normalizeSearchText(exp.studentName).includes(term) ||
+      normalizeSearchText(exp.gradeGroup).includes(term) ||
+      normalizeSearchText(exp.psychologistName).includes(term)
     );
   });
 
@@ -961,11 +961,11 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       if (!isRecipient && !isOwner) return false;
     }
 
-    const term = searchTerm.toLowerCase();
+    const term = normalizeSearchText(searchTerm);
     return (
-      exp.studentName?.toLowerCase().includes(term) ||
-      exp.gradeGroup?.toLowerCase().includes(term) ||
-      exp.sharedBy?.toLowerCase().includes(term)
+      normalizeSearchText(exp.studentName).includes(term) ||
+      normalizeSearchText(exp.gradeGroup).includes(term) ||
+      normalizeSearchText(exp.sharedBy).includes(term)
     );
   });
 

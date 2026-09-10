@@ -63,6 +63,12 @@ body.dark,
   background-color: #334155 !important;
 }
 
+/* Evitar cuadros grisáceos o degradados blanquecinos cuando el fondo es oscuro */
+.dark [class*="to-white"] {
+  background-image: none !important;
+  background-color: #1e293b !important;
+}
+
 /* Navigation Sidebar, Header, Menus, Modals */
 .dark aside,
 .dark nav,

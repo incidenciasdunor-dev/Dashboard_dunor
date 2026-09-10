@@ -7,7 +7,7 @@ import {
   ClipboardList
 } from 'lucide-react';
 import { UserProfile, Expediente, Referral, normalizeUserRole, isSuperAdminEmail, SUPER_ADMIN_EMAILS } from '../types';
-import { cn } from '../lib/utils';
+import { cn, areStudentNamesEquivalent } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, setDoc, doc } from 'firebase/firestore';
 import { SystemModal, SystemModalState } from './SystemModal';
@@ -253,7 +253,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
     const referrerCounts: Record<string, number> = {};
     filteredExpedientes.forEach(e => {
       // Find linked referral if any
-      const ref = referrals.find(r => r.id === e.linkedReferralId || r.studentName.toLowerCase() === e.studentName.toLowerCase());
+      const ref = referrals.find(r => r.id === e.linkedReferralId || areStudentNamesEquivalent(r.studentName, e.studentName));
       const referrer = ref ? `${ref.referredByName || ref.referredBy} (${ref.referredByRole || 'Docente'})` : (e.psychologistName ? 'Psicología' : 'Docencia / Coordinación');
       referrerCounts[referrer] = (referrerCounts[referrer] || 0) + 1;
     });
