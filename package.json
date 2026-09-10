@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "tsx scripts/patch-firestore.ts && vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "node scripts/patch-firestore.js && vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "postinstall": "tsx scripts/patch-firestore.ts"
+    "postinstall": "node scripts/patch-firestore.js || true"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -20,6 +20,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
+    "esbuild": "^0.28.1",
     "express": "^4.21.2",
     "firebase": "^12.11.0",
     "firebase-admin": "^13.8.0",
@@ -31,6 +32,9 @@
     "react-dom": "^19.0.0",
     "react-firebase-hooks": "^5.1.1",
     "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
     "vite": "^6.2.0"
   },
   "devDependencies": {

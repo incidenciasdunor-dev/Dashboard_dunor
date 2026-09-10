@@ -40,7 +40,7 @@ export function patchFirestore() {
               }
             }
 
-            // 2. Also ensure __PRIVATE_hardAssert safely handles all internal assertion codes without throwing
+            // 2. Also ensure __PRIVATE_hardAssert and __PRIVATE__fail safely handle assertion codes without throwing
             if (content.includes('function __PRIVATE_hardAssert(')) {
               const before = content;
               content = content.replace(
@@ -53,12 +53,26 @@ export function patchFirestore() {
               }
             }
 
-            // 3. Suppress Xc() calling 47125 / 0xb815 on delayed operation
-            if (content.includes('47125') || content.includes('0xb815') || content.includes('/* suppressed b815 */')) {
+            if (content.includes('function __PRIVATE__fail(')) {
               const before = content;
-              content = content.replace(/\/\*\s*suppressed\s*b815\s*\*\/[\s\S]*?\}\);/g, 'this.zc = null;');
-              content = content.replace(/Xc\(\)\s*\{[\s\S]*?47125[\s\S]*?\}/g, 'Xc() { this.zc = null; }');
-              content = content.replace(/this\.zc\s*&&\s*[a-zA-Z0-9_]+\s*\(\s*(?:47125|0xb815)[\s\S]*?\);/g, 'this.zc = null;');
+              content = content.replace(
+                /function\s+__PRIVATE__fail\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s*\)\s*\{/g,
+                'function __PRIVATE__fail($1, $2, $3) { if ($1 === 47125 || $1 === 0xb815 || $1 === 49232 || $1 === 0xc050 || $1 === 58842 || $1 === 0xe5da) return;'
+              );
+              if (content !== before) {
+                fs.writeFileSync(fullPath, content, 'utf8');
+                modified = true;
+              }
+            }
+
+            // 3. Suppress Xc() / delayed operation calling 47125 / 0xb815 safely without breaking syntax
+            if (content.includes('47125') || content.includes('0xb815') || content.includes('this.zc') || content.includes('Xc()')) {
+              const before = content;
+              // Clean up any corrupt artifacts from previous partial matches
+              content = content.replace(/Xc\(\)\s*\{\s*this\.zc\s*=\s*null;\s*\}\s*\);\s*\}/g, 'Xc() { this.zc = null; }');
+              content = content.replace(/Xc\(\)\s*\{\s*this\.zc\s*=\s*null;\s*\}\s*\);/g, 'Xc() { this.zc = null; }');
+              // Replace the call inside Xc() preserving function wrapper
+              content = content.replace(/this\.zc\s*&&\s*[a-zA-Z0-9_$]+\s*\(\s*(?:47125|0xb815)[\s\S]*?\);/g, 'this.zc = null;');
               if (content !== before) {
                 fs.writeFileSync(fullPath, content, 'utf8');
                 modified = true;

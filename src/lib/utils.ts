@@ -21,18 +21,18 @@ export function getUserEducationLevel(
 ): 'Preescolar' | 'Primaria' | 'Secundaria' | '' {
   if (!user) return '';
 
-  // 1. Check assigned coordinator email or name (strong indicator of school section)
-  const coordEmail = (user.assignedCoordinatorEmail || '').toLowerCase();
-  const coordName = (user.assignedCoordinatorName || '').toLowerCase();
-  if (coordEmail.includes('kinder') || coordName.includes('kinder') || coordName.includes('preescolar')) return 'Preescolar';
-  if (coordEmail.includes('secundaria') || coordName.includes('secundaria')) return 'Secundaria';
-  if (coordEmail.includes('academica') || coordEmail.includes('primaria') || coordName.includes('primaria')) return 'Primaria';
-
-  // 2. Direct educationLevel on user
+  // 1. Direct explicit educationLevel on user (highest priority - source of truth)
   if (user.educationLevel) {
     const norm = normalizeEducationLevel(user.educationLevel);
     if (norm) return norm;
   }
+
+  // 2. User's own email or name (e.g., if user profile itself has section/level keyword)
+  const userEmail = (user.email || '').toLowerCase();
+  const userName = (user.name || '').toLowerCase();
+  if (userEmail.includes('primaria') || userName.includes('primaria')) return 'Primaria';
+  if (userEmail.includes('secundaria') || userName.includes('secundaria')) return 'Secundaria';
+  if (userEmail.includes('kinder') || userName.includes('kinder') || userEmail.includes('preescolar') || userName.includes('preescolar')) return 'Preescolar';
 
   // 3. Coordinator lookup by assignedCoordinatorId in allCoordinators list
   if (user.assignedCoordinatorId && allCoordinators && allCoordinators.length > 0) {
@@ -40,17 +40,21 @@ export function getUserEducationLevel(
       c => c.uid === user.assignedCoordinatorId || (c.email && c.email.toLowerCase() === user.assignedCoordinatorEmail?.toLowerCase())
     );
     if (matchedCoord && matchedCoord !== user) {
+      if (matchedCoord.educationLevel) {
+        const coordNorm = normalizeEducationLevel(matchedCoord.educationLevel);
+        if (coordNorm) return coordNorm;
+      }
       const coordLevel = getUserEducationLevel(matchedCoord);
       if (coordLevel) return coordLevel;
     }
   }
 
-  // 4. User's own email or name (e.g., if a coordinator or user has level keyword in their email/name)
-  const userEmail = (user.email || '').toLowerCase();
-  const userName = (user.name || '').toLowerCase();
-  if (userEmail.includes('kinder') || userName.includes('kinder') || userName.includes('preescolar')) return 'Preescolar';
-  if (userEmail.includes('secundaria') || userName.includes('secundaria')) return 'Secundaria';
-  if (userEmail.includes('academica') || userEmail.includes('primaria') || userName.includes('primaria')) return 'Primaria';
+  // 4. Assigned coordinator email or name (fallback if teacher has no level configured)
+  const coordEmail = (user.assignedCoordinatorEmail || '').toLowerCase();
+  const coordName = (user.assignedCoordinatorName || '').toLowerCase();
+  if (coordEmail.includes('primaria') || coordName.includes('primaria')) return 'Primaria';
+  if (coordEmail.includes('secundaria') || coordName.includes('secundaria')) return 'Secundaria';
+  if (coordEmail.includes('kinder') || coordName.includes('kinder') || coordEmail.includes('preescolar') || coordName.includes('preescolar')) return 'Preescolar';
 
   return '';
 }

@@ -9756,7 +9756,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     profile.role === 'COORDINATOR' ? 'TEACHER' : profile.role === 'DIRECTIVE' ? 'COORDINATOR' : 'TEACHER'
   );
   const [educationLevel, setEducationLevel] = useState<'Preescolar' | 'Primaria' | 'Secundaria'>('Primaria');
-  const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria'>('TODOS');
+  const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria' | 'SinNivel'>('TODOS');
   const [teacherSearchQuery, setTeacherSearchQuery] = useState('');
   const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE' | 'BLOQUEADO'>(
     profile.role === 'ADMIN' || isSuperAdminEmail(profile.email) 
@@ -10013,26 +10013,105 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   const canFilterTeachersByLevel = isSuperAdmin || isAdmin || isDirective;
 
+  const matchesTeacherSearch = (t: UserProfile) => {
+    if (!teacherSearchQuery.trim()) return true;
+    const q = teacherSearchQuery.toLowerCase().trim();
+    const name = (t.name || '').toLowerCase();
+    const email = (t.email || '').toLowerCase();
+    const phone = (t.phone || '').toLowerCase();
+    const coordName = (t.assignedCoordinatorName || '').toLowerCase();
+    const secCoordName = (t.secondaryCoordinatorName || '').toLowerCase();
+    const lvl = (getUserEducationLevel(t, coordinators) || '').toLowerCase();
+    return name.includes(q) || email.includes(q) || phone.includes(q) || coordName.includes(q) || secCoordName.includes(q) || lvl.includes(q);
+  };
+
   const filteredTeachers = displayedTeachers.filter(t => {
     if (canFilterTeachersByLevel && teacherLevelFilter !== 'TODOS') {
       const lvl = getUserEducationLevel(t, coordinators);
-      if (normalizeEducationLevel(lvl) !== normalizeEducationLevel(teacherLevelFilter)) {
+      if (teacherLevelFilter === 'SinNivel') {
+        if (normalizeEducationLevel(lvl)) return false;
+      } else if (normalizeEducationLevel(lvl) !== normalizeEducationLevel(teacherLevelFilter)) {
         return false;
       }
     }
-    if (teacherSearchQuery.trim()) {
-      const q = teacherSearchQuery.toLowerCase().trim();
-      const name = (t.name || '').toLowerCase();
-      const email = (t.email || '').toLowerCase();
-      const phone = (t.phone || '').toLowerCase();
-      const coordName = (t.assignedCoordinatorName || '').toLowerCase();
-      const secCoordName = (t.secondaryCoordinatorName || '').toLowerCase();
-      const lvl = getUserEducationLevel(t, coordinators).toLowerCase();
-      const matches = name.includes(q) || email.includes(q) || phone.includes(q) || coordName.includes(q) || secCoordName.includes(q) || lvl.includes(q);
-      if (!matches) return false;
-    }
-    return true;
+    return matchesTeacherSearch(t);
   });
+
+  const preescolarTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && normalizeEducationLevel(getUserEducationLevel(t, coordinators)) === 'Preescolar' && matchesTeacherSearch(t)
+  );
+  const primariaTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && normalizeEducationLevel(getUserEducationLevel(t, coordinators)) === 'Primaria' && matchesTeacherSearch(t)
+  );
+  const secundariaTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && normalizeEducationLevel(getUserEducationLevel(t, coordinators)) === 'Secundaria' && matchesTeacherSearch(t)
+  );
+  const sinNivelTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && !normalizeEducationLevel(getUserEducationLevel(t, coordinators)) && matchesTeacherSearch(t)
+  );
+
+  const allTeacherLevelGroups = [
+    {
+      id: 'Preescolar',
+      levelKey: 'Preescolar' as const,
+      title: 'Docentes de Preescolar',
+      description: 'Educación Preescolar / Kínder',
+      badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+      headerBg: 'bg-gradient-to-r from-emerald-50 via-teal-50/40 to-white border-emerald-200/80',
+      iconColor: 'text-emerald-700 bg-emerald-100 border-emerald-200',
+      icon: Sparkles,
+      teachers: preescolarTeachers,
+      emptyText: teacherSearchQuery 
+        ? `No hay docentes de preescolar que coincidan con "${teacherSearchQuery}".` 
+        : 'No hay docentes registrados en Preescolar.'
+    },
+    {
+      id: 'Primaria',
+      levelKey: 'Primaria' as const,
+      title: 'Docentes de Primaria',
+      description: 'Educación Primaria (1° a 6° grado)',
+      badgeColor: 'bg-sky-100 text-sky-800 border-sky-300',
+      headerBg: 'bg-gradient-to-r from-sky-50 via-blue-50/40 to-white border-sky-200/80',
+      iconColor: 'text-sky-700 bg-sky-100 border-sky-200',
+      icon: GraduationCap,
+      teachers: primariaTeachers,
+      emptyText: teacherSearchQuery 
+        ? `No hay docentes de primaria que coincidan con "${teacherSearchQuery}".` 
+        : 'No hay docentes registrados en Primaria.'
+    },
+    {
+      id: 'Secundaria',
+      levelKey: 'Secundaria' as const,
+      title: 'Docentes de Secundaria',
+      description: 'Educación Secundaria (1° a 3° grado)',
+      badgeColor: 'bg-purple-100 text-purple-800 border-purple-300',
+      headerBg: 'bg-gradient-to-r from-purple-50 via-indigo-50/40 to-white border-purple-200/80',
+      iconColor: 'text-purple-700 bg-purple-100 border-purple-200',
+      icon: School,
+      teachers: secundariaTeachers,
+      emptyText: teacherSearchQuery 
+        ? `No hay docentes de secundaria que coincidan con "${teacherSearchQuery}".` 
+        : 'No hay docentes registrados en Secundaria.'
+    },
+    ...(displayedTeachers.some(t => !isSuperAdminEmail(t.email) && !normalizeEducationLevel(getUserEducationLevel(t, coordinators))) ? [{
+      id: 'SinNivel',
+      levelKey: 'SinNivel' as const,
+      title: 'Docentes sin Nivel Asignado',
+      description: 'Selecciona el nivel educativo (Preescolar, Primaria o Secundaria) para clasificar a cada docente',
+      badgeColor: 'bg-amber-100 text-amber-800 border-amber-300',
+      headerBg: 'bg-gradient-to-r from-amber-50 via-orange-50/40 to-white border-amber-200/80',
+      iconColor: 'text-amber-700 bg-amber-100 border-amber-200',
+      icon: AlertCircle,
+      teachers: sinNivelTeachers,
+      emptyText: teacherSearchQuery
+        ? `No hay docentes sin nivel que coincidan con "${teacherSearchQuery}".`
+        : 'No hay docentes sin nivel educativo asignado.'
+    }] : [])
+  ];
+
+  const teacherLevelGroupsToRender = teacherLevelFilter === 'TODOS'
+    ? (teacherSearchQuery ? allTeacherLevelGroups.filter(g => g.teachers.length > 0) : allTeacherLevelGroups)
+    : allTeacherLevelGroups.filter(g => g.levelKey === teacherLevelFilter);
 
   const deleteUser = async (userToDelete: UserProfile) => {
     // Rule 1: Coordinator cannot delete themselves or other coordinators
@@ -10159,7 +10238,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             assignedCoordinatorName: coord.name,
             updatedAt: Date.now()
           };
-          if (coordLvl) {
+          if (coordLvl && !userToUpdate.educationLevel) {
             updateData.educationLevel = coordLvl;
           }
         }
@@ -10523,16 +10602,23 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                   <span>Nivel de Educación:</span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {(['TODOS', 'Preescolar', 'Primaria', 'Secundaria'] as const).map(lvl => {
-                    const count = lvl === 'TODOS'
-                      ? displayedTeachers.filter(u => !isSuperAdminEmail(u.email)).length
-                      : displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === normalizeEducationLevel(lvl)).length;
-                    const isActive = teacherLevelFilter === lvl;
+                  {([
+                    { id: 'TODOS', label: 'Todos los Niveles (Agrupados)', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email)).length },
+                    { id: 'Preescolar', label: 'Preescolar', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === 'Preescolar').length },
+                    { id: 'Primaria', label: 'Primaria', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === 'Primaria').length },
+                    { id: 'Secundaria', label: 'Secundaria', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === 'Secundaria').length },
+                    ...(displayedTeachers.some(u => !isSuperAdminEmail(u.email) && !normalizeEducationLevel(getUserEducationLevel(u, coordinators))) ? [{
+                      id: 'SinNivel' as const,
+                      label: 'Sin Nivel',
+                      count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && !normalizeEducationLevel(getUserEducationLevel(u, coordinators))).length
+                    }] : [])
+                  ] as const).map(item => {
+                    const isActive = teacherLevelFilter === item.id;
                     return (
                       <button
-                        key={lvl}
+                        key={item.id}
                         type="button"
-                        onClick={() => setTeacherLevelFilter(lvl)}
+                        onClick={() => setTeacherLevelFilter(item.id)}
                         className={cn(
                           "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
                           isActive
@@ -10540,12 +10626,12 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                             : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                         )}
                       >
-                        <span>{lvl === 'TODOS' ? 'Todos los Niveles' : lvl}</span>
+                        <span>{item.label}</span>
                         <span className={cn(
                           "text-[10px] px-1.5 py-0.5 rounded-full font-bold",
                           isActive ? "bg-white/20 text-white" : "bg-white text-slate-600 border border-slate-200"
                         )}>
-                          {count}
+                          {item.count}
                         </span>
                       </button>
                     );
@@ -10586,25 +10672,88 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
               )}
             </div>
 
-            <UserList 
-              title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
-              users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
-              emptyMessage={teacherSearchQuery ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` : undefined}
-              onDelete={deleteUser} 
-              onUpdateRole={updateUserRole}
-              showPasswords={isSuperAdmin}
-              canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
-              coordinators={coordinators}
-              psychologists={psychologists}
-              onAssignCoordinator={updateAssignedCoordinator}
-              onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
-              onAssignPsychologist={updateAssignedPsychologist}
-              onUpdateEducationLevel={updateUserEducationLevel}
-              profile={profile}
-              canManageUsers={canManageUsers}
-              canAssignPsychologist={canAssignPsychologist}
-              onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
-            />
+            {/* Vista para Superadmin, Admin y Directivo: Docentes agrupados por nivel educativo */}
+            {canFilterTeachersByLevel ? (
+              <div className="space-y-8">
+                {teacherLevelGroupsToRender.length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
+                    <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                    <p className="text-sm font-medium">
+                      {teacherSearchQuery 
+                        ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` 
+                        : "No hay docentes registrados en el sistema."}
+                    </p>
+                  </div>
+                ) : (
+                  teacherLevelGroupsToRender.map((group) => (
+                    <div key={group.id} className="space-y-3">
+                      <div className={cn(
+                        "p-4 rounded-2xl border flex items-center justify-between gap-3 shadow-xs",
+                        group.headerBg
+                      )}>
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shadow-xs border", group.iconColor)}>
+                            <group.icon className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-slate-900 text-base">
+                                {group.title}
+                              </h3>
+                              <span className={cn("text-xs font-black px-2.5 py-0.5 rounded-full border shadow-2xs", group.badgeColor)}>
+                                {group.teachers.length}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 font-medium">{group.description}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <UserList 
+                        title=""
+                        hideTitleHeader={true}
+                        users={group.teachers} 
+                        emptyMessage={group.emptyText}
+                        onDelete={deleteUser} 
+                        onUpdateRole={updateUserRole}
+                        showPasswords={isSuperAdmin}
+                        canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
+                        coordinators={coordinators}
+                        psychologists={psychologists}
+                        onAssignCoordinator={updateAssignedCoordinator}
+                        onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
+                        onAssignPsychologist={updateAssignedPsychologist}
+                        onUpdateEducationLevel={updateUserEducationLevel}
+                        profile={profile}
+                        canManageUsers={canManageUsers}
+                        canAssignPsychologist={canAssignPsychologist}
+                        onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : (
+              <UserList 
+                title="Docentes Asignados a mi Coordinación" 
+                users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+                emptyMessage={teacherSearchQuery ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` : undefined}
+                onDelete={deleteUser} 
+                onUpdateRole={updateUserRole}
+                showPasswords={isSuperAdmin}
+                canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
+                coordinators={coordinators}
+                psychologists={psychologists}
+                onAssignCoordinator={updateAssignedCoordinator}
+                onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
+                onAssignPsychologist={updateAssignedPsychologist}
+                onUpdateEducationLevel={updateUserEducationLevel}
+                profile={profile}
+                canManageUsers={canManageUsers}
+                canAssignPsychologist={canAssignPsychologist}
+                onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+              />
+            )}
           </div>
         )}
 
@@ -10821,6 +10970,7 @@ const UserList = ({
   canAssignPsychologist = true,
   onEditPermissions,
   emptyMessage,
+  hideTitleHeader = false,
 }: { 
   title: string, 
   users: UserProfile[], 
@@ -10840,6 +10990,7 @@ const UserList = ({
   canAssignPsychologist?: boolean,
   onEditPermissions?: (user: UserProfile) => void,
   emptyMessage?: string,
+  hideTitleHeader?: boolean,
 }) => {
   const isCoordinator = profile.role === 'COORDINATOR';
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
@@ -10848,18 +10999,23 @@ const UserList = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          {title}
-          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
-            {users.length}
-          </span>
-        </h3>
-      </div>
+      {!hideTitleHeader && title && (
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            {title}
+            <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
+              {users.length}
+            </span>
+          </h3>
+        </div>
+      )}
 
       {users.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
-          <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
+        <div className={cn(
+          "bg-white rounded-2xl border border-dashed border-slate-200 text-center text-slate-400",
+          hideTitleHeader ? "p-8" : "p-12"
+        )}>
+          <UserIcon className={cn("mx-auto opacity-20", hideTitleHeader ? "w-8 h-8 mb-2" : "w-12 h-12 mb-3")} />
           <p className="text-sm font-medium">{emptyMessage || "No hay usuarios registrados en esta categoría."}</p>
         </div>
       ) : (
