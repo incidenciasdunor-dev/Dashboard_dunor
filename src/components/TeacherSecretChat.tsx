@@ -25,7 +25,8 @@ import {
   BellRing,
   Bell,
   MessageSquare,
-  Plus
+  Plus,
+  ArrowDown
 } from 'lucide-react';
 import { 
   collection, 
@@ -236,10 +237,54 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const lastActiveChatIdRef = useRef<string | null>(null);
+  const isNearBottomRef = useRef<boolean>(true);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState<boolean>(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const sequenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isFirstLoadRef = useRef<boolean>(true);
+
+  // Helper function to reliably position chat at the latest message
+  const scrollToBottom = (behavior: 'auto' | 'smooth' = 'smooth') => {
+    // 1. Scroll container directly (prevents parent window or iframe scrolling)
+    if (messagesContainerRef.current) {
+      const container = messagesContainerRef.current;
+      if (behavior === 'auto') {
+        container.scrollTop = container.scrollHeight;
+      } else {
+        try {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth'
+          });
+        } catch {
+          container.scrollTop = container.scrollHeight;
+        }
+      }
+    }
+    // 2. Also ensure end marker is brought into view
+    if (messagesEndRef.current) {
+      try {
+        messagesEndRef.current.scrollIntoView({
+          behavior: behavior === 'auto' ? 'auto' : 'smooth',
+          block: 'end'
+        });
+      } catch {}
+    }
+  };
+
+  // Monitor scroll position to know if user is reading previous messages
+  const handleMessagesScroll = () => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    const isNearBottom = distanceFromBottom < 80;
+    isNearBottomRef.current = isNearBottom;
+    setShowScrollBottomBtn(!isNearBottom);
+  };
 
   // Active theme configuration
   const currentTheme = THEME_CONFIGS[theme];
@@ -303,6 +348,8 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
         [teacher.uid]: teacher.email || ''
       }
     });
+    isNearBottomRef.current = true;
+    setShowScrollBottomBtn(false);
     setUnreadCount(0);
     setHasNewMessagePulse(false);
   };
@@ -317,6 +364,8 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
       participantNames: group.participantNames,
       participantEmails: group.participantEmails
     });
+    isNearBottomRef.current = true;
+    setShowScrollBottomBtn(false);
     setUnreadCount(0);
     setHasNewMessagePulse(false);
   };
@@ -604,12 +653,40 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     };
   }, [activeChat, currentUser]);
 
-  // Auto scroll to bottom
+  // Auto scroll to latest message when messages change or chat is switched
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (!activeChat || messages.length === 0) return;
+
+    const isDifferentChat = lastActiveChatIdRef.current !== activeChat.id;
+    lastActiveChatIdRef.current = activeChat.id;
+
+    const lastMsg = messages[messages.length - 1];
+    const isMine = lastMsg?.senderUid === currentUser?.uid;
+
+    if (isDifferentChat) {
+      // First load of conversation: immediately pin to bottom without visual delay
+      scrollToBottom('auto');
+      const t1 = setTimeout(() => scrollToBottom('auto'), 40);
+      const t2 = setTimeout(() => scrollToBottom('auto'), 120);
+      const t3 = setTimeout(() => scrollToBottom('auto'), 280);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+      };
+    } else {
+      // In active conversation: if user sent it OR was already near bottom, scroll smoothly to the new message
+      if (isMine || isNearBottomRef.current) {
+        scrollToBottom('smooth');
+        const t1 = setTimeout(() => scrollToBottom('smooth'), 50);
+        const t2 = setTimeout(() => scrollToBottom('auto'), 150);
+        return () => {
+          clearTimeout(t1);
+          clearTimeout(t2);
+        };
+      }
     }
-  }, [messages, typingUsers]);
+  }, [messages, typingUsers, activeChat?.id, currentUser?.uid]);
 
   // Periodic cleanup timer for active view (every 30s)
   useEffect(() => {
@@ -792,6 +869,13 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
 
       setInputText('');
       setAttachedFile(null);
+
+      // Automatically position view at the newly sent message
+      isNearBottomRef.current = true;
+      setShowScrollBottomBtn(false);
+      scrollToBottom('smooth');
+      setTimeout(() => scrollToBottom('auto'), 50);
+      setTimeout(() => scrollToBottom('auto'), 180);
     } catch (err) {
       console.error('Error sending message:', err);
       alert('No se pudo enviar el mensaje. Inténtalo nuevamente.');
@@ -1373,7 +1457,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                 </div>
               ) : (
                 /* VIEW 2: ACTIVE CONVERSATION (1-on-1 or Group) */
-                <div className={cn("flex-1 flex flex-col min-h-0", currentTheme.chatAreaBg)}>
+                <div className={cn("flex-1 flex flex-col min-h-0 relative", currentTheme.chatAreaBg)}>
                   {/* Status header with participants and TTL */}
                   <div className="px-3 py-1.5 bg-black/30 border-b border-white/5 flex items-center justify-between text-[10px] text-slate-400">
                     <span className="flex items-center gap-1.5">
@@ -1400,7 +1484,11 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                   </div>
 
                   {/* Messages Area */}
-                  <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+                  <div
+                    ref={messagesContainerRef}
+                    onScroll={handleMessagesScroll}
+                    className="flex-1 overflow-y-auto p-3.5 space-y-3"
+                  >
                     {messages.length === 0 ? (
                       <div className="text-center py-12 px-6 text-slate-400">
                         <Lock className="w-8 h-8 mx-auto text-slate-600 mb-2 opacity-60" />
@@ -1450,6 +1538,11 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                                     alt={msg.fileName || 'Imagen adjunta'}
                                     className="max-h-52 w-full object-cover cursor-pointer hover:opacity-95 transition-opacity"
                                     onClick={() => setZoomedImage(msg.fileData || null)}
+                                    onLoad={() => {
+                                      if (isNearBottomRef.current || msg.senderUid === currentUser.uid) {
+                                        scrollToBottom('auto');
+                                      }
+                                    }}
                                     referrerPolicy="no-referrer"
                                   />
                                 </div>
@@ -1501,6 +1594,22 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                     )}
                     <div ref={messagesEndRef} />
                   </div>
+
+                  {/* Floating button to jump to the latest message if scrolled up */}
+                  {showScrollBottomBtn && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        isNearBottomRef.current = true;
+                        scrollToBottom('smooth');
+                      }}
+                      className="absolute bottom-16 right-4 z-20 px-3 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xl flex items-center gap-1.5 border border-indigo-400/40 cursor-pointer transition-all duration-200 hover:scale-105 active:scale-95 animate-bounce"
+                      title="Ir al último mensaje"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                      <span>Último mensaje</span>
+                    </button>
+                  )}
 
                   {/* Real-time typing indicator */}
                   {typingUsers.length > 0 && (
