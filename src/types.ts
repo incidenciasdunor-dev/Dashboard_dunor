@@ -311,6 +311,7 @@ export interface SystemSettings {
   coordinatorAdminMapping: Record<string, string[]>; // coordinatorId -> adminIds[]
   categories?: string[];
   rolePermissions?: Partial<RolePermissionsMap>;
+  teacherChatTtlHours?: number;
 }
 
 export interface Task {
@@ -464,9 +465,11 @@ export interface TeacherMessage {
   senderUid: string;
   senderName: string;
   senderEmail: string;
-  receiverUid: string;
-  receiverName: string;
-  receiverEmail: string;
+  receiverUid?: string;
+  receiverName?: string;
+  receiverEmail?: string;
+  participantUids?: string[];
+  isSystem?: boolean;
   text: string;
   fileData?: string;
   fileName?: string;
@@ -475,4 +478,27 @@ export interface TeacherMessage {
   createdAt: number;
   expiresAt: number;
   read?: boolean;
+}
+
+export interface TeacherConversation {
+  id: string;
+  isGroup: boolean;
+  name?: string;
+  participantUids: string[];
+  participantNames: Record<string, string>;
+  participantEmails?: Record<string, string>;
+  createdByUid: string;
+  createdAt: number;
+  updatedAt: number;
+  lastMessageText?: string;
+  lastMessageSenderName?: string;
+  lastMessageAt?: number;
+}
+
+export interface TeacherTypingState {
+  conversationId: string;
+  userId: string;
+  userName: string;
+  isTyping: boolean;
+  timestamp: number;
 }

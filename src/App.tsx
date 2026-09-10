@@ -2163,10 +2163,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       'Accidente Escolar',
       'Falta de Respeto al Docente'
     ],
-    rolePermissions: DEFAULT_ROLE_PERMISSIONS
+    rolePermissions: DEFAULT_ROLE_PERMISSIONS,
+    teacherChatTtlHours: 6
   };
 
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(DEFAULT_SETTINGS);
+  const [chatTtlCustomInput, setChatTtlCustomInput] = useState<number>(6);
+  const [chatTtlSavedFeedback, setChatTtlSavedFeedback] = useState(false);
+
+  useEffect(() => {
+    if (systemSettings.teacherChatTtlHours) {
+      setChatTtlCustomInput(systemSettings.teacherChatTtlHours);
+    }
+  }, [systemSettings.teacherChatTtlHours]);
+
   const [selectedMappingAdmin, setSelectedMappingAdmin] = useState('');
   const [selectedMappingCoordinator, setSelectedMappingCoordinator] = useState('');
   const [selectedIncidents, setSelectedIncidents] = useState<string[]>([]);
@@ -5887,6 +5897,124 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 </div>
               )}
 
+              {/* Tiempo de Vida de los Mensajes del Chat Docente Cifrado (SuperAdmin) */}
+              {isSuperAdmin && (
+                <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Clock className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                        Tiempo de Vida de Mensajes - Chat Docente
+                      </h2>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Configura el período de autodestrucción automática tras el cual los mensajes, fotos y archivos adjuntos del canal secreto de docentes se eliminan permanentemente.
+                      </p>
+                    </div>
+                    <span className="text-xs font-black px-3.5 py-1.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shrink-0 self-start sm:self-auto">
+                      Actualmente: {systemSettings.teacherChatTtlHours ?? 6} horas
+                    </span>
+                  </div>
+                  <div className="p-6 space-y-5">
+                    {/* Botones de selección rápida */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
+                        Opciones de Duración Rápidas
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { hours: 1, label: '1 hora (Ultra efímero)' },
+                          { hours: 2, label: '2 horas' },
+                          { hours: 4, label: '4 horas' },
+                          { hours: 6, label: '6 horas (Predeterminado)' },
+                          { hours: 12, label: '12 horas' },
+                          { hours: 24, label: '24 horas (1 Día)' },
+                          { hours: 48, label: '48 horas (2 Días)' },
+                          { hours: 72, label: '72 horas (3 Días)' },
+                          { hours: 168, label: '168 horas (7 Días)' }
+                        ].map((preset) => {
+                          const isSelected = (systemSettings.teacherChatTtlHours ?? 6) === preset.hours;
+                          return (
+                            <button
+                              key={preset.hours}
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await setDoc(doc(db, 'settings', 'global'), {
+                                    teacherChatTtlHours: preset.hours
+                                  }, { merge: true });
+                                  setSystemSettings(prev => ({ ...prev, teacherChatTtlHours: preset.hours }));
+                                  setChatTtlCustomInput(preset.hours);
+                                  await addLog('Modificó tiempo de vida del chat docente', `Nuevo tiempo: ${preset.hours} horas`);
+                                } catch (e) {
+                                  console.error('Error saving chat TTL:', e);
+                                }
+                              }}
+                              className={cn(
+                                "px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer",
+                                isSelected
+                                  ? "bg-indigo-600 text-white border-indigo-600 shadow-md scale-105"
+                                  : "bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                              )}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>{preset.label}</span>
+                              {isSelected && <Check className="w-3.5 h-3.5 ml-0.5" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Input personalizado */}
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                      <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">
+                        O especificar duración personalizada (en horas):
+                      </label>
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="1"
+                            max="720"
+                            value={chatTtlCustomInput}
+                            onChange={(e) => setChatTtlCustomInput(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-24 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-800 dark:text-white text-center focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                          />
+                          <span className="text-xs text-slate-500 font-medium">horas</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const val = chatTtlCustomInput;
+                            if (val < 1) return;
+                            try {
+                              await setDoc(doc(db, 'settings', 'global'), {
+                                teacherChatTtlHours: val
+                              }, { merge: true });
+                              setSystemSettings(prev => ({ ...prev, teacherChatTtlHours: val }));
+                              await addLog('Modificó tiempo de vida del chat docente', `Nuevo tiempo personalizado: ${val} horas`);
+                              setChatTtlSavedFeedback(true);
+                              setTimeout(() => setChatTtlSavedFeedback(false), 2500);
+                            } catch (e) {
+                              console.error('Error saving custom TTL:', e);
+                            }
+                          }}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Guardar horas
+                        </button>
+                        {chatTtlSavedFeedback && (
+                          <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" /> ¡Guardado con éxito!
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Hidden Secrets Card per requirement */}
 
               {/* Categorías de Incidencia */}
@@ -7280,6 +7408,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         sendNotification={sendNotification}
         externalOpenPartner={chatOpenPartner}
         onCloseExternal={() => setChatOpenPartner(null)}
+        ttlHours={systemSettings.teacherChatTtlHours ?? 6}
       />
     </ErrorBoundary>
   );

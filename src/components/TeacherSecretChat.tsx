@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   X, 
   Send, 
@@ -14,21 +14,52 @@ import {
   ArrowLeft, 
   Minimize2, 
   Maximize2,
-  Trash2,
   Check,
   CheckCheck,
   GraduationCap,
   Sparkles,
   School,
-  File
+  File,
+  Users,
+  UserPlus,
+  BellRing,
+  Bell,
+  MessageSquare,
+  Plus
 } from 'lucide-react';
-import { collection, addDoc, query, where, onSnapshot, deleteDoc, doc, orderBy, updateDoc } from 'firebase/firestore';
+import { 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  onSnapshot, 
+  deleteDoc, 
+  doc, 
+  updateDoc, 
+  setDoc, 
+  getDocs 
+} from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { UserProfile, TeacherMessage, normalizeUserRole } from '../types';
+import { UserProfile, TeacherMessage, TeacherConversation, normalizeUserRole } from '../types';
 import { cn, getUserEducationLevel } from '../lib/utils';
 import { format } from 'date-fns';
+import { 
+  showSystemNotification, 
+  requestSystemNotificationPermission, 
+  getNotificationPermission 
+} from '../lib/nativeNotifications';
 
 export type ChatTheme = 'stealth-slate' | 'dark-blackout' | 'emerald-glass' | 'academic-warm';
+
+interface ActiveChat {
+  id: string; // conversationId
+  isGroup: boolean;
+  name: string;
+  partner?: UserProfile; // for 1-to-1
+  participantUids: string[];
+  participantNames: Record<string, string>;
+  participantEmails?: Record<string, string>;
+}
 
 interface TeacherSecretChatProps {
   currentUser: UserProfile;
@@ -43,6 +74,7 @@ interface TeacherSecretChatProps {
   ) => Promise<void>;
   externalOpenPartner?: UserProfile | null;
   onCloseExternal?: () => void;
+  ttlHours?: number;
 }
 
 export const THEME_CONFIGS: Record<ChatTheme, {
@@ -112,37 +144,66 @@ export const THEME_CONFIGS: Record<ChatTheme, {
   }
 };
 
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+// Safe Web Audio API synthesizer for instant pleasant chime on new message
+const playChatChime = () => {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12); // A5
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch (e) {
+    // Ignore audio restrictions
+  }
+};
 
 export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
   currentUser,
   allUsers,
   sendNotification,
   externalOpenPartner,
-  onCloseExternal
+  onCloseExternal,
+  ttlHours = 6
 }) => {
-  // Only accessible for users with role 'TEACHER'
   const isTeacher = normalizeUserRole(currentUser.role) === 'TEACHER';
+  const effectiveTtlHours = Math.max(1, ttlHours);
+  const ttlMs = effectiveTtlHours * 60 * 60 * 1000;
 
   // Secret Corner activation sequence state
-  // Order: 1. Top-Right -> (Top-Left / Bottom-Right) -> 4. Bottom-Left
   const [cornerTaps, setCornerTaps] = useState<string[]>([]);
   const [tapFeedback, setTapFeedback] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
 
-  // Selected teacher to chat with
-  const [selectedTeacher, setSelectedTeacher] = useState<UserProfile | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  // Unread badge and notification tracking for minimized bar
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [lastUnreadSender, setLastUnreadSender] = useState<string | null>(null);
+  const [lastUnreadPreview, setLastUnreadPreview] = useState<string | null>(null);
+  const [hasNewMessagePulse, setHasNewMessagePulse] = useState(false);
 
-  // Open automatically if requested externally (e.g. clicking notification or toast)
-  useEffect(() => {
-    if (externalOpenPartner) {
-      setSelectedTeacher(externalOpenPartner);
-      setIsOpen(true);
-      setIsMinimized(false);
-    }
-  }, [externalOpenPartner]);
+  // Active chat (direct 1-to-1 or group)
+  const [activeChat, setActiveChat] = useState<ActiveChat | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'contacts' | 'groups'>('contacts');
+
+  // Group chat management modals
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [showAddParticipantsModal, setShowAddParticipantsModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [selectedGroupMemberUids, setSelectedGroupMemberUids] = useState<string[]>([]);
+  const [groupSearchQuery, setGroupSearchQuery] = useState('');
+
+  // Persisted group conversations
+  const [groups, setGroups] = useState<TeacherConversation[]>([]);
 
   // Active theme
   const [theme, setTheme] = useState<ChatTheme>(() => {
@@ -161,6 +222,16 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
   } | null>(null);
   const [isSending, setIsSending] = useState(false);
 
+  // Typing indicator state
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isTypingFlagRef = useRef<boolean>(false);
+
+  // Native notification permission state
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    return getNotificationPermission();
+  });
+
   // Image preview modal
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
@@ -168,8 +239,12 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const sequenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isFirstLoadRef = useRef<boolean>(true);
 
-  // Persist theme choice
+  // Active theme configuration
+  const currentTheme = THEME_CONFIGS[theme];
+
+  // Helper to persist theme choice
   const handleSelectTheme = (newTheme: ChatTheme) => {
     setTheme(newTheme);
     localStorage.setItem('dunor_teacher_chat_theme', newTheme);
@@ -177,69 +252,117 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
   };
 
   // Filter only active registered teachers, excluding current user
-  const teacherContacts = allUsers.filter(u => {
-    const role = normalizeUserRole(u.role);
-    const isT = role === 'TEACHER';
-    const isActive = u.status !== 'BLOQUEADO' && !u.isBlocked;
-    const isNotMe = u.uid !== currentUser.uid && u.email?.toLowerCase() !== currentUser.email?.toLowerCase();
-    return isT && isActive && isNotMe;
-  });
+  const teacherContacts = useMemo(() => {
+    return allUsers.filter(u => {
+      const role = normalizeUserRole(u.role);
+      const isT = role === 'TEACHER';
+      const isActive = u.status !== 'BLOQUEADO' && !u.isBlocked;
+      const isNotMe = u.uid !== currentUser.uid && u.email?.toLowerCase() !== currentUser.email?.toLowerCase();
+      return isT && isActive && isNotMe;
+    });
+  }, [allUsers, currentUser]);
 
-  const filteredContacts = teacherContacts.filter(u => {
-    if (!searchQuery.trim()) return true;
-    const query = searchQuery.toLowerCase();
-    const nameMatch = u.name?.toLowerCase().includes(query);
-    const emailMatch = u.email?.toLowerCase().includes(query);
-    const levelMatch = getUserEducationLevel(u)?.toLowerCase().includes(query);
-    return nameMatch || emailMatch || levelMatch;
-  });
+  const filteredContacts = useMemo(() => {
+    if (!searchQuery.trim()) return teacherContacts;
+    const q = searchQuery.toLowerCase();
+    return teacherContacts.filter(u => {
+      const nameMatch = u.name?.toLowerCase().includes(q);
+      const emailMatch = u.email?.toLowerCase().includes(q);
+      const levelMatch = getUserEducationLevel(u)?.toLowerCase().includes(q);
+      return nameMatch || emailMatch || levelMatch;
+    });
+  }, [teacherContacts, searchQuery]);
 
-  // Calculate unique conversationId between two users
-  const getConversationId = (uidA: string, uidB: string) => {
-    return [uidA, uidB].sort().join('_');
+  // Request native notifications permission
+  const handleRequestNotifications = async () => {
+    const perm = await requestSystemNotificationPermission();
+    setNotificationPermission(perm);
+    if (perm === 'granted') {
+      showSystemNotification('🔔 Notificaciones de Chat Activadas', {
+        body: 'Recibirás avisos instantáneos en tu barra de notificaciones cuando los docentes te envíen mensajes.',
+        icon: '/logo_dunor.png'
+      });
+    }
   };
 
-  // Corner tap handler
-  // Allowed activation: 4 corner clicks starting with 'top-right' and ending with 'bottom-left'
+  // Open 1-on-1 chat with a teacher
+  const openDirectChat = (teacher: UserProfile) => {
+    const convId = [currentUser.uid, teacher.uid].sort().join('_');
+    setActiveChat({
+      id: convId,
+      isGroup: false,
+      name: teacher.name || 'Docente',
+      partner: teacher,
+      participantUids: [currentUser.uid, teacher.uid],
+      participantNames: {
+        [currentUser.uid]: currentUser.name || 'Docente',
+        [teacher.uid]: teacher.name || 'Docente'
+      },
+      participantEmails: {
+        [currentUser.uid]: currentUser.email || '',
+        [teacher.uid]: teacher.email || ''
+      }
+    });
+    setUnreadCount(0);
+    setHasNewMessagePulse(false);
+  };
+
+  // Open group conversation
+  const openGroupChat = (group: TeacherConversation) => {
+    setActiveChat({
+      id: group.id,
+      isGroup: true,
+      name: group.name || 'Grupo Docente',
+      participantUids: group.participantUids,
+      participantNames: group.participantNames,
+      participantEmails: group.participantEmails
+    });
+    setUnreadCount(0);
+    setHasNewMessagePulse(false);
+  };
+
+  // Open automatically if requested externally (e.g. clicking notification or toast)
+  useEffect(() => {
+    if (externalOpenPartner) {
+      openDirectChat(externalOpenPartner);
+      setIsOpen(true);
+      setIsMinimized(false);
+    }
+  }, [externalOpenPartner]);
+
+  // Corner tap handler (Secret Sequence: Top-Right -> Top-Left -> Bottom-Right -> Bottom-Left)
   const handleCornerClick = (cornerId: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left') => {
     if (!isTeacher) return;
 
-    // Visual micro-feedback (subtle flash in that corner)
     setTapFeedback(cornerId);
     setTimeout(() => setTapFeedback(null), 300);
 
-    // Reset timer
     if (sequenceTimerRef.current) {
       clearTimeout(sequenceTimerRef.current);
     }
     sequenceTimerRef.current = setTimeout(() => {
       setCornerTaps([]);
-    }, 8000); // 8 seconds window
+    }, 8000);
 
     const updated = [...cornerTaps, cornerId];
 
-    // First tap MUST be top-right
     if (updated[0] !== 'top-right') {
       setCornerTaps([]);
       return;
     }
 
-    // If user tapped 4 corners
     if (updated.length === 4) {
       const startsWithTR = updated[0] === 'top-right';
       const endsWithBL = updated[3] === 'bottom-left';
-      // Verify all 4 corners were touched
       const uniqueCorners = new Set(updated);
 
       if (startsWithTR && endsWithBL && uniqueCorners.size === 4) {
-        // SUCCESS! Open the secret chat
         setIsOpen(true);
         setIsMinimized(false);
         setCornerTaps([]);
         if (sequenceTimerRef.current) clearTimeout(sequenceTimerRef.current);
         return;
       } else {
-        // Failed sequence, reset
         setCornerTaps([]);
         return;
       }
@@ -248,26 +371,116 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     setCornerTaps(updated);
   };
 
-  // Close floating chat and require corners again
   const handleCloseChat = () => {
     setIsOpen(false);
-    setSelectedTeacher(null);
+    setActiveChat(null);
     setCornerTaps([]);
     setShowThemeMenu(false);
+    setShowCreateGroupModal(false);
+    setShowAddParticipantsModal(false);
     if (onCloseExternal) {
       onCloseExternal();
     }
   };
 
-  // Listen to messages when a teacher is selected
+  // 1. LISTEN TO GROUP CONVERSATIONS
   useEffect(() => {
-    if (!isOpen || !selectedTeacher || !currentUser) return;
+    if (!currentUser || !isTeacher) return;
 
-    const convId = getConversationId(currentUser.uid, selectedTeacher.uid);
+    const q = query(
+      collection(db, 'teacher_conversations'),
+      where('participantUids', 'array-contains', currentUser.uid)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const convList: TeacherConversation[] = [];
+      snapshot.docs.forEach((d) => {
+        convList.push({ id: d.id, ...d.data() } as TeacherConversation);
+      });
+      convList.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      setGroups(convList);
+    }, (error) => {
+      console.warn("Group conversations listener notice:", error);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, isTeacher]);
+
+  // 2. GLOBAL BACKGROUND REAL-TIME LISTENER FOR INCOMING MESSAGES
+  // Allows notifications, unread badges on minimized chat, and instant delivery without refreshing
+  useEffect(() => {
+    if (!currentUser || !isTeacher) return;
+
+    // Listen to messages where current user is a participant
+    const q1 = query(
+      collection(db, 'teacher_messages'),
+      where('participantUids', 'array-contains', currentUser.uid)
+    );
+
+    const unsubscribe = onSnapshot(q1, (snapshot) => {
+      // Skip actions on the very first mount snapshot to avoid playing audio for historic messages
+      if (isFirstLoadRef.current) {
+        isFirstLoadRef.current = false;
+        return;
+      }
+
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const msg = { id: change.doc.id, ...change.doc.data() } as TeacherMessage;
+          const isFromOther = msg.senderUid !== currentUser.uid;
+          const isRecent = Date.now() - (msg.createdAt || 0) < 25000;
+
+          if (isFromOther && isRecent) {
+            // Is this message from the currently active and focused conversation?
+            const isCurrentActive = isOpen && !isMinimized && activeChat && activeChat.id === msg.conversationId;
+
+            if (!isCurrentActive) {
+              // Play soft sound chime
+              playChatChime();
+
+              // Update minimized notification state
+              setUnreadCount(prev => prev + 1);
+              setLastUnreadSender(msg.senderName || 'Docente');
+              setLastUnreadPreview(msg.text || (msg.fileType === 'image' ? '📷 Foto' : '📎 Archivo'));
+              setHasNewMessagePulse(true);
+
+              // Trigger native OS notification bar (mobile & PC)
+              const preview = msg.text
+                ? (msg.text.length > 80 ? msg.text.substring(0, 80) + '...' : msg.text)
+                : (msg.fileType === 'image' ? '📷 Foto adjunta' : '📎 Archivo adjunto');
+
+              showSystemNotification(`💬 Mensaje de ${msg.senderName || 'Docente'}`, {
+                body: preview,
+                icon: '/logo_dunor.png',
+                badge: '/logo_dunor.png',
+                tag: `teacher-chat-${msg.id}`,
+                vibrate: [200, 100, 200],
+                data: {
+                  conversationId: msg.conversationId,
+                  senderUid: msg.senderUid
+                }
+              });
+            }
+          }
+        }
+      });
+    }, (err) => {
+      console.warn("Background messages listener warning:", err);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, isTeacher, isOpen, isMinimized, activeChat]);
+
+  // 3. ACTIVE CONVERSATION REAL-TIME MESSAGES LISTENER
+  useEffect(() => {
+    if (!isOpen || !activeChat || !currentUser) {
+      setMessages([]);
+      return;
+    }
+
     const q = query(
       collection(db, 'teacher_messages'),
-      where('conversationId', '==', convId),
-      orderBy('createdAt', 'asc')
+      where('conversationId', '==', activeChat.id)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -277,8 +490,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
 
       snapshot.docs.forEach((d) => {
         const data = { id: d.id, ...d.data() } as TeacherMessage;
-        // Check 6 hours expiration
-        const expiresAt = data.expiresAt || (data.createdAt + SIX_HOURS_MS);
+        const expiresAt = data.expiresAt || (data.createdAt + ttlMs);
         if (now >= expiresAt) {
           expiredDocs.push(d.id);
         } else {
@@ -286,6 +498,8 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
         }
       });
 
+      // Sort in memory to guarantee real-time delivery without requiring composite indices
+      validMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       setMessages(validMsgs);
 
       // Asynchronously purge expired messages from Firestore
@@ -295,18 +509,107 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
         });
       }
     }, (error) => {
-      console.warn("Teacher chat subscription notice:", error);
+      console.warn("Active conversation messages error:", error);
     });
 
     return () => unsubscribe();
-  }, [isOpen, selectedTeacher, currentUser]);
+  }, [isOpen, activeChat, currentUser, ttlMs]);
+
+  // 4. REAL-TIME TYPING INDICATOR LISTENER
+  useEffect(() => {
+    if (!isOpen || !activeChat || !currentUser) {
+      setTypingUsers([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'teacher_typing'),
+      where('conversationId', '==', activeChat.id)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const now = Date.now();
+      const activeTyping: string[] = [];
+
+      snapshot.docs.forEach((d) => {
+        const data = d.data();
+        if (
+          data.userId !== currentUser.uid &&
+          data.isTyping === true &&
+          now - (data.timestamp || 0) < 6000
+        ) {
+          activeTyping.push(data.userName || 'Docente');
+        }
+      });
+
+      setTypingUsers(activeTyping);
+    }, (err) => {
+      console.warn("Typing indicator error:", err);
+    });
+
+    return () => unsubscribe();
+  }, [isOpen, activeChat, currentUser]);
+
+  // Handle local user typing debounce
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setInputText(val);
+
+    if (!activeChat || !currentUser) return;
+
+    const typingDocRef = doc(db, 'teacher_typing', `${activeChat.id}_${currentUser.uid}`);
+
+    if (val.trim()) {
+      if (!isTypingFlagRef.current) {
+        isTypingFlagRef.current = true;
+        setDoc(typingDocRef, {
+          conversationId: activeChat.id,
+          userId: currentUser.uid,
+          userName: currentUser.name || 'Docente',
+          isTyping: true,
+          timestamp: Date.now()
+        }, { merge: true }).catch(() => {});
+      }
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        isTypingFlagRef.current = false;
+        setDoc(typingDocRef, {
+          isTyping: false,
+          timestamp: Date.now()
+        }, { merge: true }).catch(() => {});
+      }, 3000);
+    } else {
+      if (isTypingFlagRef.current) {
+        isTypingFlagRef.current = false;
+        setDoc(typingDocRef, {
+          isTyping: false,
+          timestamp: Date.now()
+        }, { merge: true }).catch(() => {});
+      }
+    }
+  };
+
+  // Reset typing on unmount or active chat change
+  useEffect(() => {
+    return () => {
+      if (activeChat && currentUser && isTypingFlagRef.current) {
+        const typingDocRef = doc(db, 'teacher_typing', `${activeChat.id}_${currentUser.uid}`);
+        setDoc(typingDocRef, { isTyping: false, timestamp: Date.now() }, { merge: true }).catch(() => {});
+      }
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    };
+  }, [activeChat, currentUser]);
 
   // Auto scroll to bottom
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages]);
+  }, [messages, typingUsers]);
 
   // Periodic cleanup timer for active view (every 30s)
   useEffect(() => {
@@ -314,12 +617,12 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     const interval = setInterval(() => {
       const now = Date.now();
       setMessages(prev => prev.filter(m => {
-        const expiresAt = m.expiresAt || (m.createdAt + SIX_HOURS_MS);
+        const expiresAt = m.expiresAt || (m.createdAt + ttlMs);
         return now < expiresAt;
       }));
     }, 30000);
     return () => clearInterval(interval);
-  }, [isOpen]);
+  }, [isOpen, ttlMs]);
 
   // Image compressor helper
   const compressImage = (file: File): Promise<string> => {
@@ -354,7 +657,6 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             return;
           }
           ctx.drawImage(img, 0, 0, width, height);
-          // Compress to WebP or JPEG 0.75
           const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
           resolve(dataUrl);
         };
@@ -371,7 +673,6 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check size limit (< 1.5MB raw, compressed for images, < 700KB for files)
     if (type === 'file' && file.size > 800 * 1024) {
       alert('El archivo no debe exceder 800 KB para asegurar la sincronización en tiempo real.');
       return;
@@ -402,33 +703,43 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
       console.error('Error loading file:', err);
     }
 
-    // Reset input
     e.target.value = '';
   };
 
   // Send message
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedTeacher || !currentUser) return;
+    if (!activeChat || !currentUser) return;
     if (!inputText.trim() && !attachedFile) return;
 
     setIsSending(true);
     const now = Date.now();
-    const convId = getConversationId(currentUser.uid, selectedTeacher.uid);
+    const expiresAt = now + ttlMs;
+
+    // Stop typing state immediately
+    if (isTypingFlagRef.current) {
+      isTypingFlagRef.current = false;
+      const typingDocRef = doc(db, 'teacher_typing', `${activeChat.id}_${currentUser.uid}`);
+      setDoc(typingDocRef, { isTyping: false, timestamp: now }, { merge: true }).catch(() => {});
+    }
 
     const newMsg: Omit<TeacherMessage, 'id'> = {
-      conversationId: convId,
+      conversationId: activeChat.id,
       senderUid: currentUser.uid,
       senderName: currentUser.name || 'Docente',
       senderEmail: currentUser.email || '',
-      receiverUid: selectedTeacher.uid,
-      receiverName: selectedTeacher.name || 'Docente',
-      receiverEmail: selectedTeacher.email || '',
+      participantUids: activeChat.participantUids,
       text: inputText.trim(),
       createdAt: now,
-      expiresAt: now + SIX_HOURS_MS, // 6 hours expiration
+      expiresAt: expiresAt,
       read: false
     };
+
+    if (!activeChat.isGroup && activeChat.partner) {
+      newMsg.receiverUid = activeChat.partner.uid;
+      newMsg.receiverName = activeChat.partner.name || 'Docente';
+      newMsg.receiverEmail = activeChat.partner.email || '';
+    }
 
     if (attachedFile) {
       newMsg.fileData = attachedFile.data;
@@ -440,62 +751,43 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     try {
       await addDoc(collection(db, 'teacher_messages'), newMsg);
 
-      // Despachar notificación exclusiva para el destinatario en la app y barra de notificaciones (SIN CORREO)
+      // If group, update group conversation document
+      if (activeChat.isGroup) {
+        await updateDoc(doc(db, 'teacher_conversations', activeChat.id), {
+          lastMessageText: newMsg.text || (newMsg.fileType === 'image' ? '📷 Foto' : '📎 Archivo'),
+          lastMessageSenderName: currentUser.name || 'Docente',
+          lastMessageAt: now,
+          updatedAt: now
+        }).catch(() => {});
+      }
+
+      // Notify all other participants (SIN CORREO ELECTRÓNICO)
+      const otherRecipients = activeChat.participantUids.filter(uid => uid !== currentUser.uid);
       const preview = newMsg.text
         ? (newMsg.text.length > 100 ? newMsg.text.substring(0, 100) + '...' : newMsg.text)
         : (newMsg.fileType === 'image' ? '📷 Foto adjunta' : '📎 Archivo adjunto');
 
-      const notifTitle = `💬 Mensaje de ${currentUser.name || 'Docente'}`;
+      const notifTitle = activeChat.isGroup
+        ? `💬 ${activeChat.name} (${currentUser.name || 'Docente'})`
+        : `💬 Mensaje de ${currentUser.name || 'Docente'}`;
 
-      if (sendNotification && selectedTeacher) {
-        const targets = [selectedTeacher.uid];
-        if (selectedTeacher.email && selectedTeacher.email.toLowerCase() !== selectedTeacher.uid.toLowerCase()) {
-          targets.push(selectedTeacher.email);
-        }
-
+      if (sendNotification && otherRecipients.length > 0) {
         await sendNotification(
-          targets,
+          otherRecipients,
           notifTitle,
           preview,
           '',
-          true, // skipAdmins: true (no se envía a administradores/directores)
+          true, // skipAdmins: true
           {
-            skipEmail: true, // REGLA OBLIGATORIA: Jamás enviar correo por mensajes de chat
+            skipEmail: true, // OBLIGATORIO: Jamás enviar correo
             type: 'teacher_chat',
             chatPartnerUid: currentUser.uid,
             chatPartnerName: currentUser.name || 'Docente',
             chatPartnerEmail: currentUser.email || '',
-            conversationId: convId,
-            creatorUid: currentUser.uid,
-            creatorEmail: currentUser.email || '',
+            conversationId: activeChat.id,
             isCreationNotification: false
           }
         );
-      } else if (selectedTeacher) {
-        // Fallback de guardado directo en la colección de notificaciones si sendNotification no está montado
-        const targets = [selectedTeacher.uid];
-        if (selectedTeacher.email && selectedTeacher.email.toLowerCase() !== selectedTeacher.uid.toLowerCase()) {
-          targets.push(selectedTeacher.email);
-        }
-        for (const tid of targets) {
-          await addDoc(collection(db, 'notifications'), {
-            title: notifTitle,
-            message: preview,
-            incidentId: '',
-            createdAt: now,
-            read: false,
-            userId: tid,
-            skipEmail: true, // Sin correo
-            type: 'teacher_chat',
-            chatPartnerUid: currentUser.uid,
-            chatPartnerName: currentUser.name || 'Docente',
-            chatPartnerEmail: currentUser.email || '',
-            creatorUid: currentUser.uid,
-            creatorEmail: currentUser.email || '',
-            conversationId: convId,
-            isCreationNotification: false
-          });
-        }
       }
 
       setInputText('');
@@ -510,7 +802,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
 
   // Helper to format remaining time
   const getRemainingTime = (createdAt: number, expiresAt?: number) => {
-    const expireTime = expiresAt || (createdAt + SIX_HOURS_MS);
+    const expireTime = expiresAt || (createdAt + ttlMs);
     const diffMs = expireTime - Date.now();
     if (diffMs <= 0) return 'Expirando...';
     const hours = Math.floor(diffMs / (3600 * 1000));
@@ -519,21 +811,190 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     return `${mins}m`;
   };
 
-  // If user is not teacher, do not mount trigger or chat
-  if (!isTeacher) return null;
+  // 5. CREATE A NEW GROUP CHAT
+  const handleCreateGroup = async () => {
+    if (selectedGroupMemberUids.length === 0) {
+      alert('Selecciona al menos un docente para crear el grupo.');
+      return;
+    }
 
-  const currentTheme = THEME_CONFIGS[theme];
+    const participants = [currentUser.uid, ...selectedGroupMemberUids];
+    const pNames: Record<string, string> = {
+      [currentUser.uid]: currentUser.name || 'Docente'
+    };
+    const pEmails: Record<string, string> = {
+      [currentUser.uid]: currentUser.email || ''
+    };
+
+    selectedGroupMemberUids.forEach(uid => {
+      const teacher = allUsers.find(u => u.uid === uid);
+      if (teacher) {
+        pNames[uid] = teacher.name || 'Docente';
+        pEmails[uid] = teacher.email || '';
+      }
+    });
+
+    const defaultName = newGroupName.trim() || `Grupo: ${Object.values(pNames).slice(0, 3).join(', ')}`;
+    const now = Date.now();
+    const groupId = `group_${now}_${currentUser.uid.substring(0, 6)}`;
+
+    const newGroupData: TeacherConversation = {
+      id: groupId,
+      isGroup: true,
+      name: defaultName,
+      participantUids: participants,
+      participantNames: pNames,
+      participantEmails: pEmails,
+      createdByUid: currentUser.uid,
+      createdAt: now,
+      updatedAt: now,
+      lastMessageText: 'Grupo creado',
+      lastMessageSenderName: currentUser.name || 'Docente',
+      lastMessageAt: now
+    };
+
+    try {
+      await setDoc(doc(db, 'teacher_conversations', groupId), newGroupData);
+
+      // Add initial system message
+      await addDoc(collection(db, 'teacher_messages'), {
+        conversationId: groupId,
+        senderUid: currentUser.uid,
+        senderName: currentUser.name || 'Docente',
+        senderEmail: currentUser.email || '',
+        participantUids: participants,
+        isSystem: true,
+        text: `✨ ${currentUser.name || 'Docente'} creó el grupo "${defaultName}" con ${participants.length} participantes.`,
+        createdAt: now,
+        expiresAt: now + ttlMs,
+        read: false
+      });
+
+      // Open newly created group
+      openGroupChat(newGroupData);
+      setShowCreateGroupModal(false);
+      setNewGroupName('');
+      setSelectedGroupMemberUids([]);
+    } catch (err) {
+      console.error('Error creating group:', err);
+      alert('No se pudo crear el grupo.');
+    }
+  };
+
+  // 6. ADD PARTICIPANTS TO ACTIVE CHAT (Converts 1-to-1 to group or adds to group)
+  const handleAddParticipantsToChat = async () => {
+    if (!activeChat || selectedGroupMemberUids.length === 0) return;
+
+    const newMembers = selectedGroupMemberUids.filter(uid => !activeChat.participantUids.includes(uid));
+    if (newMembers.length === 0) {
+      setShowAddParticipantsModal(false);
+      return;
+    }
+
+    const updatedParticipantUids = [...activeChat.participantUids, ...newMembers];
+    const updatedNames = { ...activeChat.participantNames };
+    const updatedEmails = { ...(activeChat.participantEmails || {}) };
+
+    const addedNamesList: string[] = [];
+    newMembers.forEach(uid => {
+      const t = allUsers.find(u => u.uid === uid);
+      if (t) {
+        updatedNames[uid] = t.name || 'Docente';
+        updatedEmails[uid] = t.email || '';
+        addedNamesList.push(t.name || 'Docente');
+      }
+    });
+
+    const now = Date.now();
+
+    try {
+      if (activeChat.isGroup) {
+        // Update existing group
+        await updateDoc(doc(db, 'teacher_conversations', activeChat.id), {
+          participantUids: updatedParticipantUids,
+          participantNames: updatedNames,
+          participantEmails: updatedEmails,
+          updatedAt: now
+        });
+
+        // Add system message
+        await addDoc(collection(db, 'teacher_messages'), {
+          conversationId: activeChat.id,
+          senderUid: currentUser.uid,
+          senderName: currentUser.name || 'Docente',
+          senderEmail: currentUser.email || '',
+          participantUids: updatedParticipantUids,
+          isSystem: true,
+          text: `👥 ${currentUser.name || 'Docente'} agregó a ${addedNamesList.join(', ')} al grupo.`,
+          createdAt: now,
+          expiresAt: now + ttlMs,
+          read: false
+        });
+
+        setActiveChat(prev => prev ? {
+          ...prev,
+          participantUids: updatedParticipantUids,
+          participantNames: updatedNames,
+          participantEmails: updatedEmails
+        } : null);
+      } else {
+        // Upgrade 1-to-1 conversation to a group conversation
+        const groupName = newGroupName.trim() || `Grupo con ${Object.values(updatedNames).slice(0, 3).join(', ')}`;
+        const newGroupId = `group_${now}_${currentUser.uid.substring(0, 6)}`;
+
+        const newGroupDoc: TeacherConversation = {
+          id: newGroupId,
+          isGroup: true,
+          name: groupName,
+          participantUids: updatedParticipantUids,
+          participantNames: updatedNames,
+          participantEmails: updatedEmails,
+          createdByUid: currentUser.uid,
+          createdAt: now,
+          updatedAt: now,
+          lastMessageText: 'Grupo iniciado',
+          lastMessageSenderName: currentUser.name || 'Docente',
+          lastMessageAt: now
+        };
+
+        await setDoc(doc(db, 'teacher_conversations', newGroupId), newGroupDoc);
+
+        // Add system announcement message
+        await addDoc(collection(db, 'teacher_messages'), {
+          conversationId: newGroupId,
+          senderUid: currentUser.uid,
+          senderName: currentUser.name || 'Docente',
+          senderEmail: currentUser.email || '',
+          participantUids: updatedParticipantUids,
+          isSystem: true,
+          text: `👥 Conversación ampliada: ${currentUser.name || 'Docente'} agregó a ${addedNamesList.join(', ')}.`,
+          createdAt: now,
+          expiresAt: now + ttlMs,
+          read: false
+        });
+
+        openGroupChat(newGroupDoc);
+      }
+
+      setShowAddParticipantsModal(false);
+      setSelectedGroupMemberUids([]);
+      setNewGroupName('');
+    } catch (e) {
+      console.error('Error adding participants:', e);
+      alert('Error al agregar participantes.');
+    }
+  };
+
+  if (!isTeacher) return null;
 
   return (
     <>
       {/* 4 SECRET CORNER TRIGGER ZONES (Only for teachers) */}
       {!isOpen && (
         <>
-          {/* Top-Right Corner (Step 1) */}
           <div
             id="secret-corner-top-right"
             onClick={() => handleCornerClick('top-right')}
-            title=""
             className="fixed top-0 right-0 w-16 h-16 sm:w-20 sm:h-20 z-[99999] cursor-pointer pointer-events-auto select-none"
           >
             {tapFeedback === 'top-right' && (
@@ -541,11 +1002,9 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             )}
           </div>
 
-          {/* Top-Left Corner */}
           <div
             id="secret-corner-top-left"
             onClick={() => handleCornerClick('top-left')}
-            title=""
             className="fixed top-0 left-0 w-16 h-16 sm:w-20 sm:h-20 z-[99999] cursor-pointer pointer-events-auto select-none"
           >
             {tapFeedback === 'top-left' && (
@@ -553,11 +1012,9 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             )}
           </div>
 
-          {/* Bottom-Right Corner */}
           <div
             id="secret-corner-bottom-right"
             onClick={() => handleCornerClick('bottom-right')}
-            title=""
             className="fixed bottom-0 right-0 w-16 h-16 sm:w-20 sm:h-20 z-[99999] cursor-pointer pointer-events-auto select-none"
           >
             {tapFeedback === 'bottom-right' && (
@@ -565,11 +1022,9 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             )}
           </div>
 
-          {/* Bottom-Left Corner (Final Step) */}
           <div
             id="secret-corner-bottom-left"
             onClick={() => handleCornerClick('bottom-left')}
-            title=""
             className="fixed bottom-0 left-0 w-16 h-16 sm:w-20 sm:h-20 z-[99999] cursor-pointer pointer-events-auto select-none"
           >
             {tapFeedback === 'bottom-left' && (
@@ -588,85 +1043,136 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             currentTheme.containerBg,
             currentTheme.border,
             isMinimized 
-              ? "bottom-4 right-4 w-72 h-14" 
-              : "bottom-4 right-4 w-[95vw] sm:w-[460px] md:w-[500px] h-[600px] max-h-[88vh]"
+              ? cn(
+                  "bottom-4 right-4 w-80 h-14 cursor-pointer hover:scale-102",
+                  hasNewMessagePulse ? "ring-2 ring-emerald-400 dark:ring-emerald-500 animate-pulse" : ""
+                )
+              : "bottom-4 right-4 w-[95vw] sm:w-[480px] md:w-[520px] h-[640px] max-h-[88vh]"
           )}
+          onClick={() => {
+            if (isMinimized) {
+              setIsMinimized(false);
+              setHasNewMessagePulse(false);
+              setUnreadCount(0);
+            }
+          }}
         >
           {/* HEADER */}
           <div className={cn("px-4 py-3 flex items-center justify-between select-none", currentTheme.headerBg)}>
             <div className="flex items-center gap-2 min-w-0">
-              {selectedTeacher && !isMinimized && (
+              {activeChat && !isMinimized && (
                 <button
-                  onClick={() => setSelectedTeacher(null)}
-                  className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                  onClick={() => setActiveChat(null)}
+                  className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
                   title="Volver a contactos"
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
               )}
               
-              <div className="p-1.5 rounded-lg bg-white/10 text-white shadow-inner">
-                <Lock className="w-4 h-4 text-emerald-400" />
+              <div className="p-1.5 rounded-lg bg-white/10 text-white shadow-inner shrink-0">
+                {activeChat?.isGroup ? (
+                  <Users className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Lock className="w-4 h-4 text-emerald-400" />
+                )}
               </div>
 
               <div className="truncate">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-sm tracking-wide truncate text-white">
-                    {selectedTeacher ? selectedTeacher.name : 'Canal Docente Cifrado'}
+                    {isMinimized && unreadCount > 0 && lastUnreadSender
+                      ? `💬 ${lastUnreadSender}`
+                      : activeChat ? activeChat.name : 'Canal Docente Cifrado'}
                   </span>
-                  <span className={cn("text-[10px] font-black uppercase px-2 py-0.5 rounded-full border", currentTheme.badge)}>
-                    6 Horas TTL
-                  </span>
+                  
+                  {/* Minimized new message indicator badge */}
+                  {isMinimized && unreadCount > 0 ? (
+                    <span className="px-2 py-0.5 rounded-full bg-red-500 text-white font-black text-[10px] animate-bounce flex items-center gap-1 shadow-md shrink-0">
+                      <BellRing className="w-3 h-3" />
+                      {unreadCount} nuevo{unreadCount > 1 ? 's' : ''}
+                    </span>
+                  ) : (
+                    <span className={cn("text-[10px] font-black uppercase px-2 py-0.5 rounded-full border shrink-0", currentTheme.badge)}>
+                      {effectiveTtlHours}h TTL
+                    </span>
+                  )}
                 </div>
+
                 {!isMinimized && (
                   <p className="text-[11px] text-slate-400 truncate">
-                    {selectedTeacher 
-                      ? `${selectedTeacher.email} • ${getUserEducationLevel(selectedTeacher) || 'Docente'}`
-                      : 'Chat privado exclusivo para docentes'}
+                    {activeChat 
+                      ? (activeChat.isGroup
+                          ? `${activeChat.participantUids.length} participantes • Cifrado docente`
+                          : `${activeChat.partner?.email || ''} • ${getUserEducationLevel(activeChat.partner) || 'Docente'}`)
+                      : 'Chat privado y en tiempo real exclusivo para docentes'}
                   </p>
                 )}
               </div>
             </div>
 
-            {/* Actions: Theme picker, minimize, close */}
-            <div className="flex items-center gap-1 shrink-0">
-              {/* Theme Menu Toggle */}
-              <div className="relative">
+            {/* Actions: Theme picker, group participants, minimize, close */}
+            <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+              {/* Add participants button (visible when inside a chat) */}
+              {activeChat && !isMinimized && (
                 <button
-                  onClick={() => setShowThemeMenu(!showThemeMenu)}
-                  title="Cambiar estilo de diseño"
-                  className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                  onClick={() => {
+                    setSelectedGroupMemberUids([]);
+                    setShowAddParticipantsModal(true);
+                  }}
+                  title="Agregar participantes a este chat"
+                  className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-emerald-300 transition-colors cursor-pointer flex items-center gap-1 text-xs"
                 >
-                  <Palette className="w-4 h-4" />
+                  <UserPlus className="w-4 h-4" />
                 </button>
+              )}
 
-                {showThemeMenu && (
-                  <div className="absolute right-0 top-10 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 text-xs">
-                    <p className="font-bold text-slate-300 px-2 py-1 mb-1 border-b border-slate-800">
-                      Opciones de Diseño
-                    </p>
-                    {(Object.keys(THEME_CONFIGS) as ChatTheme[]).map((themeKey) => (
-                      <button
-                        key={themeKey}
-                        onClick={() => handleSelectTheme(themeKey)}
-                        className={cn(
-                          "w-full text-left px-3 py-2 rounded-lg flex items-center justify-between transition-colors my-0.5",
-                          theme === themeKey ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"
-                        )}
-                      >
-                        <span>{THEME_CONFIGS[themeKey].name}</span>
-                        {theme === themeKey && <Check className="w-3.5 h-3.5" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {/* Theme Menu Toggle */}
+              {!isMinimized && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowThemeMenu(!showThemeMenu)}
+                    title="Cambiar estilo de diseño"
+                    className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <Palette className="w-4 h-4" />
+                  </button>
+
+                  {showThemeMenu && (
+                    <div className="absolute right-0 top-10 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-50 text-xs">
+                      <p className="font-bold text-slate-300 px-2 py-1 mb-1 border-b border-slate-800">
+                        Opciones de Diseño
+                      </p>
+                      {(Object.keys(THEME_CONFIGS) as ChatTheme[]).map((themeKey) => (
+                        <button
+                          key={themeKey}
+                          onClick={() => handleSelectTheme(themeKey)}
+                          className={cn(
+                            "w-full text-left px-3 py-2 rounded-lg flex items-center justify-between transition-colors my-0.5 cursor-pointer",
+                            theme === themeKey ? "bg-indigo-600 text-white font-bold" : "text-slate-300 hover:bg-slate-800"
+                          )}
+                        >
+                          <span>{THEME_CONFIGS[themeKey].name}</span>
+                          {theme === themeKey && <Check className="w-3.5 h-3.5" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Minimize / Maximize */}
               <button
-                onClick={() => setIsMinimized(!isMinimized)}
-                title={isMinimized ? "Maximizar" : "Minimizar"}
-                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                onClick={() => {
+                  const next = !isMinimized;
+                  setIsMinimized(next);
+                  if (!next) {
+                    setHasNewMessagePulse(false);
+                    setUnreadCount(0);
+                  }
+                }}
+                title={isMinimized ? "Maximizar chat" : "Minimizar"}
+                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
               >
                 {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
               </button>
@@ -675,7 +1181,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
               <button
                 onClick={handleCloseChat}
                 title="Cerrar (se requiere pulsar las 4 esquinas para volver a abrir)"
-                className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-colors"
+                className="p-1.5 rounded-lg hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -685,97 +1191,212 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
           {/* CHAT BODY (Hidden if minimized) */}
           {!isMinimized && (
             <div className="flex-1 flex flex-col min-h-0">
-              {/* VIEW 1: CONTACT LIST */}
-              {!selectedTeacher ? (
+              {/* VIEW 1: CONTACTS & GROUPS LIST */}
+              {!activeChat ? (
                 <div className={cn("flex-1 flex flex-col min-h-0", currentTheme.sidebarBg)}>
-                  {/* Search bar */}
-                  <div className="p-3 border-b border-white/10">
-                    <div className="relative">
-                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="Buscar docente o nivel educativo..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
+                  {/* Search and Tab Bar */}
+                  <div className="p-3 border-b border-white/10 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Buscar docente o nivel..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className={cn(
+                            "w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border outline-none transition-all",
+                            currentTheme.inputBg
+                          )}
+                        />
+                      </div>
+
+                      {/* New Group Button */}
+                      <button
+                        onClick={() => {
+                          setSelectedGroupMemberUids([]);
+                          setNewGroupName('');
+                          setShowCreateGroupModal(true);
+                        }}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1 shadow-sm shrink-0 cursor-pointer"
+                        title="Crear chat grupal con varios docentes"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Grupo</span>
+                      </button>
+                    </div>
+
+                    {/* Tabs: Contactos vs Grupos */}
+                    <div className="flex items-center gap-1 bg-black/20 p-1 rounded-xl">
+                      <button
+                        onClick={() => setActiveTab('contacts')}
                         className={cn(
-                          "w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border outline-none transition-all",
-                          currentTheme.inputBg
+                          "flex-1 py-1 text-xs font-bold rounded-lg transition-all text-center cursor-pointer",
+                          activeTab === 'contacts' ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
                         )}
-                      />
+                      >
+                        Directos ({teacherContacts.length})
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('groups')}
+                        className={cn(
+                          "flex-1 py-1 text-xs font-bold rounded-lg transition-all text-center cursor-pointer",
+                          activeTab === 'groups' ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                        )}
+                      >
+                        Grupos ({groups.length})
+                      </button>
                     </div>
                   </div>
 
+                  {/* Native notifications permission banner if default */}
+                  {notificationPermission !== 'granted' && (
+                    <div className="mx-3 mt-2 p-2 rounded-xl bg-amber-950/40 border border-amber-500/30 flex items-center justify-between gap-2 text-[11px] text-amber-200">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <BellRing className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span className="truncate">Activar alertas en barra de celular/PC</span>
+                      </div>
+                      <button
+                        onClick={handleRequestNotifications}
+                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10px] font-bold shrink-0 cursor-pointer shadow-sm"
+                      >
+                        Activar
+                      </button>
+                    </div>
+                  )}
+
                   {/* Notice banner */}
-                  <div className="mx-3 mt-2.5 p-2.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 flex items-start gap-2 text-[11px] text-indigo-200">
-                    <Clock className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                  <div className="mx-3 mt-2 p-2 rounded-xl bg-indigo-950/40 border border-indigo-500/30 flex items-start gap-2 text-[11px] text-indigo-200">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
                     <span>
-                      <strong>Chat Efímero:</strong> Los mensajes, fotos y archivos compartidos se purgan automáticamente tras 6 horas.
+                      <strong>Chat Efímero:</strong> Mensajes y archivos se autodestruyen tras {effectiveTtlHours} horas.
                     </span>
                   </div>
 
-                  {/* Contacts List */}
+                  {/* List Body */}
                   <div className="flex-1 overflow-y-auto p-3 space-y-1.5 divide-y divide-white/5">
-                    {filteredContacts.length === 0 ? (
-                      <div className="text-center py-10 px-4 text-slate-400">
-                        <UserIcon className="w-10 h-10 mx-auto text-slate-600 mb-2 opacity-50" />
-                        <p className="text-xs font-medium">No se encontraron docentes activos.</p>
-                        <p className="text-[10px] text-slate-500 mt-1">Solo se muestran usuarios con el rol de Docente dados de alta.</p>
-                      </div>
+                    {activeTab === 'contacts' ? (
+                      filteredContacts.length === 0 ? (
+                        <div className="text-center py-10 px-4 text-slate-400">
+                          <UserIcon className="w-10 h-10 mx-auto text-slate-600 mb-2 opacity-50" />
+                          <p className="text-xs font-medium">No se encontraron docentes activos.</p>
+                        </div>
+                      ) : (
+                        filteredContacts.map(teacher => {
+                          const level = getUserEducationLevel(teacher);
+                          return (
+                            <div
+                              key={teacher.uid || teacher.email}
+                              onClick={() => openDirectChat(teacher)}
+                              className="pt-1.5 first:pt-0"
+                            >
+                              <button
+                                className="w-full p-2.5 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all text-left group cursor-pointer"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0">
+                                    {teacher.name ? teacher.name.charAt(0).toUpperCase() : 'D'}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <h4 className="text-xs font-bold text-white truncate group-hover:text-indigo-300 transition-colors">
+                                        {teacher.name}
+                                      </h4>
+                                      {level && (
+                                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10 shrink-0">
+                                          {level}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 truncate">
+                                      {teacher.email}
+                                    </p>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-semibold text-indigo-400 group-hover:translate-x-0.5 transition-transform">
+                                  Chatear →
+                                </span>
+                              </button>
+                            </div>
+                          );
+                        })
+                      )
                     ) : (
-                      filteredContacts.map(teacher => {
-                        const level = getUserEducationLevel(teacher);
-                        return (
+                      groups.length === 0 ? (
+                        <div className="text-center py-10 px-4 text-slate-400">
+                          <Users className="w-10 h-10 mx-auto text-slate-600 mb-2 opacity-50" />
+                          <p className="text-xs font-medium">No tienes grupos activos aún.</p>
+                          <button
+                            onClick={() => {
+                              setSelectedGroupMemberUids([]);
+                              setNewGroupName('');
+                              setShowCreateGroupModal(true);
+                            }}
+                            className="mt-3 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Crear primer grupo
+                          </button>
+                        </div>
+                      ) : (
+                        groups.map(grp => (
                           <div
-                            key={teacher.uid || teacher.email}
-                            onClick={() => setSelectedTeacher(teacher)}
+                            key={grp.id}
+                            onClick={() => openGroupChat(grp)}
                             className="pt-1.5 first:pt-0"
                           >
                             <button
-                              className="w-full p-2.5 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all text-left group"
+                              className="w-full p-2.5 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all text-left group cursor-pointer"
                             >
                               <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0">
-                                  {teacher.name ? teacher.name.charAt(0).toUpperCase() : 'D'}
+                                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-600 text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0">
+                                  <Users className="w-4 h-4" />
                                 </div>
                                 <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <h4 className="text-xs font-bold text-white truncate group-hover:text-indigo-300 transition-colors">
-                                      {teacher.name}
-                                    </h4>
-                                    {level && (
-                                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10 shrink-0">
-                                        {level}
-                                      </span>
-                                    )}
-                                  </div>
+                                  <h4 className="text-xs font-bold text-white truncate group-hover:text-emerald-300 transition-colors">
+                                    {grp.name}
+                                  </h4>
                                   <p className="text-[11px] text-slate-400 truncate">
-                                    {teacher.email}
+                                    {grp.lastMessageText || `${grp.participantUids.length} participantes`}
                                   </p>
                                 </div>
                               </div>
-                              <span className="text-[10px] font-semibold text-indigo-400 group-hover:translate-x-0.5 transition-transform">
-                                Chatear →
+                              <span className="text-[10px] font-semibold text-emerald-400 group-hover:translate-x-0.5 transition-transform">
+                                Abrir →
                               </span>
                             </button>
                           </div>
-                        );
-                      })
+                        ))
+                      )
                     )}
                   </div>
                 </div>
               ) : (
-                /* VIEW 2: ACTIVE CONVERSATION POPUP */
+                /* VIEW 2: ACTIVE CONVERSATION (1-on-1 or Group) */
                 <div className={cn("flex-1 flex flex-col min-h-0", currentTheme.chatAreaBg)}>
-                  {/* Ephemeral Notice Header */}
+                  {/* Status header with participants and TTL */}
                   <div className="px-3 py-1.5 bg-black/30 border-b border-white/5 flex items-center justify-between text-[10px] text-slate-400">
                     <span className="flex items-center gap-1.5">
                       <Clock className="w-3 h-3 text-amber-400" />
-                      Mensajes auto-destructibles a las 6 horas
+                      Auto-destrucción a las {effectiveTtlHours}h
                     </span>
-                    <span className="text-emerald-400 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                      Encriptado docente
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-emerald-400 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
+                        Tiempo real
+                      </span>
+                      {activeChat.isGroup && (
+                        <button
+                          onClick={() => {
+                            setSelectedGroupMemberUids([]);
+                            setShowAddParticipantsModal(true);
+                          }}
+                          className="hover:text-white underline cursor-pointer text-[10px]"
+                        >
+                          {activeChat.participantUids.length} miembros
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Messages Area */}
@@ -785,7 +1406,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                         <Lock className="w-8 h-8 mx-auto text-slate-600 mb-2 opacity-60" />
                         <p className="text-xs font-bold text-slate-300">Conversación Cifrada y Efímera</p>
                         <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
-                          Inicia el chat con {selectedTeacher.name}. Los mensajes, archivos e imágenes se eliminarán automáticamente a las 6 horas.
+                          Inicia el chat en tiempo real. Los mensajes, archivos e imágenes se eliminarán automáticamente a las {effectiveTtlHours} horas.
                         </p>
                       </div>
                     ) : (
@@ -793,11 +1414,28 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                         const isMine = msg.senderUid === currentUser.uid;
                         const remaining = getRemainingTime(msg.createdAt, msg.expiresAt);
 
+                        if (msg.isSystem) {
+                          return (
+                            <div key={msg.id} className="flex justify-center my-1">
+                              <span className="px-3 py-1 rounded-full bg-black/40 text-slate-300 text-[10px] border border-white/10 font-medium">
+                                {msg.text}
+                              </span>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div
                             key={msg.id}
                             className={cn("flex flex-col", isMine ? "items-end" : "items-start")}
                           >
+                            {/* In group chat, show sender name above incoming bubbles */}
+                            {activeChat.isGroup && !isMine && (
+                              <span className="text-[10px] font-bold text-emerald-400 mb-0.5 ml-1">
+                                {msg.senderName}
+                              </span>
+                            )}
+
                             <div
                               className={cn(
                                 "max-w-[85%] rounded-2xl p-3 text-xs shadow-md transition-all",
@@ -817,7 +1455,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                                 </div>
                               )}
 
-                              {/* Attached File/Document */}
+                              {/* Attached File */}
                               {msg.fileType === 'file' && msg.fileData && (
                                 <a
                                   href={msg.fileData}
@@ -864,6 +1502,20 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                     <div ref={messagesEndRef} />
                   </div>
 
+                  {/* Real-time typing indicator */}
+                  {typingUsers.length > 0 && (
+                    <div className="px-4 py-1.5 text-[11px] text-emerald-400 flex items-center gap-2 animate-pulse bg-black/30 border-t border-white/5">
+                      <span className="flex gap-1 items-center">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:-0.3s]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:-0.15s]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" />
+                      </span>
+                      <span className="truncate font-medium">
+                        {typingUsers.join(', ')} {typingUsers.length > 1 ? 'están escribiendo...' : 'está escribiendo...'}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Attached file preview before sending */}
                   {attachedFile && (
                     <div className="px-3 py-2 bg-slate-900/90 border-t border-white/10 flex items-center justify-between text-xs text-white">
@@ -880,7 +1532,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                       </div>
                       <button
                         onClick={() => setAttachedFile(null)}
-                        className="p-1 text-slate-400 hover:text-red-400"
+                        className="p-1 text-slate-400 hover:text-red-400 cursor-pointer"
                         title="Quitar adjunto"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -893,7 +1545,6 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                     onSubmit={handleSendMessage}
                     className="p-3 border-t border-white/10 bg-black/40 flex items-center gap-2"
                   >
-                    {/* Image Attachment input */}
                     <input
                       ref={imageInputRef}
                       type="file"
@@ -905,12 +1556,11 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                       type="button"
                       onClick={() => imageInputRef.current?.click()}
                       title="Compartir imagen"
-                      className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+                      className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
                     >
                       <ImageIcon className="w-4 h-4" />
                     </button>
 
-                    {/* File Attachment input */}
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -921,29 +1571,27 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      title="Compartir archivo o documento"
-                      className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+                      title="Compartir archivo"
+                      className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
                     >
                       <Paperclip className="w-4 h-4" />
                     </button>
 
-                    {/* Text input */}
                     <input
                       type="text"
                       placeholder="Escribe un mensaje cifrado..."
                       value={inputText}
-                      onChange={(e) => setInputText(e.target.value)}
+                      onChange={handleInputChange}
                       className={cn(
                         "flex-1 px-3 py-2 text-xs rounded-xl border outline-none transition-all",
                         currentTheme.inputBg
                       )}
                     />
 
-                    {/* Send Button */}
                     <button
                       type="submit"
                       disabled={isSending || (!inputText.trim() && !attachedFile)}
-                      className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0 shadow-md"
+                      className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0 shadow-md cursor-pointer"
                       title="Enviar mensaje"
                     >
                       <Send className="w-4 h-4" />
@@ -956,10 +1604,217 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
         </div>
       )}
 
+      {/* CREATE GROUP MODAL */}
+      {showCreateGroupModal && (
+        <div className="fixed inset-0 z-[100001] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Users className="w-4 h-4 text-emerald-400" />
+                Crear Nuevo Grupo de Docentes
+              </h3>
+              <button
+                onClick={() => setShowCreateGroupModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Nombre del grupo (opcional)
+              </label>
+              <input
+                type="text"
+                placeholder="Ej. Docentes Secundaria, Academia de Ciencias..."
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Selecciona los docentes participantes ({selectedGroupMemberUids.length} seleccionados)
+              </label>
+              <div className="relative mb-2">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Filtrar por nombre..."
+                  value={groupSearchQuery}
+                  onChange={(e) => setGroupSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-2.5 py-1.5 bg-slate-800/80 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 outline-none"
+                />
+              </div>
+
+              <div className="max-h-52 overflow-y-auto space-y-1 border border-slate-800 rounded-xl p-2 bg-slate-950/40">
+                {teacherContacts
+                  .filter(t => !groupSearchQuery.trim() || t.name?.toLowerCase().includes(groupSearchQuery.toLowerCase()))
+                  .map(t => {
+                    const isSelected = selectedGroupMemberUids.includes(t.uid);
+                    return (
+                      <label
+                        key={t.uid}
+                        className={cn(
+                          "flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-colors text-xs",
+                          isSelected ? "bg-indigo-600/30 text-white" : "hover:bg-slate-800 text-slate-300"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            if (isSelected) {
+                              setSelectedGroupMemberUids(prev => prev.filter(id => id !== t.uid));
+                            } else {
+                              setSelectedGroupMemberUids(prev => [...prev, t.uid]);
+                            }
+                          }}
+                          className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="font-medium truncate">{t.name}</span>
+                        <span className="text-[10px] text-slate-500 truncate ml-auto">{t.email}</span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowCreateGroupModal(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateGroup}
+                disabled={selectedGroupMemberUids.length === 0}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 shadow-sm cursor-pointer"
+              >
+                Crear Grupo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD PARTICIPANTS TO ACTIVE CHAT MODAL */}
+      {showAddParticipantsModal && activeChat && (
+        <div className="fixed inset-0 z-[100001] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <UserPlus className="w-4 h-4 text-emerald-400" />
+                Agregar Docentes al Chat
+              </h3>
+              <button
+                onClick={() => setShowAddParticipantsModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Current participants list */}
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                Participantes actuales ({activeChat.participantUids.length}):
+              </p>
+              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                {activeChat.participantUids.map(uid => (
+                  <span
+                    key={uid}
+                    className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-200 text-[10px] border border-slate-700 flex items-center gap-1"
+                  >
+                    <UserIcon className="w-3 h-3 text-slate-400" />
+                    {activeChat.participantNames[uid] || 'Docente'}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {!activeChat.isGroup && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Nombre para el grupo ampliado (opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej. Coordinación Académica..."
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Selecciona docentes adicionales para unir al chat:
+              </label>
+              <div className="max-h-48 overflow-y-auto space-y-1 border border-slate-800 rounded-xl p-2 bg-slate-950/40">
+                {teacherContacts
+                  .filter(t => !activeChat.participantUids.includes(t.uid))
+                  .map(t => {
+                    const isSelected = selectedGroupMemberUids.includes(t.uid);
+                    return (
+                      <label
+                        key={t.uid}
+                        className={cn(
+                          "flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-colors text-xs",
+                          isSelected ? "bg-emerald-600/30 text-white" : "hover:bg-slate-800 text-slate-300"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            if (isSelected) {
+                              setSelectedGroupMemberUids(prev => prev.filter(id => id !== t.uid));
+                            } else {
+                              setSelectedGroupMemberUids(prev => [...prev, t.uid]);
+                            }
+                          }}
+                          className="rounded border-slate-700 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="font-medium truncate">{t.name}</span>
+                        <span className="text-[10px] text-slate-500 truncate ml-auto">{t.email}</span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowAddParticipantsModal(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleAddParticipantsToChat}
+                disabled={selectedGroupMemberUids.length === 0}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-40 shadow-sm cursor-pointer"
+              >
+                Agregar al Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* FULLSCREEN IMAGE LIGHTBOX */}
       {zoomedImage && (
         <div 
-          className="fixed inset-0 z-[100000] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer"
+          className="fixed inset-0 z-[100002] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer"
           onClick={() => setZoomedImage(null)}
         >
           <div className="relative max-w-4xl max-h-[90vh]">
@@ -971,7 +1826,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             />
             <button
               onClick={() => setZoomedImage(null)}
-              className="absolute -top-10 right-0 text-white bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors"
+              className="absolute -top-10 right-0 text-white bg-white/10 hover:bg-white/20 p-2 rounded-full transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
