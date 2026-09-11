@@ -2184,6 +2184,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [selectedNotifications, setSelectedNotifications] = useState<string[]>([]);
   const [isNotifSelectionMode, setIsNotifSelectionMode] = useState(false);
   const [expandedIncidentId, setExpandedIncidentId] = useState<string | null>(null);
+  const recentAlertedKeysRef = useRef<Map<string, number>>(new Map());
+  const updatingIncidentStatusRef = useRef<Set<string>>(new Set());
+  const processedAutoTasksRef = useRef<Set<string>>(new Set());
   const [celebrationData, setCelebrationData] = useState<{
     notif: any;
     title: string;
@@ -2238,12 +2241,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [celebrationData]);
 
   const processNotificationClickAndDelete = async (notif: any) => {
-    if (notif && notif.id) {
-      setNotifications(prev => prev.filter(n => n.id !== notif.id));
-      try {
-        await deleteDoc(doc(db, 'notifications', notif.id));
-      } catch (err) {
-        console.error("Error deleting clicked notification:", err);
+    if (notif) {
+      const docIdsToDelete = new Set<string>();
+      if (notif.id) docIdsToDelete.add(notif.id);
+      if (Array.isArray(notif.allDocIds)) {
+        notif.allDocIds.forEach((dId: string) => { if (dId) docIdsToDelete.add(dId); });
+      }
+
+      setNotifications(prev => prev.filter(n => !docIdsToDelete.has(n.id)));
+      for (const dId of Array.from(docIdsToDelete)) {
+        try {
+          await deleteDoc(doc(db, 'notifications', dId));
+        } catch (err) {
+          console.error("Error deleting clicked notification:", err);
+        }
       }
     }
 
@@ -2700,6 +2711,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const determinedCreatorUid = extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification && profile?.uid ? profile.uid : '') || '';
     const determinedCreatorEmail = extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification && profile?.email ? profile.email : '') || '';
 
+    const derivedEventId = extraData?.eventId ||
+      `${(title || '').trim().toLowerCase()}_${(message || '').trim().toLowerCase()}_${incidentId || extraData?.referralId || extraData?.taskId || ''}_${Math.floor(Date.now() / 30000)}`;
+
     const notificationData: Record<string, any> = {
       title,
       message,
@@ -2707,6 +2721,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       read: false,
       createdAt: Date.now(),
       ...(extraData || {}),
+      eventId: derivedEventId,
       creatorUid: determinedCreatorUid,
       creatorEmail: determinedCreatorEmail,
       isCreationNotification: Boolean(extraData?.isCreationNotification)
@@ -2724,31 +2739,34 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (excludedIdsAndEmails.has(cleanLower)) return;
 
       const matched = allUsers.find(u =>
-        u.uid === clean ||
-        (u.email && u.email.toLowerCase() === cleanLower)
+        (u.uid && u.uid.trim() === clean) ||
+        (u.email && u.email.toLowerCase().trim() === cleanLower)
       );
 
       if (matched) {
-        const mUidLower = matched.uid ? matched.uid.toLowerCase().trim() : '';
-        const mEmailLower = matched.email ? matched.email.toLowerCase().trim() : '';
-        if (excludedIdsAndEmails.has(mUidLower) || excludedIdsAndEmails.has(mEmailLower)) {
+        const mUid = matched.uid ? matched.uid.trim() : '';
+        const mEmail = matched.email ? matched.email.toLowerCase().trim() : '';
+        if (
+          (mUid && excludedIdsAndEmails.has(mUid.toLowerCase())) ||
+          (mEmail && excludedIdsAndEmails.has(mEmail))
+        ) {
           return;
         }
 
-        const targetId = matched.uid || (matched.email ? matched.email.toLowerCase() : cleanLower);
+        const targetId = mUid || (mEmail ? mEmail : cleanLower);
         finalTargetUserIds.add(targetId);
-        if (matched.email && matched.email.includes('@')) {
-          targetEmails.add(matched.email.toLowerCase());
+        if (mEmail && mEmail.includes('@')) {
+          targetEmails.add(mEmail);
         }
       } else {
-        finalTargetUserIds.add(cleanLower);
+        finalTargetUserIds.add(clean.includes('@') ? cleanLower : clean);
         if (cleanLower.includes('@')) {
           targetEmails.add(cleanLower);
         }
       }
     };
 
-    // 1. Explicit target recipients (expanding roles & ALL broadcasts)
+    // 1. Explicit target recipients (expanding roles & ALL broadcasts to unique canonical user IDs)
     for (const raw of rawTargets) {
       if (!raw || typeof raw !== 'string' || !raw.trim()) continue;
       const clean = raw.trim();
@@ -2762,15 +2780,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (roleMatches.length > 0) {
         roleMatches.forEach(u => {
           if (u.uid) addTargetUser(u.uid);
-          if (u.email) addTargetUser(u.email);
+          else if (u.email) addTargetUser(u.email);
         });
-        finalTargetUserIds.add(cleanUpper.toLowerCase());
       } else if (cleanUpper === 'ALL') {
         allUsers.forEach(u => {
           if (u.uid) addTargetUser(u.uid);
-          if (u.email) addTargetUser(u.email);
+          else if (u.email) addTargetUser(u.email);
         });
-        finalTargetUserIds.add('all');
       } else {
         addTargetUser(clean);
       }
@@ -2781,17 +2797,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       SUPER_ADMIN_EMAILS.forEach(email => {
         const eLower = email.toLowerCase().trim();
         if (!excludedIdsAndEmails.has(eLower)) {
-          finalTargetUserIds.add(eLower);
+          addTargetUser(eLower);
         }
       });
       allUsers.filter(u => isSuperAdminEmail(u.email)).forEach(sa => {
-        const saUid = sa.uid ? sa.uid.toLowerCase().trim() : '';
-        const saEmail = sa.email ? sa.email.toLowerCase().trim() : '';
-        if (sa.uid && !excludedIdsAndEmails.has(saUid) && !excludedIdsAndEmails.has(saEmail)) {
-          finalTargetUserIds.add(sa.uid);
-        }
-        if (sa.email && !excludedIdsAndEmails.has(saEmail) && !excludedIdsAndEmails.has(saUid)) {
-          finalTargetUserIds.add(sa.email.toLowerCase().trim());
+        if (sa.uid) {
+          addTargetUser(sa.uid);
+        } else if (sa.email) {
+          addTargetUser(sa.email);
         }
       });
     }
@@ -2989,48 +3002,47 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (excludeSet.has(clean.toLowerCase())) return;
 
       const matched = allUsers.find(u =>
-        u.uid === clean ||
-        (u.email && u.email.toLowerCase() === clean.toLowerCase())
+        (u.uid && u.uid.trim() === clean) ||
+        (u.email && u.email.toLowerCase().trim() === clean.toLowerCase())
       );
 
       if (matched) {
-        const mUid = matched.uid ? matched.uid.toLowerCase().trim() : '';
+        const mUid = matched.uid ? matched.uid.trim() : '';
         const mEmail = matched.email ? matched.email.toLowerCase().trim() : '';
-        if (excludeSet.has(mUid) || excludeSet.has(mEmail)) {
+        if (
+          (mUid && excludeSet.has(mUid.toLowerCase())) ||
+          (mEmail && excludeSet.has(mEmail))
+        ) {
           return;
         }
-        if (matched.uid) {
-          targetUserIds.add(matched.uid);
-        }
-        if (matched.email) {
-          targetEmails.add(matched.email.toLowerCase());
+        const canonicalId = mUid || (mEmail ? mEmail : clean);
+        targetUserIds.add(canonicalId);
+        if (mEmail && mEmail.includes('@')) {
+          targetEmails.add(mEmail);
         }
       } else {
+        const canonicalId = clean.includes('@') ? clean.toLowerCase() : clean;
+        targetUserIds.add(canonicalId);
         if (clean.includes('@')) {
           targetEmails.add(clean.toLowerCase());
-          targetUserIds.add(clean.toLowerCase());
-        } else {
-          targetUserIds.add(clean);
         }
       }
     };
 
     // 1. Reporter (Docente que levanta el reporte) - Only if NOT a creation event
     if (!isCreation) {
-      addTarget(incident.reporterId);
-      addTarget(incident.reporterEmail);
+      addTarget(incident.reporterId || incident.reporterEmail);
     }
 
     // 2. Coordinators (ÚNICAMENTE los coordinadores asignados al reporte o al docente que levantó el reporte)
-    if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds)) {
+    if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds) && incident.coordinatorIds.length > 0) {
       incident.coordinatorIds.forEach(id => addTarget(id));
-    }
-    if (incident.coordinatorId) {
+    } else if (incident.coordinatorId) {
       addTarget(incident.coordinatorId);
-    }
-    if (incident.coordinatorEmail) {
+    } else if (incident.coordinatorEmail) {
       addTarget(incident.coordinatorEmail);
     }
+
     // Coordinador asignado específicamente en el perfil del docente que levantó el reporte
     const reportingTeacher = allUsers.find(u => 
       (incident.reporterId && u.uid === incident.reporterId) || 
@@ -3039,25 +3051,18 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (reportingTeacher) {
       if (reportingTeacher.assignedCoordinatorId) {
         addTarget(reportingTeacher.assignedCoordinatorId);
-      }
-      if (reportingTeacher.assignedCoordinatorEmail) {
+      } else if (reportingTeacher.assignedCoordinatorEmail) {
         addTarget(reportingTeacher.assignedCoordinatorEmail);
-      }
-      if (reportingTeacher.assignedCoordinatorName) {
-        const foundCoordByName = coordinators.find(c => c.name === reportingTeacher.assignedCoordinatorName);
-        if (foundCoordByName) {
-          addTarget(foundCoordByName.uid);
-          addTarget(foundCoordByName.email);
-        }
       }
     }
 
-    // 3. Notified Teacher (Docente en copia si aplica)
-    if (incident.notifiedTeacherId) {
-      addTarget(incident.notifiedTeacherId);
-    }
-    if (incident.notifiedTeacherEmail) {
-      addTarget(incident.notifiedTeacherEmail);
+    // 3. Notified Teacher (Docente en copia si aplica) - Omit on creation as they receive dedicated 'Copia de Incidencia'
+    if (!isCreation) {
+      if (incident.notifiedTeacherId) {
+        addTarget(incident.notifiedTeacherId);
+      } else if (incident.notifiedTeacherEmail) {
+        addTarget(incident.notifiedTeacherEmail);
+      }
     }
 
     // 4. Directives and Admins (Directivos y Administradores de la institución)
@@ -3065,8 +3070,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const nr = normalizeUserRole(u.role);
       return nr === 'DIRECTIVE' || nr === 'ADMIN' || isSuperAdminEmail(u.email);
     }).forEach(u => {
-      addTarget(u.uid);
-      addTarget(u.email);
+      addTarget(u.uid || u.email);
     });
 
     // Exclude SuperAdmin from routine incident email alerts ("solo notificaciones NO CORREOS, le lleguen al superadmin")
@@ -3090,9 +3094,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     const finalTargetIds = Array.from(targetUserIds);
 
-    // Send in-app notification in real-time (skipEmail: true since notifyIncidentInvolvedUsers handles the rich email below)
+    // Send in-app notification in real-time (skipAdmins: true because admins & directives are already in finalTargetIds)
     if (finalTargetIds.length > 0) {
-      await sendNotification(finalTargetIds, title, message, incident.id, false, {
+      await sendNotification(finalTargetIds, title, message, incident.id, true, {
         ...extraData,
         skipEmail: true,
         creatorUid: excludeUserId || profile?.uid || '',
@@ -3668,17 +3672,27 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         return false;
       };
 
-      // Clean deduplication and strictly exclude welcome, new user registration, and non-competent notifications
+      // Clean deduplication for all users: group by eventId / normalized event attributes
       const uniqueMap = new Map<string, any>();
       for (const d of rawDocs) {
         if (!d.id) continue;
         if (!checkIsNotificationRelevant(d)) continue;
 
-        const eventKey = isSuperAdmin
-          ? (d.eventId || `${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${Math.floor((d.createdAt || 0) / 10000)}`)
-          : d.id;
+        const normTitle = (d.title || '').trim().toLowerCase();
+        const normMessage = (d.message || '').trim().toLowerCase();
+        const refEntity = d.incidentId || d.referralId || d.taskId || d.chatPartnerUid || '';
+        const timeBucket = Math.floor((d.createdAt || 0) / 120000);
+
+        const eventKey = d.eventId || `${normTitle}_${normMessage}_${refEntity}_${timeBucket}`;
         if (!uniqueMap.has(eventKey)) {
-          uniqueMap.set(eventKey, d);
+          uniqueMap.set(eventKey, { ...d, allDocIds: [d.id] });
+        } else {
+          const existing = uniqueMap.get(eventKey);
+          if (!existing.allDocIds) existing.allDocIds = [existing.id];
+          if (!existing.allDocIds.includes(d.id)) existing.allDocIds.push(d.id);
+          if (d.read && !existing.read) {
+            existing.read = true;
+          }
         }
       }
 
@@ -3688,39 +3702,51 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       snapshot.docChanges().forEach((change) => {
         if (change.type === "added") {
           const data = change.doc.data();
-          // Trigger instant real-time audio and visual alert ONLY for relevant unread notifications
+          // Trigger instant real-time audio and visual alert ONLY once per unique event
           if (!isInitialLoad && !data.read && checkIsNotificationRelevant({ id: change.doc.id, ...data })) {
-            playNotificationSound();
+            const normTitle = (data.title || '').trim().toLowerCase();
+            const normMessage = (data.message || '').trim().toLowerCase();
+            const refEntity = data.incidentId || data.referralId || data.taskId || data.chatPartnerUid || '';
+            const timeBucket = Math.floor((data.createdAt || Date.now()) / 120000);
+            const alertEventKey = data.eventId || `${normTitle}_${normMessage}_${refEntity}_${timeBucket}`;
 
-            setLiveToast({
-              id: change.doc.id,
-              title: data.title || 'Nueva Notificación',
-              message: data.message || 'Tienes un nuevo aviso en la plataforma.',
-              timestamp: Date.now(),
-              incidentId: data.incidentId,
-              referralId: data.referralId,
-              taskId: data.taskId,
-              type: data.type,
-              chatPartnerUid: data.chatPartnerUid,
-              chatPartnerEmail: data.chatPartnerEmail
-            });
+            const now = Date.now();
+            const lastAlertTime = recentAlertedKeysRef.current.get(alertEventKey) || 0;
+            if (now - lastAlertTime > 25000) {
+              recentAlertedKeysRef.current.set(alertEventKey, now);
 
-            showSystemNotification(data.title || 'Aviso - DUNOR', {
-              body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
-              icon: '/logo_dunor.png',
-              badge: '/logo_dunor.png',
-              tag: change.doc.id,
-              data: {
+              playNotificationSound();
+
+              setLiveToast({
+                id: change.doc.id,
+                title: data.title || 'Nueva Notificación',
+                message: data.message || 'Tienes un nuevo aviso en la plataforma.',
+                timestamp: Date.now(),
                 incidentId: data.incidentId,
                 referralId: data.referralId,
                 taskId: data.taskId,
                 type: data.type,
                 chatPartnerUid: data.chatPartnerUid,
                 chatPartnerEmail: data.chatPartnerEmail
-              }
-            }).catch((e) => {
-              console.warn('Native system notification delivery error:', e);
-            });
+              });
+
+              showSystemNotification(data.title || 'Aviso - DUNOR', {
+                body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
+                icon: '/logo_dunor.png',
+                badge: '/logo_dunor.png',
+                tag: alertEventKey,
+                data: {
+                  incidentId: data.incidentId,
+                  referralId: data.referralId,
+                  taskId: data.taskId,
+                  type: data.type,
+                  chatPartnerUid: data.chatPartnerUid,
+                  chatPartnerEmail: data.chatPartnerEmail
+                }
+              }).catch((e) => {
+                console.warn('Native system notification delivery error:', e);
+              });
+            }
           }
         }
       });
@@ -3763,7 +3789,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
     tasks.forEach(async (task) => {
-      if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate) {
+      if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate && !task.autoCompleted) {
+        if (processedAutoTasksRef.current.has(task.id)) return;
+        processedAutoTasksRef.current.add(task.id);
         try {
           await updateDoc(doc(db, 'tasks', task.id), {
             status: 'COMPLETADA',
@@ -3782,7 +3810,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             await sendNotification(
               task.assignedToEmail,
               `✅ Tarea Completada Automáticamente: ${task.title}`,
-              `Tu tarea "${task.title}" estaba en estatus REALIZADA y al cumplirse su fecha límite (${task.dueDate}) ha pasado en automático a COMPLETADA.`
+              `Tu tarea "${task.title}" estaba en estatus REALIZADA y al cumplirse su fecha límite (${task.dueDate}) ha pasado en automático a COMPLETADA.`,
+              undefined,
+              true,
+              {
+                taskId: task.id,
+                eventId: `task_auto_completed_${task.id}`
+              }
             );
           }
         } catch (e) {
@@ -3816,9 +3850,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     return () => unsubscribe();
   }, [activeUser, profile]);
 
-  const markNotificationAsRead = async (id: string) => {
+  const markNotificationAsRead = async (id: string, allDocIds?: string[]) => {
     try {
-      await updateDoc(doc(db, 'notifications', id), { read: true });
+      const idsToMark = (allDocIds && allDocIds.length > 0) ? allDocIds : [id];
+      const batch = writeBatch(db);
+      idsToMark.forEach(docId => {
+        batch.update(doc(db, 'notifications', docId), { read: true });
+      });
+      await batch.commit();
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `notifications/${id}`);
     }
@@ -3827,9 +3866,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const markAllNotificationsAsRead = async () => {
     try {
       if (notifications.length === 0) return;
-      const batch = writeBatch(db);
+      const allIds = new Set<string>();
       notifications.forEach(n => {
-        batch.delete(doc(db, 'notifications', n.id));
+        if (n.id) allIds.add(n.id);
+        if (Array.isArray(n.allDocIds)) {
+          n.allDocIds.forEach((dId: string) => { if (dId) allIds.add(dId); });
+        }
+      });
+      const batch = writeBatch(db);
+      allIds.forEach(docId => {
+        batch.delete(doc(db, 'notifications', docId));
       });
       await batch.commit();
       setNotifications([]);
@@ -4386,7 +4432,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           emailSubject: `Reporte Recibido - ${incident.place}`,
           emailHeaderTitle: 'Reporte de Incidencia Recibido',
           actionDetails: `Confirmado por <strong>${profile.name}</strong> (Coordinación)`,
-          excludeUserId: profile.uid
+          excludeUserId: profile.uid,
+          extraData: {
+            eventId: `incident_received_${incidentId}`
+          }
         });
       }
     } catch (error) {
@@ -4396,6 +4445,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const updateIncidentStatus = async (incident: Incident, status: IncidentStatus) => {
     if (!can('canChangeStatus') && profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
+    if (incident.status === status) return;
+    if (updatingIncidentStatusRef.current.has(incident.id)) return;
+    updatingIncidentStatusRef.current.add(incident.id);
+
     try {
       await updateDoc(doc(db, 'incidents', incident.id), { status });
       await addLog(
@@ -4419,10 +4472,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         emailSubject: `Actualización de Estatus (${label}) - ${incident.place}`,
         emailHeaderTitle: 'Cambio de Estatus de Incidencia',
         actionDetails: `Nuevo Estatus: <strong>${label}</strong> | Modificado por <strong>${profile.name}</strong> (${profile.role === 'COORDINATOR' ? 'Coordinación' : 'Administrador'})`,
-        excludeUserId: profile.uid
+        excludeUserId: profile.uid,
+        extraData: {
+          eventId: `incident_status_${incident.id}_${status}`
+        }
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incident.id}`);
+    } finally {
+      setTimeout(() => {
+        updatingIncidentStatusRef.current.delete(incident.id);
+      }, 1500);
     }
   };
 
@@ -4725,8 +4785,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       message: `¿Estás seguro de eliminar ${selectedNotifications.length} notificaciones seleccionadas?`,
       onConfirm: async () => {
         try {
-          const batch = writeBatch(db);
+          const allIdsToDelete = new Set<string>();
           selectedNotifications.forEach(id => {
+            allIdsToDelete.add(id);
+            const foundNotif = notifications.find(n => n.id === id);
+            if (foundNotif?.allDocIds && Array.isArray(foundNotif.allDocIds)) {
+              foundNotif.allDocIds.forEach((dId: string) => { if (dId) allIdsToDelete.add(dId); });
+            }
+          });
+
+          const batch = writeBatch(db);
+          allIdsToDelete.forEach(id => {
             batch.delete(doc(db, 'notifications', id));
           });
           await batch.commit();
@@ -9108,40 +9177,7 @@ const TaskManager = ({
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
     tasks.forEach(async (task) => {
-      // 1. REQUISITO: Si una tarea ya está en estatus de realizada y se llega la fecha límite, esta pasa en automático a completada
-      if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate) {
-        try {
-          await updateDoc(doc(db, 'tasks', task.id), {
-            status: 'COMPLETADA',
-            completedAt: Date.now(),
-            autoCompleted: true,
-            autoCompletedReason: 'Fecha límite alcanzada en estatus REALIZADA'
-          });
-
-          await sendNotification(
-            task.assignedToEmail,
-            `✅ Tarea Completada Automáticamente: ${task.title}`,
-            `Tu tarea "${task.title}" (en estatus Realizada) alcanzó su fecha límite (${task.dueDate}) y ha pasado automáticamente a COMPLETADA.`
-          );
-
-          if (task.createdByEmail && task.createdByEmail.toLowerCase() !== task.assignedToEmail?.toLowerCase()) {
-            await sendNotification(
-              task.createdByEmail,
-              `✅ Tarea Completada Automáticamente: ${task.title}`,
-              `La tarea "${task.title}" asignada a ${task.assignedToName} estaba en estatus REALIZADA y al llegar su fecha límite (${task.dueDate}) pasó automáticamente a COMPLETADA.`
-            );
-          }
-
-          await addLog(
-            'Tarea Completada Automáticamente por Fecha Límite',
-            `La tarea "${task.title}" asignada a ${task.assignedToName} (${task.assignedToEmail}) estaba en estatus REALIZADA y al llegar su fecha límite (${task.dueDate}) pasó automáticamente a COMPLETADA.`,
-            { module: 'Tareas / Felicitaciones', recordId: task.id }
-          );
-        } catch (autoErr) {
-          console.warn("Auto-completion on deadline error in TaskManager:", autoErr);
-        }
-        return;
-      }
+      // Auto-completion of 'REALIZADA' on deadline is handled globally in App.tsx
 
       if (task.status !== 'COMPLETADA' && task.status !== 'REALIZADA' && task.dueDate) {
         const isDueOrOverdue = todayStr >= task.dueDate;
@@ -9161,7 +9197,17 @@ const TaskManager = ({
               ? `La tarea "${task.title}" con fecha límite ${task.dueDate} se encuentra INCUMPLIDA y requiere tu atención inmediata.`
               : `Hoy vence la fecha límite (${task.dueDate}) para la tarea "${task.title}". Por favor sube tu evidencia a la brevedad.`;
 
-            await sendNotification(task.assignedToEmail, subject, message);
+            await sendNotification(
+              task.assignedToEmail,
+              subject,
+              message,
+              undefined,
+              true,
+              {
+                taskId: task.id,
+                eventId: `task_reminder_${task.id}_${todayStr}`
+              }
+            );
 
             if (systemSettings.emailNotificationsEnabled && task.assignedToEmail) {
               try {

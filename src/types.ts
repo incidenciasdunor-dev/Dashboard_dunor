@@ -334,6 +334,8 @@ export interface Task {
   readAt?: number;
   overdueReminderSent?: boolean;
   lastReminderSentAt?: number;
+  autoCompleted?: boolean;
+  autoCompletedReason?: string;
 }
 
 export interface Incident {

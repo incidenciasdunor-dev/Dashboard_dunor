@@ -424,42 +424,57 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       // Note: The teacher/user who creates the referral is strictly excluded from receiving creation notifications and emails.
 
       // 1. Coordinador Asignado (ÚNICAMENTE al coordinador asignado al reporte/canalización)
-      if (selectedCoord?.uid) targetRecipients.push(selectedCoord.uid);
-      if (newRef.coordinatorEmail) {
+      if (selectedCoord?.uid) {
+        targetRecipients.push(selectedCoord.uid);
+      } else if (newRef.coordinatorEmail) {
         targetRecipients.push(newRef.coordinatorEmail.toLowerCase());
+      }
+      if (newRef.coordinatorEmail) {
         recipientEmails.add(newRef.coordinatorEmail.toLowerCase());
       }
 
       // 2. Assigned Psychologist
-      if (selectedPsych?.uid) targetRecipients.push(selectedPsych.uid);
-      if (newRef.psychologistEmail) {
+      if (selectedPsych?.uid) {
+        targetRecipients.push(selectedPsych.uid);
+      } else if (newRef.psychologistEmail) {
         targetRecipients.push(newRef.psychologistEmail.toLowerCase());
+      }
+      if (newRef.psychologistEmail) {
         recipientEmails.add(newRef.psychologistEmail.toLowerCase());
       }
 
       // 3. Directives
       directives.forEach(d => {
-        if (d.uid) targetRecipients.push(d.uid);
-        if (d.email) {
+        if (d.uid) {
+          targetRecipients.push(d.uid);
+        } else if (d.email) {
           targetRecipients.push(d.email.toLowerCase());
+        }
+        if (d.email) {
           recipientEmails.add(d.email.toLowerCase());
         }
       });
 
       // 4. Administrators
       admins.forEach(a => {
-        if (a.uid) targetRecipients.push(a.uid);
-        if (a.email) {
+        if (a.uid) {
+          targetRecipients.push(a.uid);
+        } else if (a.email) {
           targetRecipients.push(a.email.toLowerCase());
+        }
+        if (a.email) {
           recipientEmails.add(a.email.toLowerCase());
         }
       });
 
       // 5. Additional recipients (Copia a docente / directivo)
       formData.additionalRecipients.forEach(r => {
-        if (r.uid) targetRecipients.push(r.uid);
-        if (r.email) {
+        if (r.uid) {
+          targetRecipients.push(r.uid);
+        } else if (r.email) {
           targetRecipients.push(r.email.toLowerCase());
+        }
+        if (r.email) {
           recipientEmails.add(r.email.toLowerCase());
         }
       });
@@ -468,10 +483,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       const myUid = profile.uid ? profile.uid.toLowerCase().trim() : '';
       const myEmail = profile.email ? profile.email.toLowerCase().trim() : '';
 
-      const filteredRecipients = targetRecipients.filter(t => {
+      const filteredRecipients = Array.from(new Set(targetRecipients.filter(t => {
         const clean = t.toLowerCase().trim();
         return clean !== myUid && clean !== myEmail;
-      });
+      })));
 
       if (myEmail) recipientEmails.delete(myEmail);
       if (myUid) recipientEmails.delete(myUid);
@@ -482,10 +497,11 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           'Nueva Canalización Psicopedagógica',
           `Se ha registrado una canalización para el estudiante "${newRef.studentName}" (${newRef.gradeGroup}) por ${profile.name}.`,
           '',
-          false,
+          true, // skipAdmins = true since admins & directives were explicitly added above
           { 
             referralId: id, 
             type: 'referral',
+            eventId: `referral_create_${id}`,
             creatorUid: profile.uid,
             creatorEmail: profile.email,
             isCreationNotification: true,
@@ -625,7 +641,13 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
           notifMessage,
           ref.incidentId || '',
           false, // skipAdmins = false so directives & admins receive it too
-          { referralId: ref.id, type: 'referral', creatorUid: profile.uid, creatorEmail: profile.email }
+          { 
+            referralId: ref.id, 
+            type: 'referral', 
+            eventId: `referral_comment_${ref.id}_${Math.floor(Date.now() / 30000)}`,
+            creatorUid: profile.uid, 
+            creatorEmail: profile.email 
+          }
         );
       } else {
         for (const uid of recipientUids) {

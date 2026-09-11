@@ -572,6 +572,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
             { 
               expedienteId: id, 
               type: 'expediente',
+              eventId: editingExpedienteId ? `expediente_update_${id}_${Math.floor(Date.now() / 30000)}` : `expediente_create_${id}`,
               creatorUid: profile.uid,
               creatorEmail: profile.email,
               isCreationNotification: !editingExpedienteId
