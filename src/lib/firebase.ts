@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth, EmailAuthProvider } from 'firebase/auth';
+import { getAuth, EmailAuthProvider, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { initializeFirestore, memoryLocalCache, getFirestore, enableNetwork, setLogLevel, getDoc, getDocs, getDocFromCache, DocumentReference, Query, getDocFromServer, doc } from 'firebase/firestore';
 import firebaseConfigJson from '../../firebase-applet-config.json';
 
@@ -65,6 +65,15 @@ const targetDatabaseId = currentConfig.firestoreDatabaseId;
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
+
+// Keep session permanently open in background so notifications and listeners stay active
+try {
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn("Notice setting auth persistence:", err?.message || err);
+  });
+} catch (e) {
+  console.warn("Persistence setup notice:", e);
+}
 
 // Initialize Firestore instance using target database ID and memory cache to avoid IndexedDB assertions
 function createDbInstance() {

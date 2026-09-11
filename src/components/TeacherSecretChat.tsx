@@ -194,7 +194,8 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
   // Active chat (direct 1-to-1 or group)
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'contacts' | 'groups'>('contacts');
+  const [activeTab, setActiveTab] = useState<'active' | 'contacts' | 'groups'>('active');
+  const [allUserMessages, setAllUserMessages] = useState<TeacherMessage[]>([]);
 
   // Group chat management modals
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -318,6 +319,118 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     });
   }, [teacherContacts, searchQuery]);
 
+  // Helper to format timestamps for active chat preview
+  const formatMessageTime = (timestamp?: number) => {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    if (isToday) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  // Build active conversations list (chats already initiated, 1-on-1 or groups)
+  const activeConversations = useMemo(() => {
+    if (!currentUser) return [];
+
+    const convMap = new Map<string, TeacherMessage[]>();
+    allUserMessages.forEach(msg => {
+      if (!convMap.has(msg.conversationId)) {
+        convMap.set(msg.conversationId, []);
+      }
+      convMap.get(msg.conversationId)!.push(msg);
+    });
+
+    const list: {
+      conversationId: string;
+      isGroup: boolean;
+      name: string;
+      partner?: UserProfile;
+      group?: TeacherConversation;
+      lastMessage: TeacherMessage;
+      level?: string;
+    }[] = [];
+
+    convMap.forEach((msgs, convId) => {
+      msgs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      const latestMsg = msgs[0];
+      const matchingGroup = groups.find(g => g.id === convId);
+
+      if (matchingGroup) {
+        list.push({
+          conversationId: convId,
+          isGroup: true,
+          name: matchingGroup.name || 'Grupo Docente',
+          group: matchingGroup,
+          lastMessage: latestMsg
+        });
+      } else {
+        let partnerUid = latestMsg.participantUids?.find(u => u !== currentUser.uid);
+        if (!partnerUid) {
+          partnerUid = latestMsg.senderUid === currentUser.uid ? latestMsg.receiverUid : latestMsg.senderUid;
+        }
+
+        const partnerTeacher: UserProfile = teacherContacts.find(t => t.uid === partnerUid) || {
+          uid: partnerUid || 'unknown',
+          name: latestMsg.senderUid === currentUser.uid ? (latestMsg.receiverName || 'Docente') : (latestMsg.senderName || 'Docente'),
+          email: latestMsg.senderUid === currentUser.uid ? (latestMsg.receiverEmail || '') : (latestMsg.senderEmail || ''),
+          role: 'TEACHER'
+        };
+
+        const level = getUserEducationLevel(partnerTeacher);
+
+        list.push({
+          conversationId: convId,
+          isGroup: false,
+          name: partnerTeacher.name || 'Docente',
+          partner: partnerTeacher,
+          lastMessage: latestMsg,
+          level
+        });
+      }
+    });
+
+    // Also include registered groups so created groups appear as active
+    groups.forEach(grp => {
+      if (!convMap.has(grp.id)) {
+        const grpCreatedAt = grp.lastMessageAt || grp.createdAt || Date.now();
+        list.push({
+          conversationId: grp.id,
+          isGroup: true,
+          name: grp.name || 'Grupo Docente',
+          group: grp,
+          lastMessage: {
+            id: `grp_init_${grp.id}`,
+            conversationId: grp.id,
+            senderUid: grp.createdByUid || currentUser.uid,
+            senderName: grp.participantNames?.[grp.createdByUid] || 'Docente',
+            senderEmail: grp.participantEmails?.[grp.createdByUid] || '',
+            participantUids: grp.participantUids,
+            text: grp.lastMessageText || 'Grupo creado',
+            createdAt: grpCreatedAt,
+            expiresAt: grpCreatedAt + ttlMs,
+            read: true
+          }
+        });
+      }
+    });
+
+    list.sort((a, b) => (b.lastMessage.createdAt || 0) - (a.lastMessage.createdAt || 0));
+    return list;
+  }, [allUserMessages, groups, currentUser, teacherContacts]);
+
+  const filteredActiveConversations = useMemo(() => {
+    if (!searchQuery.trim()) return activeConversations;
+    const q = searchQuery.toLowerCase().trim();
+    return activeConversations.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      c.lastMessage.text?.toLowerCase().includes(q) ||
+      c.partner?.email?.toLowerCase().includes(q)
+    );
+  }, [activeConversations, searchQuery]);
+
   // Request native notifications permission
   const handleRequestNotifications = async () => {
     const perm = await requestSystemNotificationPermission();
@@ -432,6 +545,42 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     }
   };
 
+  // Mobile device hardware/browser back button listener for Teacher Secret Chat
+  // Requirement 1: "en caso de tener abierto el chat, si se presiona esta tecla lo minimice"
+  useEffect(() => {
+    if (!isOpen || isMinimized) return;
+
+    // Push a history state marker for the open secret chat
+    window.history.pushState({ teacherChatOpen: true }, '');
+
+    const handleChatPopState = () => {
+      // 1. Close full-screen image viewer if active
+      if (zoomedImage) {
+        setZoomedImage(null);
+        window.history.pushState({ teacherChatOpen: true }, '');
+        return;
+      }
+      // 2. Close group modals if active
+      if (showCreateGroupModal) {
+        setShowCreateGroupModal(false);
+        window.history.pushState({ teacherChatOpen: true }, '');
+        return;
+      }
+      if (showAddParticipantsModal) {
+        setShowAddParticipantsModal(false);
+        window.history.pushState({ teacherChatOpen: true }, '');
+        return;
+      }
+      // 3. Minimize the chat as requested: "en caso de tener abierto el chat, si se presiona esta tecla lo minimice"
+      setIsMinimized(true);
+    };
+
+    window.addEventListener('popstate', handleChatPopState);
+    return () => {
+      window.removeEventListener('popstate', handleChatPopState);
+    };
+  }, [isOpen, isMinimized, zoomedImage, showCreateGroupModal, showAddParticipantsModal]);
+
   // 1. LISTEN TO GROUP CONVERSATIONS
   useEffect(() => {
     if (!currentUser || !isTeacher) return;
@@ -467,6 +616,18 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     );
 
     const unsubscribe = onSnapshot(q1, (snapshot) => {
+      // Keep all user messages updated in real-time for the active chats section
+      const now = Date.now();
+      const userMsgs: TeacherMessage[] = [];
+      snapshot.docs.forEach((d) => {
+        const data = { id: d.id, ...d.data() } as TeacherMessage;
+        const expiresAt = data.expiresAt || (data.createdAt + ttlMs);
+        if (now < expiresAt) {
+          userMsgs.push(data);
+        }
+      });
+      setAllUserMessages(userMsgs);
+
       // Skip actions on the very first mount snapshot to avoid playing audio for historic messages
       if (isFirstLoadRef.current) {
         isFirstLoadRef.current = false;
@@ -518,7 +679,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     });
 
     return () => unsubscribe();
-  }, [currentUser, isTeacher, isOpen, isMinimized, activeChat]);
+  }, [currentUser, isTeacher, isOpen, isMinimized, activeChat, ttlMs]);
 
   // 3. ACTIVE CONVERSATION REAL-TIME MESSAGES LISTENER
   useEffect(() => {
@@ -549,7 +710,15 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
 
       // Sort in memory to guarantee real-time delivery without requiring composite indices
       validMsgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-      setMessages(validMsgs);
+      
+      // Preserve any pending optimistic messages that have not yet arrived in server snapshot
+      setMessages(prev => {
+        const serverKeys = new Set(validMsgs.map(m => `${m.senderUid}_${m.createdAt}`));
+        const pendingOptimistic = prev.filter(m => 
+          m.id.startsWith('temp_') && !serverKeys.has(`${m.senderUid}_${m.createdAt}`)
+        );
+        return [...validMsgs, ...pendingOptimistic].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      });
 
       // Asynchronously purge expired messages from Firestore
       if (expiredDocs.length > 0) {
@@ -701,7 +870,7 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
     return () => clearInterval(interval);
   }, [isOpen, ttlMs]);
 
-  // Image compressor helper
+  // Image compressor helper (optimizes dimensions and quality for instant delivery)
   const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -709,8 +878,8 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
         const img = new window.Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 1200;
-          const MAX_HEIGHT = 1200;
+          const MAX_WIDTH = 900;
+          const MAX_HEIGHT = 900;
           let width = img.width;
           let height = img.height;
 
@@ -734,7 +903,11 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
             return;
           }
           ctx.drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+          let quality = 0.72;
+          let dataUrl = canvas.toDataURL('image/jpeg', quality);
+          if (dataUrl.length > 300 * 1024) {
+            dataUrl = canvas.toDataURL('image/jpeg', 0.58);
+          }
           resolve(dataUrl);
         };
         img.onerror = reject;
@@ -825,6 +998,22 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
       newMsg.fileSize = attachedFile.size;
     }
 
+    // Optimistic local update: Render image or text immediately without waiting for server round-trip
+    const tempId = `temp_${now}_${Math.random().toString(36).substring(2, 7)}`;
+    const optimisticMsg: TeacherMessage = { id: tempId, ...newMsg };
+    setMessages(prev => [...prev, optimisticMsg]);
+    setAllUserMessages(prev => [optimisticMsg, ...prev]);
+
+    setInputText('');
+    setAttachedFile(null);
+
+    // Automatically position view at the newly sent message immediately
+    isNearBottomRef.current = true;
+    setShowScrollBottomBtn(false);
+    scrollToBottom('smooth');
+    setTimeout(() => scrollToBottom('auto'), 50);
+    setTimeout(() => scrollToBottom('auto'), 180);
+
     try {
       await addDoc(collection(db, 'teacher_messages'), newMsg);
 
@@ -866,18 +1055,11 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
           }
         );
       }
-
-      setInputText('');
-      setAttachedFile(null);
-
-      // Automatically position view at the newly sent message
-      isNearBottomRef.current = true;
-      setShowScrollBottomBtn(false);
-      scrollToBottom('smooth');
-      setTimeout(() => scrollToBottom('auto'), 50);
-      setTimeout(() => scrollToBottom('auto'), 180);
     } catch (err) {
       console.error('Error sending message:', err);
+      // Revert optimistic message on failure
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      setAllUserMessages(prev => prev.filter(m => m.id !== tempId));
       alert('No se pudo enviar el mensaje. Inténtalo nuevamente.');
     } finally {
       setIsSending(false);
@@ -1310,25 +1492,44 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
                       </button>
                     </div>
 
-                    {/* Tabs: Contactos vs Grupos */}
+                    {/* Tabs: Chats Activos vs Docentes vs Grupos */}
                     <div className="flex items-center gap-1 bg-black/20 p-1 rounded-xl">
+                      <button
+                        onClick={() => setActiveTab('active')}
+                        className={cn(
+                          "flex-1 py-1 px-1.5 text-xs font-bold rounded-lg transition-all text-center cursor-pointer flex items-center justify-center gap-1",
+                          activeTab === 'active' ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                        )}
+                      >
+                        <span>Activos</span>
+                        {activeConversations.length > 0 && (
+                          <span className={cn(
+                            "px-1.5 py-0.2 rounded-full text-[9px] font-black",
+                            activeTab === 'active' ? "bg-white/20 text-white" : "bg-indigo-500/20 text-indigo-300"
+                          )}>
+                            {activeConversations.length}
+                          </span>
+                        )}
+                      </button>
                       <button
                         onClick={() => setActiveTab('contacts')}
                         className={cn(
-                          "flex-1 py-1 text-xs font-bold rounded-lg transition-all text-center cursor-pointer",
+                          "flex-1 py-1 px-1.5 text-xs font-bold rounded-lg transition-all text-center cursor-pointer flex items-center justify-center gap-1",
                           activeTab === 'contacts' ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
                         )}
                       >
-                        Directos ({teacherContacts.length})
+                        <span>Docentes</span>
+                        <span className="text-[10px] opacity-70">({teacherContacts.length})</span>
                       </button>
                       <button
                         onClick={() => setActiveTab('groups')}
                         className={cn(
-                          "flex-1 py-1 text-xs font-bold rounded-lg transition-all text-center cursor-pointer",
+                          "flex-1 py-1 px-1.5 text-xs font-bold rounded-lg transition-all text-center cursor-pointer flex items-center justify-center gap-1",
                           activeTab === 'groups' ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
                         )}
                       >
-                        Grupos ({groups.length})
+                        <span>Grupos</span>
+                        <span className="text-[10px] opacity-70">({groups.length})</span>
                       </button>
                     </div>
                   </div>
@@ -1359,7 +1560,120 @@ export const TeacherSecretChat: React.FC<TeacherSecretChatProps> = ({
 
                   {/* List Body */}
                   <div className="flex-1 overflow-y-auto p-3 space-y-1.5 divide-y divide-white/5">
-                    {activeTab === 'contacts' ? (
+                    {activeTab === 'active' ? (
+                      filteredActiveConversations.length === 0 ? (
+                        <div className="text-center py-10 px-4 text-slate-400">
+                          <MessageSquare className="w-10 h-10 mx-auto text-slate-600 mb-2 opacity-50" />
+                          <p className="text-xs font-bold text-slate-300">No tienes chats activos actualmente</p>
+                          <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
+                            Inicia una conversación con cualquier docente o crea un grupo para comenzar.
+                          </p>
+                          <div className="flex items-center justify-center gap-2 mt-4">
+                            <button
+                              onClick={() => setActiveTab('contacts')}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                            >
+                              <UserIcon className="w-3.5 h-3.5" />
+                              Ver Docentes
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedGroupMemberUids([]);
+                                setNewGroupName('');
+                                setShowCreateGroupModal(true);
+                              }}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Crear Grupo
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        filteredActiveConversations.map((conv) => {
+                          const isMine = conv.lastMessage.senderUid === currentUser.uid;
+                          const timeFormatted = formatMessageTime(conv.lastMessage.createdAt);
+                          const remaining = getRemainingTime(conv.lastMessage.createdAt, conv.lastMessage.expiresAt);
+
+                          return (
+                            <div
+                              key={conv.conversationId}
+                              onClick={() => {
+                                if (conv.isGroup && conv.group) {
+                                  openGroupChat(conv.group);
+                                } else if (conv.partner) {
+                                  openDirectChat(conv.partner);
+                                }
+                              }}
+                              className="pt-1.5 first:pt-0"
+                            >
+                              <button
+                                className="w-full p-2.5 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all text-left group cursor-pointer border border-transparent hover:border-white/10"
+                              >
+                                <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                                  <div className="relative shrink-0">
+                                    {conv.isGroup ? (
+                                      <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-600 text-white flex items-center justify-center font-bold text-xs shadow-md">
+                                        <Users className="w-4 h-4" />
+                                      </div>
+                                    ) : (
+                                      <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-md">
+                                        {conv.name.charAt(0).toUpperCase()}
+                                      </div>
+                                    )}
+                                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-slate-900" />
+                                  </div>
+
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between gap-1 mb-0.5">
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <h4 className="text-xs font-bold text-white truncate group-hover:text-indigo-300 transition-colors">
+                                          {conv.name}
+                                        </h4>
+                                        {conv.level && (
+                                          <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-white/10 text-slate-300 border border-white/10 shrink-0">
+                                            {conv.level}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 shrink-0 font-medium">
+                                        {timeFormatted}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-[11px] text-slate-300 truncate">
+                                        {isMine ? (
+                                          <span className="text-indigo-300 font-medium">Tú: </span>
+                                        ) : conv.isGroup ? (
+                                          <span className="text-emerald-300 font-medium">{conv.lastMessage.senderName}: </span>
+                                        ) : null}
+                                        {conv.lastMessage.fileType === 'image' ? (
+                                          <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
+                                            <ImageIcon className="w-3 h-3 text-indigo-400 inline" /> Foto
+                                          </span>
+                                        ) : conv.lastMessage.fileType === 'file' ? (
+                                          <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
+                                            <Paperclip className="w-3 h-3 text-indigo-400 inline" /> Archivo
+                                          </span>
+                                        ) : (
+                                          conv.lastMessage.text || 'Mensaje'
+                                        )}
+                                      </p>
+
+                                      <span className="text-[9px] text-amber-400/90 shrink-0 flex items-center gap-0.5">
+                                        <Clock className="w-2.5 h-2.5" />
+                                        {remaining}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            </div>
+                          );
+                        })
+                      )
+                    ) : activeTab === 'contacts' ? (
                       filteredContacts.length === 0 ? (
                         <div className="text-center py-10 px-4 text-slate-400">
                           <UserIcon className="w-10 h-10 mx-auto text-slate-600 mb-2 opacity-50" />

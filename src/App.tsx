@@ -2065,6 +2065,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     message: '',
     onConfirm: () => {},
   });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'notifications' | 'tasks' | 'incidents' | 'users' | 'add-incident' | 'settings' | 'logs' | 'referrals' | 'expedientes' | 'informes'>('notifications');
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -2459,30 +2460,77 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     return () => unsubscribe();
   }, []);
 
-  // Session inactivity auto-logout (15 minutes of no activity)
+  // Keep session open in background permanently (no auto-logout on inactivity) so real-time notifications remain active
+  // Mobile device back button navigation handler:
+  // Returns to the previous screen/tab or closes modals instead of minimizing/exiting the app
+  const tabHistoryRef = useRef<string[]>(['notifications']);
+  const isPopNavRef = useRef(false);
+
   useEffect(() => {
-    if (!activeUser && !customUser) return;
+    // Ensure initial history state exists
+    if (!window.history.state || !window.history.state.dunorApp) {
+      window.history.replaceState({ dunorApp: true, tab: activeTab }, '');
+    }
 
-    let inactivityTimer: NodeJS.Timeout;
-    const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+    const handleAppPopState = (e: PopStateEvent) => {
+      // If a secret chat is handling this popstate, let it handle
+      if (e.state && e.state.teacherChatOpen) {
+        return;
+      }
 
-    const resetInactivityTimer = () => {
-      clearTimeout(inactivityTimer);
-      inactivityTimer = setTimeout(() => {
-        handleLogout();
-        showSystemPopup("Sesión Expirada", "Tu sesión se ha cerrado automáticamente por inactividad (15 minutos) para proteger la seguridad de tu cuenta.", "warning");
-      }, INACTIVITY_TIMEOUT_MS);
+      // 1. Close confirmation modal if open
+      if (confirmModal.isOpen) {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+        return;
+      }
+
+      // 2. Close secrets modal if open
+      if (showAppSecretsModal) {
+        setShowAppSecretsModal(false);
+        window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+        return;
+      }
+
+      // 3. Close mobile sidebar if open
+      if (window.innerWidth < 768 && isSidebarOpen) {
+        setIsSidebarOpen(false);
+        window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+        return;
+      }
+
+      // 4. Navigate back to previous screen/tab if available
+      if (tabHistoryRef.current.length > 1) {
+        tabHistoryRef.current.pop(); // Remove current tab
+        const prevTab = tabHistoryRef.current[tabHistoryRef.current.length - 1];
+        if (prevTab) {
+          isPopNavRef.current = true;
+          setActiveTab(prevTab as any);
+          return;
+        }
+      }
+
+      // 5. If already at base screen, ensure app doesn't abruptly exit
+      window.history.pushState({ dunorApp: true, tab: activeTab }, '');
     };
 
-    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
-    events.forEach(evt => window.addEventListener(evt, resetInactivityTimer, { passive: true }));
-    resetInactivityTimer();
+    window.addEventListener('popstate', handleAppPopState);
+    return () => window.removeEventListener('popstate', handleAppPopState);
+  }, [confirmModal.isOpen, showAppSecretsModal, isSidebarOpen, activeTab]);
 
-    return () => {
-      clearTimeout(inactivityTimer);
-      events.forEach(evt => window.removeEventListener(evt, resetInactivityTimer));
-    };
-  }, [activeUser, customUser]);
+  // Track tab transitions in history stack
+  useEffect(() => {
+    if (isPopNavRef.current) {
+      isPopNavRef.current = false;
+      return;
+    }
+    const stack = tabHistoryRef.current;
+    if (stack[stack.length - 1] !== activeTab) {
+      stack.push(activeTab);
+      if (stack.length > 30) stack.shift();
+      window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
@@ -3809,7 +3857,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       return () => unsubscribe();
     }
   }, [profile, isSuperAdmin]);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
 
 
