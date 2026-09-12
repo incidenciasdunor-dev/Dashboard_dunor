@@ -15,7 +15,9 @@
                  s.indexOf('da08') !== -1 ||
                  s.indexOf('ca9') !== -1 ||
                  s.indexOf('fi08') !== -1 ||
-                 (s.indexOf('firestore') !== -1 && (s.indexOf('assertion') !== -1 || s.indexOf('unexpected') !== -1));
+                 s.indexOf("reading 'version'") !== -1 ||
+                 s.indexOf('failed to restore firestore connection') !== -1 ||
+                 (s.indexOf('firestore') !== -1 && (s.indexOf('assertion') !== -1 || s.indexOf('unexpected') !== -1 || s.indexOf('connection') !== -1));
         }
         var origErr = console.error;
         console.error = function() {

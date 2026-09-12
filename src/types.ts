@@ -362,6 +362,12 @@ export interface Incident {
   notifiedTeacherId?: string;
   notifiedTeacherName?: string;
   notifiedTeacherEmail?: string;
+  notifiedTeacherIds?: string[];
+  notifiedTeachers?: {
+    uid: string;
+    name: string;
+    email: string;
+  }[];
   suggestReferral?: boolean;
   referralStatus?: 'SUGGESTED' | 'IN_PROGRESS';
   referralComments?: string;

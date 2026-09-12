@@ -3056,12 +3056,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     }
 
-    // 3. Notified Teacher (Docente en copia si aplica) - Omit on creation as they receive dedicated 'Copia de Incidencia'
+    // 3. Notified Teachers (Docentes en copia si aplica) - Omit on creation as they receive dedicated 'Copia de Incidencia'
     if (!isCreation) {
-      if (incident.notifiedTeacherId) {
+      if (incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0) {
+        incident.notifiedTeacherIds.forEach(tId => addTarget(tId));
+      } else if (incident.notifiedTeacherId) {
         addTarget(incident.notifiedTeacherId);
       } else if (incident.notifiedTeacherEmail) {
         addTarget(incident.notifiedTeacherEmail);
+      }
+      if (incident.notifiedTeachers && incident.notifiedTeachers.length > 0) {
+        incident.notifiedTeachers.forEach(t => {
+          if (t.uid) addTarget(t.uid);
+          else if (t.email) addTarget(t.email);
+        });
       }
     }
 
@@ -3125,7 +3133,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Lugar / Espacio:</strong> ${incident.place || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Alumno(s):</strong> ${incident.students || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || incident.creatorName || 'Personal Escolar'}${incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}</p>
-              ${(incident.notifiedTeacherName || incident.notifiedTeacherId) ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente:</strong> ${incident.notifiedTeacherName || 'Docente seleccionado'}</p>` : ''}
+              ${(() => {
+                const teachersList = incident.notifiedTeachers?.map(t => t.name).filter(Boolean) || [];
+                const teachersStr = teachersList.length > 0
+                  ? teachersList.join(', ')
+                  : (incident.notifiedTeacherName || (incident.notifiedTeacherId ? 'Docente seleccionado' : ''));
+                return teachersStr ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente(s):</strong> ${teachersStr}</p>` : '';
+              })()}
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Estatus del Reporte:</strong> <span style="background-color: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">${statusLabel}</span></p>
               ${actionDetails ? `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #475569;">${actionDetails}</div>` : ''}
             </div>
@@ -3614,7 +3628,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             const inc = incidents.find(i => i.id === d.incidentId);
             if (inc) {
               const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
-              const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
+              const isNotified = inc.notifiedTeacherId === uid || 
+                (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email) ||
+                (inc.notifiedTeacherIds && inc.notifiedTeacherIds.includes(uid)) ||
+                (inc.notifiedTeachers && inc.notifiedTeachers.some(t => t.uid === uid || (t.email && t.email.toLowerCase() === email)));
               return Boolean(isReporter || isNotified);
             }
             return isDirectTarget;
@@ -4136,7 +4153,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           doc.reporterId === userUid ||
           (doc.reporterEmail && doc.reporterEmail.toLowerCase() === userEmail) ||
           doc.notifiedTeacherId === userUid ||
-          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail)
+          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+          (doc.notifiedTeacherIds && doc.notifiedTeacherIds.includes(userUid)) ||
+          (doc.notifiedTeachers && doc.notifiedTeachers.some(t => t.uid === userUid || (t.email && t.email.toLowerCase() === userEmail)))
         ));
         setIncidents(docs);
         return;
@@ -4152,6 +4171,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const isCopied = 
           (doc.notifiedTeacherId && doc.notifiedTeacherId === userUid) ||
           (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+          (doc.notifiedTeacherIds && doc.notifiedTeacherIds.includes(userUid)) ||
+          (doc.notifiedTeachers && doc.notifiedTeachers.some(t => t.uid === userUid || (t.email && t.email.toLowerCase() === userEmail))) ||
           (doc.coordinatorIds && doc.coordinatorIds.includes(userUid));
 
         return Boolean(isAuthor || isCopied);
@@ -4272,7 +4293,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     // Auto initialize empty database
     const autoInitializeDb = async () => {
       try {
-        await restoreFirestoreConnection();
         const settingsSnap = await safeGetDoc(doc(db, 'settings', 'global')).catch(() => null);
         if (settingsSnap && !settingsSnap.exists()) {
           console.log("Inicializando colecciones iniciales en la base de datos Firestore...");
@@ -4575,10 +4595,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const message = `La incidencia en "${incident.place}" ha sido puesta "En canalización" por el equipo de psicología.`;
 
         // Batch all recipients to send only one set of notifications (and avoid duplicate admin notifications)
+        const copiedTeacherIds = incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0
+          ? incident.notifiedTeacherIds
+          : (incident.notifiedTeacherId ? [incident.notifiedTeacherId] : []);
+
         const recipients = [
           ...(incident.coordinatorIds || [incident.coordinatorId]),
           incident.reporterId,
-          ...(incident.notifiedTeacherId ? [incident.notifiedTeacherId] : [])
+          ...copiedTeacherIds
         ];
         
         await sendNotification(recipients, title, message, incident.id);
@@ -5528,6 +5552,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         const isCopied = 
                           (incident.notifiedTeacherId && incident.notifiedTeacherId === userUid) ||
                           (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+                          (incident.notifiedTeacherIds && incident.notifiedTeacherIds.includes(userUid)) ||
+                          (incident.notifiedTeachers && incident.notifiedTeachers.some(t => t.uid === userUid || (t.email && t.email.toLowerCase() === userEmail))) ||
                           (incident.coordinatorIds && incident.coordinatorIds.includes(userUid));
                         if (!isAuthor && !isCopied) return false;
                       } else if (normRole === 'COORDINATOR') {
@@ -7724,12 +7750,16 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
     setIsEditingFollowUp(false);
   };
 
+  const effectiveStatus: IncidentStatus = (incident.status === 'PENDIENTE' && incident.isReceived) 
+    ? 'RECIBIDO' 
+    : (incident.status || 'PENDIENTE');
+
   const getStatusColor = (status?: IncidentStatus) => {
     switch (status) {
-      case 'RECIBIDO': return 'text-emerald-600 bg-emerald-50';
-      case 'EN_SEGUIMIENTO': return 'text-indigo-600 bg-indigo-50';
-      case 'CERRADO': return 'text-slate-600 bg-slate-100';
-      default: return 'text-amber-600 bg-amber-50';
+      case 'RECIBIDO': return 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/60 dark:border-emerald-800/60';
+      case 'EN_SEGUIMIENTO': return 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60';
+      case 'CERRADO': return 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60';
+      default: return 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border border-amber-200/60 dark:border-amber-800/60';
     }
   };
 
@@ -7742,22 +7772,36 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
     }
   };
 
-    const getStatusBorderColor = (status?: IncidentStatus) => {
+  const getStatusBorderColor = (status?: IncidentStatus) => {
     switch (status) {
-      case 'RECIBIDO': return 'border-l-emerald-500';
-      case 'EN_SEGUIMIENTO': return 'border-l-indigo-600';
-      case 'CERRADO': return 'border-l-slate-400';
-      default: return 'border-l-amber-500';
+      case 'RECIBIDO': return 'border-l-emerald-500 dark:border-l-emerald-500';
+      case 'EN_SEGUIMIENTO': return 'border-l-indigo-600 dark:border-l-indigo-500';
+      case 'CERRADO': return 'border-l-slate-400 dark:border-l-slate-400';
+      default: return 'border-l-amber-500 dark:border-l-amber-500';
+    }
+  };
+
+  const getIncidentBorderLeftColor = (status?: IncidentStatus) => {
+    switch (status) {
+      case 'RECIBIDO': return '#10b981';
+      case 'EN_SEGUIMIENTO': return '#6366f1';
+      case 'CERRADO': return '#94a3b8';
+      default: return '#f59e0b';
     }
   };
 
   return (
     <div 
       id={`incident-${incident.id}`}
+      style={{
+        borderLeftColor: getIncidentBorderLeftColor(effectiveStatus)
+      }}
       className={cn(
-        "bg-white rounded-2xl border border-l-4 transition-all duration-200 hover:shadow-md",
-        selected ? "border-indigo-600 ring-2 ring-indigo-100 shadow-md" : "border-slate-200",
-        getStatusBorderColor(incident.status)
+        "bg-white dark:bg-slate-900 rounded-2xl border border-l-4 transition-all duration-200 hover:shadow-md",
+        selected 
+          ? "border-indigo-600 ring-2 ring-indigo-100 dark:ring-indigo-950/60 shadow-md" 
+          : "border-slate-200 dark:border-slate-800",
+        getStatusBorderColor(effectiveStatus)
       )}
     >
       <div className="flex items-stretch">
@@ -7767,11 +7811,11 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               e.stopPropagation();
               onSelect?.(incident.id);
             }}
-            className="flex items-center justify-center px-4 border-r border-slate-100 cursor-pointer hover:bg-slate-50 transition-colors"
+            className="flex items-center justify-center px-4 border-r border-slate-100 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
           >
             <div className={cn(
               "w-5 h-5 rounded border-2 flex items-center justify-center transition-all",
-              selected ? "bg-indigo-600 border-indigo-600" : "border-slate-300 bg-white"
+              selected ? "bg-indigo-600 border-indigo-600" : "border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800"
             )}>
               {selected && <CheckCircle2 className="w-4 h-4 text-white" />}
             </div>
@@ -7781,40 +7825,46 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
           <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-4">
           <div className="flex-1 w-full">
             <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">{incident.school}</span>
-              <span className="text-slate-300">•</span>
-              <span className="text-xs text-slate-500">{incident.date}</span>
-              {(incident.status === 'EN_SEGUIMIENTO' || incident.status === 'CERRADO') && (
+              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">{incident.school}</span>
+              <span className="text-slate-300 dark:text-slate-600">•</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{incident.date}</span>
+              {(effectiveStatus === 'EN_SEGUIMIENTO' || effectiveStatus === 'CERRADO') && (
                 <>
-                  <span className="text-slate-300">•</span>
-                  <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-tight", getStatusColor(incident.status))}>
-                    {getStatusLabel(incident.status)}
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-tight", getStatusColor(effectiveStatus))}>
+                    {getStatusLabel(effectiveStatus)}
                   </span>
                 </>
               )}
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mb-1">{incident.place}</h3>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">{incident.place}</h3>
             <div className="flex flex-col gap-1">
-              <p className="text-sm text-slate-600">Alumnos: {incident.students}</p>
+              <p className="text-sm text-slate-600 dark:text-slate-300">Alumnos: {incident.students}</p>
               {incident.categories && incident.categories.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {incident.categories.map(cat => (
-                    <span key={cat} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-medium">
+                    <span key={cat} className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded-full font-medium border border-slate-200/60 dark:border-slate-700/60">
                       {cat}
                     </span>
                   ))}
                 </div>
               )}
               <div className="mt-1">
-                <p className="text-sm text-slate-800 font-bold flex items-center flex-wrap gap-1.5">
+                <p className="text-sm text-slate-800 dark:text-slate-200 font-bold flex items-center flex-wrap gap-1.5">
                   <span>Reporta: ({incident.reporterName || incident.creatorName || 'Personal Escolar'})</span>
                   {incident.reporterRole && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                       {incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'PSYCHOLOGIST' ? 'Psicólogo' : incident.reporterRole}
                     </span>
                   )}
-                  {((incident.notifiedTeacherId === profile?.uid) || (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && incident.reporterId !== profile?.uid && incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
-                    <span className="ml-1 text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200 shadow-xs">
+                  {((incident.notifiedTeacherId === profile?.uid) || 
+                    (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || 
+                    (incident.notifiedTeacherIds && incident.notifiedTeacherIds.includes(profile?.uid)) ||
+                    (incident.notifiedTeachers && incident.notifiedTeachers.some(t => t.uid === profile?.uid || (profile?.email && t.email?.toLowerCase() === profile?.email?.toLowerCase()))) ||
+                    (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && 
+                    incident.reporterId !== profile?.uid && 
+                    incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
+                    <span className="ml-1 text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full font-bold border border-blue-200 dark:border-blue-800/60 shadow-xs">
                       En Copia
                     </span>
                   )}
@@ -7823,8 +7873,8 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                   <div className={cn(
                     "inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border mt-1",
                     incident.referralStatus === 'IN_PROGRESS' 
-                      ? "bg-pink-100 border-pink-200 text-pink-700 shadow-sm" 
-                      : "bg-pink-50 border-pink-100 text-pink-600"
+                      ? "bg-pink-100 dark:bg-pink-950/60 border-pink-200 dark:border-pink-800 text-pink-700 dark:text-pink-300 shadow-sm" 
+                      : "bg-pink-50 dark:bg-pink-950/40 border-pink-100 dark:border-pink-900/60 text-pink-600 dark:text-pink-300"
                   )}>
                     <Brain className={cn("w-3.5 h-3.5", incident.referralStatus === 'IN_PROGRESS' ? "animate-pulse" : "")} />
                     <span className="text-xs font-bold uppercase tracking-wide">
@@ -7835,7 +7885,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               </div>
             </div>
           </div>
-          <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start w-full sm:w-auto gap-3 border-t sm:border-t-0 pt-3 sm:pt-0 mt-3 sm:mt-0 border-slate-100">
+          <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start w-full sm:w-auto gap-3 border-t sm:border-t-0 pt-3 sm:pt-0 mt-3 sm:mt-0 border-slate-100 dark:border-slate-800">
             <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2">
               {incident.referralStatus === 'IN_PROGRESS' && (
                 <div className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold whitespace-nowrap bg-pink-500 text-white shadow-sm">
@@ -7844,20 +7894,22 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                 </div>
               )}
               <div className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold whitespace-nowrap", 
-                (!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') ? 'text-amber-600 bg-amber-50' : getStatusColor(incident.status)
+                "flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold whitespace-nowrap border", 
+                (!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') 
+                  ? 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border border-amber-200/60 dark:border-amber-800/60' 
+                  : getStatusColor(effectiveStatus)
               )}>
                 {(!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') 
                   ? <AlertCircle className="w-3 h-3" /> 
-                  : (incident.status === 'RECIBIDO' || incident.status === 'EN_SEGUIMIENTO' || incident.status === 'CERRADO' || incident.isReceived ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />)
+                  : (effectiveStatus === 'RECIBIDO' || effectiveStatus === 'EN_SEGUIMIENTO' || effectiveStatus === 'CERRADO' ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />)
                 }
                 {(!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') 
                   ? 'Pendiente' 
-                  : (incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE' ? 'Recibido' : getStatusLabel(incident.status))
+                  : getStatusLabel(effectiveStatus)
                 }
               </div>
               {incident.readAt && (
-                <div className="text-[10px] text-slate-400 font-medium mt-1 text-right">
+                <div className="text-[10px] text-slate-400 dark:text-slate-400 font-medium mt-1 text-right">
                   <p>Leído el:</p>
                   <p>{format(incident.readAt, "dd/MM/yyyy HH:mm")}</p>
                 </div>
@@ -8031,18 +8083,36 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                   </div>
                 )}
 
-                {incident.notifiedTeacherId && (
+                {(incident.notifiedTeacherId || (incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0) || (incident.notifiedTeachers && incident.notifiedTeachers.length > 0)) && (
                   <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">Docente Notificado (Copia)</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">
+                      {((incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 1) || (incident.notifiedTeachers && incident.notifiedTeachers.length > 1))
+                        ? 'Docentes Notificados (Copia)'
+                        : 'Docente Notificado (Copia)'}
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {(() => {
-                        const teacher = teachers.find(t => t.uid === incident.notifiedTeacherId);
-                        return (
-                          <span className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm flex items-center gap-1">
-                            <UserIcon className="w-3 h-3" />
-                            {teacher?.name || incident.notifiedTeacherName || 'Docente notificado'}
+                        const list: { uid: string; name: string }[] = [];
+                        if (incident.notifiedTeachers && incident.notifiedTeachers.length > 0) {
+                          incident.notifiedTeachers.forEach(t => {
+                            list.push({ uid: t.uid, name: t.name || t.email });
+                          });
+                        } else if (incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0) {
+                          incident.notifiedTeacherIds.forEach(id => {
+                            const found = teachers.find(t => t.uid === id);
+                            list.push({ uid: id, name: found?.name || id });
+                          });
+                        } else if (incident.notifiedTeacherId) {
+                          const found = teachers.find(t => t.uid === incident.notifiedTeacherId);
+                          list.push({ uid: incident.notifiedTeacherId, name: found?.name || incident.notifiedTeacherName || 'Docente notificado' });
+                        }
+
+                        return list.map((item, idx) => (
+                          <span key={item.uid || idx} className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm flex items-center gap-1.5">
+                            <UserIcon className="w-3 h-3 text-indigo-500" />
+                            {item.name}
                           </span>
-                        );
+                        ));
                       })()}
                     </div>
                   </div>
@@ -8244,6 +8314,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     followUp: '',
     coordinatorIds: [] as string[],
     notifiedTeacherId: '',
+    notifiedTeacherIds: [] as string[],
     school: 'Campus Victoria',
     categories: [] as string[],
     suggestReferral: false,
@@ -8372,7 +8443,13 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       const allSelectedCoords = coordinators.filter(c => formData.coordinatorIds.includes(c.uid));
       const coordNames = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.name).join(', ') : (selectedCoord?.name || '');
       const coordEmails = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.email).join(', ') : (selectedCoord?.email || '');
-      const selectedTeacher = teachers.find(t => t.uid === formData.notifiedTeacherId);
+
+      const selectedTeacherIds = (formData.notifiedTeacherIds && formData.notifiedTeacherIds.length > 0)
+        ? formData.notifiedTeacherIds
+        : (formData.notifiedTeacherId ? [formData.notifiedTeacherId] : []);
+      const selectedTeachers = teachers.filter(t => selectedTeacherIds.includes(t.uid));
+      const teacherNames = selectedTeachers.map(t => t.name).join(', ');
+      const teacherEmails = selectedTeachers.map(t => t.email).join(', ');
 
       const creatorDisplayName = (profile.name && profile.name.trim()) || profile.email || 'Personal Escolar';
 
@@ -8382,8 +8459,15 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         coordinatorName: coordNames,
         coordinatorEmail: coordEmails,
         coordinatorIds: formData.coordinatorIds,
-        notifiedTeacherName: selectedTeacher?.name || '',
-        notifiedTeacherEmail: selectedTeacher?.email || '',
+        notifiedTeacherId: selectedTeacherIds[0] || '',
+        notifiedTeacherIds: selectedTeacherIds,
+        notifiedTeacherName: teacherNames,
+        notifiedTeacherEmail: teacherEmails,
+        notifiedTeachers: selectedTeachers.map(t => ({
+          uid: t.uid,
+          name: t.name,
+          email: t.email
+        })),
         date: format(now, "dd/MM/yyyy HH:mm"),
         reporterName: creatorDisplayName,
         reporterId: profile.uid,
@@ -8437,16 +8521,23 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         });
       }
 
-      // Dedicated notification for the teacher added in copy (if not the creator)
-      if (formData.notifiedTeacherId && formData.notifiedTeacherId !== profile.uid) {
+      // Dedicated notification for all teachers added in copy (if not the creator)
+      const teachersToNotifyInCopy = selectedTeacherIds.filter(tId => tId && tId !== profile.uid);
+      if (teachersToNotifyInCopy.length > 0) {
         const creatorRoleLabel = profile.role === 'ADMIN' ? 'el administrador' : profile.role === 'DIRECTIVE' ? 'el directivo' : profile.role === 'COORDINATOR' ? 'el coordinador' : 'el docente';
         await sendNotification(
-          formData.notifiedTeacherId,
+          teachersToNotifyInCopy,
           'Copia de Incidencia Registrada',
           `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por ${creatorRoleLabel} ${creatorDisplayName}.`,
           docRef.id,
           true,
-          { skipEmail: true, creatorUid: profile.uid, creatorEmail: profile.email }
+          { 
+            skipEmail: false, 
+            creatorUid: profile.uid, 
+            creatorEmail: profile.email,
+            eventId: `incident_copy_${docRef.id}`,
+            detailsHtml: `<strong>Lugar:</strong> ${formData.place}<br/><strong>Alumnos:</strong> ${formData.students}<br/><strong>Descripción:</strong> ${formData.description}`
+          }
         );
       }
 
@@ -8874,7 +8965,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                           title="Clic para remover copia"
                         >
                           <UserIcon className="w-3.5 h-3.5" />
-                          <span>Copia ({userRole}): {coord?.name || id}</span>
+                          <span>Copia (Coordinador): {coord?.name || id}</span>
                           <X className="w-3.5 h-3.5 ml-1 opacity-80 group-hover:opacity-100" />
                         </div>
                       );
@@ -8885,7 +8976,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                 )}
 
                 <div className="pt-1">
-                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador o Directivo (Opcional):</label>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador (Opcional):</label>
                   <select
                     value=""
                     onChange={(e) => {
@@ -8896,54 +8987,103 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="">-- Selecciona destinatario para Copia (Directivo o Coordinador) --</option>
+                    <option value="">-- Selecciona otro Coordinador en Copia (Opcional) --</option>
                     
-                    <optgroup label="Coordinadores">
-                      {filteredCoordinators.map((c) => (
-                        <option key={c.uid} value={c.uid} disabled={formData.coordinatorIds.includes(c.uid)}>
-                          Coordinador: {c.name} ({c.email})
-                        </option>
-                      ))}
-                    </optgroup>
-
-                    {directives.length > 0 && (
-                      <optgroup label="Directivos">
-                        {directives.map((d) => (
-                          <option key={d.uid} value={d.uid} disabled={formData.coordinatorIds.includes(d.uid)}>
-                            Directivo: {d.name} ({d.email})
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
+                    {filteredCoordinators.map((c) => (
+                      <option key={c.uid} value={c.uid} disabled={formData.coordinatorIds.includes(c.uid)}>
+                        Coordinador: {c.name} ({c.email})
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
             </InputGroup>
 
-            <InputGroup label="Copiar a Docente (Opcional)">
-              <select
-                value={formData.notifiedTeacherId}
-                onChange={(e) => setFormData({ ...formData, notifiedTeacherId: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-              >
-                <option value="">
-                  {activeIncidentLevel ? `Selecciona docente opcional (${activeIncidentLevel})...` : 'Selecciona docente opcional...'}
-                </option>
-                {filteredTeachersForCopy.length > 0 ? (
-                  filteredTeachersForCopy.map((t) => {
-                    const tLvl = getUserEducationLevel(t, coordinators);
-                    return (
-                      <option key={t.uid} value={t.uid}>
-                        {t.name}{tLvl && !activeIncidentLevel ? ` (${tLvl})` : ''}
-                      </option>
-                    );
-                  })
-                ) : activeIncidentLevel ? (
-                  <option disabled value="">
-                    No hay docentes registrados en nivel {activeIncidentLevel}
+            <InputGroup label="Copiar a Docente(s) (Opcional)">
+              <div className="space-y-2">
+                {/* List of currently selected teachers in copy */}
+                {formData.notifiedTeacherIds && formData.notifiedTeacherIds.length > 0 && (
+                  <div className="flex flex-wrap gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                    {formData.notifiedTeacherIds.map((tId) => {
+                      const teacher = teachers.find(t => t.uid === tId);
+                      const tLvl = teacher ? getUserEducationLevel(teacher, coordinators) : '';
+                      return (
+                        <span
+                          key={tId}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs"
+                        >
+                          <UserIcon className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                          <span>{teacher?.name || tId}</span>
+                          {tLvl && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 uppercase">
+                              {tLvl}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = formData.notifiedTeacherIds.filter(id => id !== tId);
+                              setFormData({
+                                ...formData,
+                                notifiedTeacherIds: updated,
+                                notifiedTeacherId: updated[0] || ''
+                              });
+                            }}
+                            className="text-slate-400 hover:text-red-600 p-0.5 rounded hover:bg-slate-100 transition-colors ml-1 cursor-pointer"
+                            title="Quitar docente de copia"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Dropdown to add another teacher to copy */}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const uid = e.target.value;
+                    if (!uid) return;
+                    if (!formData.notifiedTeacherIds.includes(uid)) {
+                      const updated = [...formData.notifiedTeacherIds, uid];
+                      setFormData({
+                        ...formData,
+                        notifiedTeacherIds: updated,
+                        notifiedTeacherId: updated[0] || ''
+                      });
+                    }
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all cursor-pointer text-slate-700 font-medium text-sm"
+                >
+                  <option value="">
+                    {formData.notifiedTeacherIds && formData.notifiedTeacherIds.length > 0
+                      ? '+ Agregar a otro docente en copia...'
+                      : activeIncidentLevel 
+                        ? `Selecciona docente opcional (${activeIncidentLevel})...` 
+                        : 'Selecciona docente opcional...'}
                   </option>
-                ) : null}
-              </select>
+                  {filteredTeachersForCopy.length > 0 ? (
+                    filteredTeachersForCopy.map((t) => {
+                      const isAlreadySelected = formData.notifiedTeacherIds?.includes(t.uid);
+                      const tLvl = getUserEducationLevel(t, coordinators);
+                      return (
+                        <option key={t.uid} value={t.uid} disabled={isAlreadySelected}>
+                          {isAlreadySelected ? '✓ ' : ''}{t.name}{tLvl && !activeIncidentLevel ? ` (${tLvl})` : ''}{isAlreadySelected ? ' (Ya agregado)' : ''}
+                        </option>
+                      );
+                    })
+                  ) : activeIncidentLevel ? (
+                    <option disabled value="">
+                      No hay docentes registrados en nivel {activeIncidentLevel}
+                    </option>
+                  ) : null}
+                </select>
+                <p className="text-[11px] text-slate-500">
+                  Puedes seleccionar uno o varios docentes para que reciban copia de esta incidencia y puedan darle seguimiento.
+                </p>
+              </div>
             </InputGroup>
           </div>
 

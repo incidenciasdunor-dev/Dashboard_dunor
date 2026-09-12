@@ -330,6 +330,66 @@ body.dark,
 }
 
 /* 
+  INCIDENT & RECORD STATUS ACCENT BORDERS (KEEP SAME COLOR CODES IN LIGHT AND DARK MODE)
+  Garantiza que los registros de incidencia conserven sus códigos de color identificadores
+  tanto en modo oscuro como en modo claro:
+  - RECIBIDO: Esmeralda / Verde (#10b981)
+  - EN SEGUIMIENTO: Índigo / Azul (#6366f1)
+  - PENDIENTE: Ámbar / Naranja (#f59e0b)
+  - CERRADO: Slate / Gris (#94a3b8)
+*/
+.border-l-emerald-500,
+.dark .border-l-emerald-500,
+.dark .dark\:border-l-emerald-500,
+[id^="incident-"].border-l-emerald-500,
+.dark [id^="incident-"].border-l-emerald-500,
+.dark [class*="border-l-emerald-500"] {
+  border-left-color: #10b981 !important;
+}
+
+.border-l-indigo-600,
+.border-l-indigo-500,
+.dark .border-l-indigo-600,
+.dark .border-l-indigo-500,
+.dark .dark\:border-l-indigo-500,
+.dark .dark\:border-l-indigo-600,
+[id^="incident-"].border-l-indigo-600,
+.dark [id^="incident-"].border-l-indigo-600,
+.dark [class*="border-l-indigo-600"],
+.dark [class*="border-l-indigo-500"] {
+  border-left-color: #6366f1 !important;
+}
+
+.border-l-amber-500,
+.dark .border-l-amber-500,
+.dark .dark\:border-l-amber-500,
+[id^="incident-"].border-l-amber-500,
+.dark [id^="incident-"].border-l-amber-500,
+.dark [class*="border-l-amber-500"] {
+  border-left-color: #f59e0b !important;
+}
+
+.border-l-slate-400,
+.border-l-slate-500,
+.dark .border-l-slate-400,
+.dark .border-l-slate-500,
+.dark .dark\:border-l-slate-400,
+[id^="incident-"].border-l-slate-400,
+.dark [id^="incident-"].border-l-slate-400,
+.dark [class*="border-l-slate-400"] {
+  border-left-color: #94a3b8 !important;
+}
+
+.border-l-red-500,
+.border-l-red-600,
+.dark .border-l-red-500,
+.dark .border-l-red-600,
+.dark .dark\:border-l-red-500,
+.dark [class*="border-l-red-500"] {
+  border-left-color: #ef4444 !important;
+}
+
+/* 
   TABLE DIVIDERS & BORDERS
 */
 .dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),

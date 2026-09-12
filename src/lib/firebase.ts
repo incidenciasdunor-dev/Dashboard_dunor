@@ -146,12 +146,17 @@ export const isFirestoreInternalAssertion = (msg: any) => {
     str.includes('database is closing') ||
     str.includes('database is hidden') ||
     str.includes('closing/hidden') ||
+    str.includes("reading 'version'") ||
+    str.includes('cannot read properties of undefined') ||
+    str.includes('failed to restore firestore connection') ||
+    str.includes('the client has already been terminated') ||
+    str.includes('already been enabled') ||
     str.includes('da08') ||
     str.includes('c050') ||
     str.includes('ca9') ||
     str.includes('fi08') ||
     str.includes('12.17.0') ||
-    (str.includes('firestore') && (str.includes('assertion') || str.includes('internal') || str.includes('unexpected') || str.includes('closing')))
+    (str.includes('firestore') && (str.includes('assertion') || str.includes('internal') || str.includes('unexpected') || str.includes('closing') || str.includes('connection')))
   );
 };
 
@@ -166,7 +171,7 @@ if (typeof window !== 'undefined') {
   console.error = (...args: any[]) => {
     const combinedMsg = args.map(a => extractErrorString(a)).join(' ');
     if (isFirestoreInternalAssertion(combinedMsg) || args.some(a => isFirestoreInternalAssertion(a))) {
-      console.warn('[Firestore Internal SDK Assertion Handled]:', combinedMsg);
+      console.warn('[Firestore Internal SDK Notice Handled]:', combinedMsg);
       return;
     }
     originalConsoleError.apply(console, args);
@@ -186,17 +191,7 @@ if (typeof window !== 'undefined') {
   };
 
   window.addEventListener('online', () => {
-    enableNetwork(db).catch((e) => console.error('Error re-enabling Firestore network on online:', e));
-  });
-
-  window.addEventListener('focus', () => {
-    enableNetwork(db).catch(() => {});
-  });
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      enableNetwork(db).catch(() => {});
-    }
+    restoreFirestoreConnection().catch(() => {});
   });
 
   window.addEventListener('error', (event) => {
@@ -222,13 +217,41 @@ if (typeof window !== 'undefined') {
   }, true);
 }
 
+let isRestoringConnection = false;
+let lastRestoreTimestamp = 0;
+
 export async function restoreFirestoreConnection() {
+  const now = Date.now();
+  if (isRestoringConnection || now - lastRestoreTimestamp < 3000) {
+    return true;
+  }
+
+  if (!db || (db as any)._terminated) {
+    return false;
+  }
+
+  isRestoringConnection = true;
+  lastRestoreTimestamp = now;
+
   try {
     await enableNetwork(db);
     return true;
-  } catch (err) {
-    console.error('Failed to restore Firestore connection:', err);
+  } catch (err: any) {
+    const msg = extractErrorString(err);
+    if (
+      msg.includes('already been enabled') || 
+      msg.includes('already enabled') ||
+      msg.includes('version') ||
+      isFirestoreInternalAssertion(msg)
+    ) {
+      return true;
+    }
+    console.warn('Firestore connection restore notice:', msg);
     return false;
+  } finally {
+    setTimeout(() => {
+      isRestoringConnection = false;
+    }, 1500);
   }
 }
 

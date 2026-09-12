@@ -1227,10 +1227,10 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                 </div>
               </div>
 
-              {/* Destinatarios adicionales: Coordinador, Directivo o Docente */}
+              {/* Destinatarios adicionales: Coordinador o Docente */}
               <div className="space-y-2 pt-1">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Agregar a otro Coordinador, Directivo o Docente (Opcional)
+                  Agregar a otro Coordinador o Docente (Opcional)
                 </label>
 
                 {formData.additionalRecipients.length > 0 && (
@@ -1274,9 +1274,6 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                     if (roleType === 'coord') {
                       found = coordinators.find(c => c.uid === uidOrEmail || c.email === uidOrEmail);
                       roleLabel = 'Coordinador';
-                    } else if (roleType === 'dir') {
-                      found = directives.find(d => d.uid === uidOrEmail || d.email === uidOrEmail);
-                      roleLabel = 'Directivo';
                     } else if (roleType === 'teach') {
                       found = teachers.find(t => t.uid === uidOrEmail || t.email === uidOrEmail);
                       roleLabel = 'Docente';
@@ -1304,7 +1301,7 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                   }}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
-                  <option value="">-- Seleccionar otro destinatario (Coordinador, Directivo o Docente) --</option>
+                  <option value="">-- Seleccionar otro destinatario (Coordinador o Docente) --</option>
                   
                   {coordinators.filter(c => c.email !== formData.coordinatorEmail).length > 0 && (
                     <optgroup label="Coordinadores">
@@ -1315,16 +1312,6 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                             Coordinador: {c.name} ({c.email})
                           </option>
                         ))}
-                    </optgroup>
-                  )}
-
-                  {directives.length > 0 && (
-                    <optgroup label="Directivos">
-                      {directives.map(d => (
-                        <option key={`dir::${d.uid || d.email}`} value={`dir::${d.uid || d.email}`}>
-                          Directivo: {d.name} ({d.email})
-                        </option>
-                      ))}
                     </optgroup>
                   )}
 
