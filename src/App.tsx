@@ -21,6 +21,7 @@ import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 import { SystemModal, SystemModalState } from './components/SystemModal';
 import { TeacherSecretChat } from './components/TeacherSecretChat';
+import { StudentIncidentsPrintModal } from './components/StudentIncidentsPrintModal';
 import {
   isNotificationSupported,
   getNotificationPermission,
@@ -671,7 +672,7 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
                   <span className="label">Reportado por</span>
                   <span className="content">
                     {incident.reporterName || incident.creatorName || 'Personal Escolar'}
-                    {incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}
+                    {incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'SUPER_ADMIN' ? 'Soporte' : incident.reporterRole})` : ''}
                   </span>
                 </div>
                 <div className="info-item">
@@ -1078,7 +1079,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const isSuper = isSuperAdminEmail(emailId);
 
     if (isSuper) {
-      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador DUNOR";
+      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Soporte");
       const adminProfile: UserProfile = {
         uid: emailId,
         name: adminName,
@@ -1182,7 +1183,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       const authUid = userCred.user?.uid || uData?.uid || cleanEmail;
       const fullProfile: UserProfile | null = uData ? { ...uData, uid: authUid, isRegistered: true } : (isSuper ? {
         uid: authUid,
-        name: cleanEmail.includes('dunor') ? "Administrador DUNOR" : (cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+        name: cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : "Administrador"),
         email: cleanEmail,
         role: "ADMIN" as UserRole,
         isRegistered: true
@@ -1218,7 +1219,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           return;
         }
 
-        const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
+        const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : "Administrador Inicial");
         const adminProfile: UserProfile = {
           uid: uData?.uid || cleanEmail,
           name: uData?.name || adminName,
@@ -1414,7 +1415,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         ...(existingData || preProfile || {}),
         uid: authUid,
         email: cleanEmail,
-        name: existingData?.name || preProfile?.name || (isSuper ? "Administrador Dunor" : cleanEmail.split('@')[0]),
+        name: existingData?.name || preProfile?.name || (cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : cleanEmail.split('@')[0])),
         role: existingData?.role || preProfile?.role || (isSuper ? "ADMIN" : "TEACHER"),
         isRegistered: true,
         password: password,
@@ -1530,7 +1531,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         const updatedProfile: UserProfile = {
           ...(existingData || {}),
           uid: authUid,
-          name: existingData?.name || (isSuper ? "Super Admin (Yorch)" : cleanEmail.split('@')[0]),
+          name: existingData?.name || (cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : cleanEmail.split('@')[0])),
           email: cleanEmail,
           role: existingData?.role || (isSuper ? "ADMIN" : "TEACHER"),
           isRegistered: true,
@@ -1997,7 +1998,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         if (isSuperAdminEmail(emailId)) {
           const autoAdmin: UserProfile = {
             uid: activeUser.uid || emailId,
-            name: emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+            name: emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador"),
             email: emailId,
             role: "ADMIN",
             isRegistered: true
@@ -2372,6 +2373,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   });
 
   const [printIncident, setPrintIncident] = useState<Incident | null>(null);
+  const [printStudentGroup, setPrintStudentGroup] = useState<{ studentName: string; incidents: Incident[] } | null>(null);
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
 
@@ -3979,7 +3981,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           if (isSuperAdminEmail(emailId)) {
             const fallbackAdmin: UserProfile = {
               uid: activeUserUidStr || emailId,
-              name: emailId.includes('dunor') ? "Administrador DUNOR" : "Super Admin (Yorch)",
+              name: emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador"),
               email: emailId,
               role: "ADMIN",
               isRegistered: true
@@ -4009,6 +4011,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               console.error("Error updating UID:", e);
             }
           }
+          let currentName = data.name;
+          if (emailId === 'mi_yorch@hotmail.com' && (currentName === 'Super Admin (Yorch)' || currentName === 'Super Admin' || !currentName)) {
+            currentName = 'Soporte Principal';
+            data.name = currentName;
+            updateDoc(doc(db, 'users', emailId), { name: 'Soporte Principal' }).catch(() => {});
+          } else if (emailId.includes('dunor') && (currentName === 'Administrador DUNOR' || currentName === 'Administrador Dunor' || currentName === 'Administrador' || !currentName)) {
+            currentName = 'Soporte Secundario';
+            data.name = currentName;
+            updateDoc(doc(db, 'users', emailId), { name: 'Soporte Secundario' }).catch(() => {});
+          }
           const profileWithUid = { ...data, uid: activeUserUidStr || data.uid || emailId };
           try {
             localStorage.setItem('app_user_profile', JSON.stringify(profileWithUid));
@@ -4028,7 +4040,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           // If doc by emailId doesn't exist, check by query or check if super admin
           const isSuper = isSuperAdminEmail(emailId);
           if (isSuper) {
-            const adminName = emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial");
+            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador Inicial");
             const autoProfile: UserProfile = {
               uid: activeUserUidStr || emailId,
               name: adminName,
@@ -4090,7 +4102,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         if (isSuper) {
           const fallbackProfile: UserProfile = {
             uid: activeUserUidStr || emailId,
-            name: emailId.includes('dunor') ? "Administrador DUNOR" : "Administrador",
+            name: emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador"),
             email: emailId,
             role: "ADMIN",
             isRegistered: true
@@ -4848,8 +4860,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
-        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Soporte Principal', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Soporte Secundario', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -4959,8 +4971,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
       // 2. Ensure super admin documents exist
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
-        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Soporte Principal', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Soporte Secundario', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -5384,7 +5396,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{profile.name}</p>
                     <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                      {isSuperAdmin ? 'Super Admin' : profile.role === 'DIRECTIVE' ? 'Directivo (Observador)' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
+                      {isSuperAdmin ? 'Soporte' : profile.role === 'DIRECTIVE' ? 'Directivo (Observador)' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
                     </p>
                   </div>
                 </div>
@@ -5669,6 +5681,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                             onForward={(inc, adminId) => forwardIncidentToAdmin(inc, adminId)}
                             onOpenGallery={openGallery}
                             onPrint={(inc) => setPrintIncident(inc)}
+                            onPrintConcentratedReport={(sName, sIncidents) => setPrintStudentGroup({ studentName: sName, incidents: sIncidents })}
                             systemSettings={effectiveSystemSettings}
                             admins={admins}
                             expandedIncidentId={expandedIncidentId}
@@ -7413,6 +7426,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         />
       )}
 
+      {printStudentGroup && (
+        <StudentIncidentsPrintModal 
+          studentName={printStudentGroup.studentName}
+          incidents={printStudentGroup.incidents}
+          systemSettings={effectiveSystemSettings}
+          profile={profile}
+          coordinators={coordinators}
+          onClose={() => setPrintStudentGroup(null)}
+        />
+      )}
+
       <FirebaseSecretsModal 
         isOpen={showAppSecretsModal} 
         onClose={() => setShowAppSecretsModal(false)} 
@@ -7589,6 +7613,7 @@ interface StudentGroupCardProps {
   onForward: (inc: Incident, adminId: string) => void;
   onOpenGallery: (images: string[], index: number) => void;
   onPrint: (inc: Incident) => void;
+  onPrintConcentratedReport?: (studentName: string, incidents: Incident[]) => void;
   systemSettings: SystemSettings;
   admins: UserProfile[];
   expandedIncidentId?: string | null;
@@ -7610,17 +7635,31 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
   onForward,
   onOpenGallery,
   onPrint,
+  onPrintConcentratedReport,
   systemSettings,
   admins,
   expandedIncidentId,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
 
+  const normRole = normalizeUserRole(profile?.role);
+  const isSuperAdmin = isSuperAdminEmail(profile?.email) || (profile as any)?.isSuperAdmin;
+  const isAuthorizedRole = isSuperAdmin || normRole === 'COORDINATOR' || normRole === 'DIRECTIVE' || normRole === 'ADMIN';
+  const canPrintConcentrated = isAuthorizedRole && incidents.length >= 2;
+
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-all">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsOpen(!isOpen);
+          }
+        }}
+        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left cursor-pointer select-none"
       >
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-base">
@@ -7634,15 +7673,55 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {canPrintConcentrated && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPrintConcentratedReport?.(studentName, incidents);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 transition-all shadow-xs"
+              title={`Imprimir concentrado de reportes de ${studentName}`}
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Imprimir Concentrado</span>
+              <span className="sm:hidden">Concentrado</span>
+            </button>
+          )}
           <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-3 py-1 rounded-full border border-indigo-100 dark:border-indigo-800/60">
             {incidents.length}
           </span>
           <ChevronDown className={cn("w-5 h-5 text-slate-400 transition-transform duration-200", isOpen && "rotate-180")} />
         </div>
-      </button>
+      </div>
 
       {isOpen && (
         <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 dark:bg-slate-950/40 border-t border-slate-200 dark:border-slate-800">
+          {canPrintConcentrated && (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-950/60 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900 dark:text-white">
+                    Concentrado de Reportes ({incidents.length} {incidents.length === 1 ? 'incidencia' : 'incidencias'})
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Expediente oficial con resumen general de cada incidente, fechas y seguimiento
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onPrintConcentratedReport?.(studentName, incidents)}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Imprimir Concentrado de Reportes</span>
+              </button>
+            </div>
+          )}
           {incidents.map((incident) => (
             <IncidentCard
               key={incident.id}
@@ -10462,7 +10541,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         return;
       }
 
-      const creatorName = profile?.name || (isSuperAdmin ? 'Superadministrador' : 'Administrador');
+      const creatorName = profile?.name || (isSuperAdmin ? 'Soporte' : 'Administrador');
       const creatorEmail = profile?.email || 'incidencias.dunor@gmail.com';
       const creatorRole = profile?.role || (isSuperAdmin ? 'ADMIN' : 'COORDINATOR');
 
@@ -10988,7 +11067,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   const updateUserPermissions = async (userToUpdate: UserProfile, newPermissions: Partial<RolePermissions> | null) => {
     if (!isSuperAdmin) {
-      showSystemPopup("Acción no permitida", "Únicamente el Superadministrador puede modificar los permisos de usuario.", "warning");
+      showSystemPopup("Acción no permitida", "Únicamente el usuario de Soporte puede modificar los permisos de usuario.", "warning");
       return;
     }
     try {
@@ -11668,7 +11747,7 @@ const UserList = ({
                     {!u.createdByName && !u.createdBy && u.role === 'ADMIN' && (
                       <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mt-1">
                         <UserCheck className="w-3 h-3 text-slate-400" />
-                        <span>Registrado por: <strong className="text-slate-600 font-semibold">Sistema / Superadministrador Inicial</strong></span>
+                        <span>Registrado por: <strong className="text-slate-600 font-semibold">Sistema / Soporte Inicial</strong></span>
                       </div>
                     )}
 

@@ -180,7 +180,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       if (isSuperAdminEmail(u.email)) return true;
       if (u.role === 'SUPER_ADMIN') return true;
       const lowerName = (u.name || '').toLowerCase();
-      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor')) return true;
+      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor') || lowerName.includes('soporte principal') || lowerName.includes('soporte secundario')) return true;
       return false;
     };
 
@@ -591,13 +591,15 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       admins.forEach(a => {
         if (a.email && (isSuperAdminEmail(a.email) || (a as any).role === 'SUPER_ADMIN') && !saEmailsSeen.has(a.email.toLowerCase())) {
           saEmailsSeen.add(a.email.toLowerCase());
-          superAdminRecipients.push({ email: a.email.toLowerCase(), name: a.name || 'Super Admin', roleLabel: 'Super Admin', uid: a.uid });
+          const defaultName = a.email.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : (a.email.toLowerCase().includes('dunor') ? 'Soporte Secundario' : 'Soporte');
+          superAdminRecipients.push({ email: a.email.toLowerCase(), name: a.name || defaultName, roleLabel: 'Soporte', uid: a.uid });
         }
       });
       SUPER_ADMIN_EMAILS.forEach(saEmail => {
         if (!saEmailsSeen.has(saEmail.toLowerCase())) {
           saEmailsSeen.add(saEmail.toLowerCase());
-          superAdminRecipients.push({ email: saEmail.toLowerCase(), name: 'Super Admin', roleLabel: 'Super Admin' });
+          const defaultName = saEmail.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : 'Soporte Secundario';
+          superAdminRecipients.push({ email: saEmail.toLowerCase(), name: defaultName, roleLabel: 'Soporte' });
         }
       });
 
