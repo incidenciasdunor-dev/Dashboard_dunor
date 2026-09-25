@@ -19,10 +19,12 @@ import {
 import {
   Referral,
   UserProfile,
-  normalizeUserRole
+  normalizeUserRole,
+  isSuperAdminEmail
 } from '../types';
 import { normalizeSearchText } from '../lib/utils';
 import { SystemModal, SystemModalState } from './SystemModal';
+import { useBackHandler } from '../lib/mobileNavigation';
 import { doc, setDoc, updateDoc, addDoc, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { cn, getUserEducationLevel } from '../lib/utils';
@@ -68,21 +70,18 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
 
-  const normRole = normalizeUserRole(profile.role);
-  const isSuperUser = Boolean(
-    isSuperAdmin || 
-    normRole === 'ADMIN' || 
-    (profile?.email && (profile.email.toLowerCase().includes('dunor') || profile.email.toLowerCase() === 'mi_yorch@hotmail.com'))
-  );
-  const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile.role && String(profile.role).toLowerCase().includes('psico'));
+  useBackHandler(isModalOpen, () => setIsModalOpen(false), 'canalizaciones-create-modal');
+
+  const normRole = normalizeUserRole(profile?.role);
+  const isSuper = Boolean(isSuperAdmin || isSuperAdminEmail(profile?.email));
+  const isAdmin = normRole === 'ADMIN' || String(profile?.role).toUpperCase() === 'ADMIN';
+  const isPsychologistUser = normRole === 'PSYCHOLOGIST' || (profile?.role && String(profile?.role).toLowerCase().includes('psico'));
   const allowCreateReferral = canCreateReferral && normRole !== 'COORDINATOR' && normRole !== 'DIRECTIVE';
-  const canDeleteReferralActual = Boolean(
-    canDeleteReferral || 
-    isSuperUser ||
-    isSuperAdmin || 
-    isPsychologistUser || 
-    normRole === 'ADMIN'
-  );
+
+  // Requisito 1: En canalizaciones, únicamente administrador y superadmin (Soporte) pueden eliminar registros.
+  // La opción de eliminar NO debe aparecer en usuarios de docentes, coordinador, directivo ni psicólogo.
+  const isDisallowedRole = normRole === 'TEACHER' || normRole === 'COORDINATOR' || normRole === 'DIRECTIVE' || normRole === 'PSYCHOLOGIST';
+  const canDeleteReferralActual = Boolean((isSuper || isAdmin) && !isDisallowedRole);
 
   const [sysModal, setSysModal] = useState<SystemModalState>({
     isOpen: false,
@@ -322,8 +321,12 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     return Boolean(isAuthor || isCc);
   });
 
-  // Handle delete referral (Psychologist / Admin)
+  // Handle delete referral (Only Administrator and Superadmin)
   const handleDeleteReferral = (ref: Referral) => {
+    if (!canDeleteReferralActual) {
+      showAlert('Acción no permitida', 'Únicamente el administrador y soporte pueden eliminar registros de canalizaciones.', 'warning');
+      return;
+    }
     showConfirm(
       'Eliminar Canalización',
       `¿Estás seguro de que deseas eliminar permanentemente la canalización del alumno "${ref.studentName}" (${ref.gradeGroup || 'S/G'})? Esta acción no se puede deshacer.`,

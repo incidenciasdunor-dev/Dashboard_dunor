@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertTriangle, Info, X, HelpCircle, Trash2 } from 'lucide-react';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 export interface SystemModalState {
   isOpen: boolean;
@@ -21,6 +22,9 @@ interface SystemModalProps {
 
 export const SystemModal: React.FC<SystemModalProps> = ({ modal, state, onClose }) => {
   const activeModal = modal || state;
+  const isOpen = Boolean(activeModal?.isOpen);
+  useBackHandler(isOpen, onClose, 'system-modal');
+
   if (!activeModal || !activeModal.isOpen) return null;
 
   const handleConfirm = () => {

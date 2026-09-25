@@ -22,6 +22,7 @@ import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsMan
 import { SystemModal, SystemModalState } from './components/SystemModal';
 import { TeacherSecretChat } from './components/TeacherSecretChat';
 import { StudentIncidentsPrintModal } from './components/StudentIncidentsPrintModal';
+import { useBackHandler, handleGlobalPopstate } from './lib/mobileNavigation';
 import {
   isNotificationSupported,
   getNotificationPermission,
@@ -215,6 +216,7 @@ class ErrorBoundary extends React.Component<{ children?: React.ReactNode }, { ha
 // --- Components ---
 
 const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident: Incident, systemSettings?: SystemSettings, profile?: UserProfile, onClose: () => void }) => {
+  useBackHandler(true, onClose, `print-preview-${incident.id}`);
   const logoSrc = systemSettings?.appLogoUrl || "/logo.svg";
   const logoAppName = systemSettings?.appName || "DASHBOARD DUNOR";
   const isDirective = profile?.role === 'DIRECTIVE' || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email);
@@ -874,6 +876,8 @@ const FirebaseSecretsModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: (
   const [messagingSenderId, setMessagingSenderId] = useState(currentConfig.messagingSenderId || '');
   const [appId, setAppId] = useState(currentConfig.appId || '');
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  useBackHandler(isOpen, onClose, 'firebase-secrets-modal');
 
   if (!isOpen) return null;
 
@@ -2377,6 +2381,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
 
+  useBackHandler(Boolean(printStudentGroup), () => setPrintStudentGroup(null), 'app-print-student-group');
+  useBackHandler(Boolean(printIncident), () => setPrintIncident(null), 'app-print-incident');
+  useBackHandler(galleryConfig.isOpen, () => setGalleryConfig(prev => ({ ...prev, isOpen: false })), 'app-image-gallery');
+  useBackHandler(Boolean(selectedLogDetail), () => setSelectedLogDetail(null), 'app-log-detail');
+  useBackHandler(showAppSecretsModal, () => setShowAppSecretsModal(false), 'app-secrets-modal');
+  useBackHandler(Boolean(celebrationData), () => setCelebrationData(null), 'app-celebration');
+  useBackHandler(confirmModal.isOpen, () => setConfirmModal(prev => ({ ...prev, isOpen: false })), 'app-confirm-modal');
+  useBackHandler(systemPopup.isOpen, () => setSystemPopup(prev => ({ ...prev, isOpen: false })), 'app-system-popup');
+  useBackHandler(Boolean(chatOpenPartner), () => setChatOpenPartner(null), 'app-chat-open-partner');
+  useBackHandler(Boolean(editingCategory), () => setEditingCategory(null), 'app-editing-category');
+
   const effectiveRolePermissions = useMemo(() => {
     const merged: RolePermissionsMap = { ...DEFAULT_ROLE_PERMISSIONS };
     const rolesList: UserRole[] = ['ADMIN', 'DIRECTIVE', 'COORDINATOR', 'PSYCHOLOGIST', 'TEACHER'];
@@ -2475,14 +2490,18 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   // Keep session open in background permanently (no auto-logout on inactivity) so real-time notifications remain active
   // Mobile device back button navigation handler:
-  // Returns to the previous screen/tab or closes modals instead of minimizing/exiting the app
+  // Returns to the previous screen/tab or closes modals, windows, forms, and print views instead of exiting the app
   const tabHistoryRef = useRef<string[]>(['notifications']);
   const isPopNavRef = useRef(false);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const isSidebarOpenRef = useRef(isSidebarOpen);
+  isSidebarOpenRef.current = isSidebarOpen;
 
   useEffect(() => {
     // Ensure initial history state exists
     if (!window.history.state || !window.history.state.dunorApp) {
-      window.history.replaceState({ dunorApp: true, tab: activeTab }, '');
+      window.history.replaceState({ dunorApp: true, tab: activeTabRef.current }, '');
     }
 
     const handleAppPopState = (e: PopStateEvent) => {
@@ -2491,24 +2510,32 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         return;
       }
 
-      // 1. Close confirmation modal if open
-      if (confirmModal.isOpen) {
-        setConfirmModal(prev => ({ ...prev, isOpen: false }));
-        window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+      // 1. FIRST PRIORITY: Check if any open window, modal, form, or print view wants to consume this back action
+      if (handleGlobalPopstate()) {
         return;
       }
 
-      // 2. Close secrets modal if open
-      if (showAppSecretsModal) {
-        setShowAppSecretsModal(false);
-        window.history.pushState({ dunorApp: true, tab: activeTab }, '');
-        return;
-      }
-
-      // 3. Close mobile sidebar if open
-      if (window.innerWidth < 768 && isSidebarOpen) {
+      // 2. Close mobile sidebar if open
+      if (window.innerWidth < 768 && isSidebarOpenRef.current) {
         setIsSidebarOpen(false);
-        window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+        return;
+      }
+
+      const currentTab = activeTabRef.current;
+
+      // 3. If user is in the incident form ('add-incident'), return to 'incidents' screen or previous tab
+      if (currentTab === 'add-incident') {
+        if (tabHistoryRef.current.length > 1) {
+          tabHistoryRef.current.pop();
+          const prevTab = tabHistoryRef.current[tabHistoryRef.current.length - 1];
+          if (prevTab && prevTab !== 'add-incident') {
+            isPopNavRef.current = true;
+            setActiveTab(prevTab as any);
+            return;
+          }
+        }
+        isPopNavRef.current = true;
+        setActiveTab('incidents');
         return;
       }
 
@@ -2524,12 +2551,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       // 5. If already at base screen, ensure app doesn't abruptly exit
-      window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+      window.history.pushState({ dunorApp: true, tab: currentTab }, '');
     };
 
     window.addEventListener('popstate', handleAppPopState);
     return () => window.removeEventListener('popstate', handleAppPopState);
-  }, [confirmModal.isOpen, showAppSecretsModal, isSidebarOpen, activeTab]);
+  }, []);
 
   // Track tab transitions in history stack
   useEffect(() => {
@@ -2731,6 +2758,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     const finalTargetUserIds = new Set<string>();
     const targetEmails = new Set<string>();
+    const seenUserKeys = new Set<string>();
     const rawTargets: string[] = Array.isArray(userIdOrIds) ? userIdOrIds : [userIdOrIds];
 
     const addTargetUser = (str: string) => {
@@ -2755,12 +2783,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           return;
         }
 
+        const canonicalKey = (mEmail || mUid).toLowerCase();
+        if (seenUserKeys.has(canonicalKey)) return;
+        seenUserKeys.add(canonicalKey);
+
         const targetId = mUid || (mEmail ? mEmail : cleanLower);
         finalTargetUserIds.add(targetId);
         if (mEmail && mEmail.includes('@')) {
           targetEmails.add(mEmail);
         }
       } else {
+        const key = cleanLower;
+        if (seenUserKeys.has(key)) return;
+        seenUserKeys.add(key);
+
         finalTargetUserIds.add(clean.includes('@') ? cleanLower : clean);
         if (cleanLower.includes('@')) {
           targetEmails.add(cleanLower);
@@ -2914,7 +2950,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   ) => {
     try {
       const effectiveEmail = profile?.email || activeUser?.email || extra?.creatorEmail || extra?.userEmail || 'incidencias.dunor@gmail.com';
-      const effectiveName = profile?.name || activeUser?.displayName || extra?.creatorName || extra?.userName || (isSuperAdmin ? 'Superadministrador' : effectiveEmail.split('@')[0]);
+      const effectiveName = profile?.name || activeUser?.displayName || extra?.creatorName || extra?.userName || (isSuperAdmin ? 'Soporte' : effectiveEmail.split('@')[0]);
       const effectiveRole = profile?.role || (isSuperAdmin ? 'ADMIN' : (extra?.creatorRole || extra?.userRole || 'ADMIN'));
       const creatorName = extra?.creatorName || effectiveName;
       const creatorEmail = extra?.creatorEmail || effectiveEmail;
@@ -3661,26 +3697,67 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           return isDirectTarget;
         }
 
-        // 4. PSICÓLOGOS
+        // 4. PSICÓLOGOS: Evitar notificaciones duplicadas y asegurar que solo llegue una a quien deba llegar
         if (role === 'PSYCHOLOGIST') {
-          const isPsychRelated = d.type === 'referral' || d.referralId || titleLower.includes('canaliz') || titleLower.includes('psicol');
+          const isCanalizacionNotif = d.type === 'referral' || Boolean(d.referralId) || titleLower.includes('canaliz') || titleLower.includes('psicol');
+
           if (d.incidentId) {
             const inc = incidents.find(i => i.id === d.incidentId);
+
+            // Si el aviso es de incidencia general ("Nueva Incidencia") pero la incidencia tiene canalización,
+            // no duplicar la notificación al psicólogo: le llegará exclusivamente la de canalización correspondiente
+            if (!isCanalizacionNotif && (inc?.referralStatus === 'SUGGESTED' || inc?.referralStatus === 'IN_PROGRESS')) {
+              return false;
+            }
+
             if (inc) {
               const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
-              const hasReferral = inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS' || (inc as any).psychologistId === uid;
-              return Boolean(isReporter || hasReferral || isPsychRelated);
+              if (isReporter) return true;
+
+              // Verificar si el psicólogo está asignado a la incidencia o al docente
+              const assignedPsychId = (inc as any).assignedPsychologistId || (inc as any).psychologistId;
+              const assignedPsychEmail = (inc as any).assignedPsychologistEmail;
+              const isDirectlyAssigned = (assignedPsychId && (assignedPsychId === uid || assignedPsychId === email)) ||
+                                         (assignedPsychEmail && assignedPsychEmail.toLowerCase() === email);
+
+              if (isDirectlyAssigned) return true;
+
+              const repTeacher = teachers.find(t => 
+                (inc.reporterId && t.uid === inc.reporterId) || 
+                (inc.reporterEmail && t.email?.toLowerCase() === inc.reporterEmail.toLowerCase())
+              );
+              if (repTeacher?.assignedPsychologistId || repTeacher?.assignedPsychologistEmail) {
+                const isTeacherPsych = repTeacher.assignedPsychologistId === uid || repTeacher.assignedPsychologistEmail?.toLowerCase() === email;
+                return isTeacherPsych && isDirectTarget;
+              }
+
+              return Boolean(isDirectTarget && (isCanalizacionNotif || inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS'));
             }
-            return Boolean(isPsychRelated || (isDirectTarget && isPsychRelated));
+            return Boolean(isDirectTarget && isCanalizacionNotif);
           }
-          if (isPsychRelated) return true;
-          if (titleLower.includes('expediente') || titleLower.includes('informe')) return true;
+
+          if (isCanalizacionNotif && d.referralId) {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isAssigned = (ref.psychologistId && ref.psychologistId === uid) ||
+                                 (ref.psychologistEmail && ref.psychologistEmail.toLowerCase() === email);
+              if (ref.psychologistId || ref.psychologistEmail) {
+                return Boolean(isAssigned);
+              }
+            }
+            return isDirectTarget;
+          }
+
+          if (titleLower.includes('expediente') || titleLower.includes('informe')) {
+            return isDirectTarget;
+          }
+
           return isDirectTarget;
         }
 
-        // 4. Expedientes & Informes
+        // 5. Expedientes & Informes
         if (titleLower.includes('expediente') || titleLower.includes('informe')) {
-          if (roleStr === 'PSYCHOLOGIST' || roleStr === 'DIRECTIVE' || roleStr === 'ADMIN') return true;
+          if (roleStr === 'DIRECTIVE' || roleStr === 'ADMIN') return true;
           return isDirectTarget;
         }
 
@@ -3702,7 +3779,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const refEntity = d.incidentId || d.referralId || d.taskId || d.chatPartnerUid || '';
         const timeBucket = Math.floor((d.createdAt || 0) / 120000);
 
-        const eventKey = d.eventId || `${normTitle}_${normMessage}_${refEntity}_${timeBucket}`;
+        // Deduplication key: combines same entity within 2 minutes into single unique notification
+        const entityKey = refEntity ? `${refEntity}_${timeBucket}` : null;
+        const eventKey = d.eventId || entityKey || `${normTitle}_${normMessage}_${timeBucket}`;
         if (!uniqueMap.has(eventKey)) {
           uniqueMap.set(eventKey, { ...d, allDocIds: [d.id] });
         } else {
@@ -3727,7 +3806,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             const normMessage = (data.message || '').trim().toLowerCase();
             const refEntity = data.incidentId || data.referralId || data.taskId || data.chatPartnerUid || '';
             const timeBucket = Math.floor((data.createdAt || Date.now()) / 120000);
-            const alertEventKey = data.eventId || `${normTitle}_${normMessage}_${refEntity}_${timeBucket}`;
+            const entityKey = refEntity ? `${refEntity}_${timeBucket}` : null;
+            const alertEventKey = data.eventId || entityKey || `${normTitle}_${normMessage}_${timeBucket}`;
 
             const now = Date.now();
             const lastAlertTime = recentAlertedKeysRef.current.get(alertEventKey) || 0;
@@ -4539,7 +4619,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           p.uid === (incident as any).assignedPsychologistId || 
           p.email.toLowerCase() === (incident as any).assignedPsychologistEmail?.toLowerCase()
         );
-        if (!assignedPsych && psychologists.length === 1) {
+        if (!assignedPsych) {
+          const repTeacher = teachers.find(t => t.uid === incident.reporterId || t.email?.toLowerCase() === incident.reporterEmail?.toLowerCase());
+          if (repTeacher?.assignedPsychologistId || repTeacher?.assignedPsychologistEmail) {
+            assignedPsych = psychologists.find(p => p.uid === repTeacher.assignedPsychologistId || p.email?.toLowerCase() === repTeacher.assignedPsychologistEmail?.toLowerCase());
+          }
+        }
+        if (!assignedPsych && psychologists.length > 0) {
           assignedPsych = psychologists[0];
         }
 
@@ -4571,14 +4657,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const title = 'Nueva Canalización Sugerida';
         const message = `Se ha sugerido una canalización para la incidencia en "${incident.place}".`;
         
-        // Notify Psychologists (assigned one or all if unassigned)
-        const psychsToNotify = assignedPsych ? [assignedPsych] : psychologists;
-        for (const psych of psychsToNotify) {
-          await sendNotification(psych.uid, title, message, incident.id, false, { referralId: refId, type: 'referral' });
+        // Notificar ÚNICAMENTE al psicólogo asignado (sin duplicar bucles)
+        if (assignedPsych && assignedPsych.uid !== profile.uid) {
+          await sendNotification(
+            assignedPsych.uid,
+            title,
+            message,
+            incident.id,
+            false,
+            { referralId: refId, type: 'referral', eventId: `referral_suggest_${incident.id}` }
+          );
           
-          if (systemSettings.emailNotificationsEnabled) {
+          if (systemSettings.emailNotificationsEnabled && sendEmail) {
             await sendEmail(
-              psych.email,
+              assignedPsych.email,
               `Sugerencia de Canalización - ${incident.place}`,
               `
               <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
@@ -4586,7 +4678,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   <h2 style="color: white; margin: 0;">Sugerencia de Canalización</h2>
                 </div>
                 <div style="padding: 30px; color: #1e293b; line-height: 1.6;">
-                  <p>Hola <strong>${psych.name}</strong>,</p>
+                  <p>Hola <strong>${assignedPsych.name}</strong>,</p>
                   <p>Se ha generado una nueva sugerencia de canalización para una incidencia:</p>
                   <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
                     <p style="margin: 5px 0;"><strong>Lugar:</strong> ${incident.place}</p>
@@ -7159,7 +7251,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 addLog={addLog}
                 isSuperAdmin={isSuperAdmin}
                 canCreateReferral={can('canCreateReferral')}
-                canDeleteReferral={can('canDeleteReferrals') || isSuperAdmin || profile?.role === 'ADMIN' || profile?.role === 'PSYCHOLOGIST' || (profile?.role && String(profile?.role).toLowerCase().includes('psico'))}
+                canDeleteReferral={Boolean((isSuperAdmin || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email)) && profile?.role !== 'TEACHER' && profile?.role !== 'COORDINATOR' && profile?.role !== 'DIRECTIVE' && profile?.role !== 'PSYCHOLOGIST')}
                 canManageExpedientes={can('canManageExpedientes')}
                 canAddFollowUp={can('canAddFollowUp')}
                 highlightedReferralId={highlightedReferralId}
@@ -8624,7 +8716,14 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       if (formData.suggestReferral) {
         const refId = `ref_inc_${docRef.id}`;
         const targetCoord = coordinators.find(c => formData.coordinatorIds.includes(c.uid) || formData.coordinatorIds.includes(c.email)) || coordinators[0];
-        const targetPsych = psychologists[0];
+        
+        // Determinar el psicólogo asignado al docente reportante
+        const repTeacher = teachers.find(t => t.uid === profile.uid || t.email?.toLowerCase() === profile.email?.toLowerCase());
+        const assignedPsychId = repTeacher?.assignedPsychologistId || (profile as any)?.assignedPsychologistId;
+        const assignedPsychEmail = repTeacher?.assignedPsychologistEmail || (profile as any)?.assignedPsychologistEmail;
+        const targetPsych = (assignedPsychId || assignedPsychEmail)
+          ? psychologists.find(p => p.uid === assignedPsychId || p.email?.toLowerCase() === assignedPsychEmail?.toLowerCase())
+          : (psychologists.length > 0 ? psychologists[0] : null);
 
         const refDoc: Referral = {
           id: refId,
@@ -8652,10 +8751,10 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           console.error("Error creating auto referral document:", refErr);
         }
 
-        // Target uids excluding the creator
+        // Notificar ÚNICAMENTE al coordinador y al psicólogo asignado (evitando duplicar a todos los psicólogos)
         const notifyUids: string[] = [];
         if (targetCoord?.uid && targetCoord.uid !== profile.uid) notifyUids.push(targetCoord.uid);
-        psychologists.forEach(p => { if (p.uid && p.uid !== profile.uid) notifyUids.push(p.uid); });
+        if (targetPsych?.uid && targetPsych.uid !== profile.uid) notifyUids.push(targetPsych.uid);
 
         await sendNotification(
           notifyUids,
@@ -8666,6 +8765,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           { 
             referralId: refId, 
             type: 'referral',
+            eventId: `referral_create_${refId}`,
             creatorUid: profile.uid,
             creatorEmail: profile.email,
             isCreationNotification: true
@@ -8674,16 +8774,12 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
 
         const emailRecipients = new Set<string>();
         if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
-        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
+        if (targetPsych?.email) emailRecipients.add(targetPsych.email.toLowerCase());
         directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
         admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
 
         // Exclude the reporting user from receiving email
         if (profile.email) emailRecipients.delete(profile.email.toLowerCase());
-        if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
-        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
-        directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
-        admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
 
         const filteredEmailRecipients = Array.from(emailRecipients).filter(e => !isSuperAdminEmail(e));
 
@@ -9363,6 +9459,10 @@ const TaskManager = ({
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+
+  useBackHandler(showAssignModal, () => setShowAssignModal(false), 'task-assign-modal');
+  useBackHandler(showCongratulationModal, () => setShowCongratulationModal(false), 'task-congratulation-modal');
+  useBackHandler(Boolean(selectedTask), () => setSelectedTask(null), 'task-details-modal');
   const [evidenceText, setEvidenceText] = useState('');
   const [evidenceFile, setEvidenceFile] = useState('');
   const [directiveFeedback, setDirectiveFeedback] = useState('');
@@ -10431,6 +10531,10 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     message: '',
     onConfirm: () => {},
   });
+
+  useBackHandler(showAddModal, () => setShowAddModal(false), 'user-add-modal');
+  useBackHandler(confirmModal.isOpen, () => setConfirmModal(prev => ({ ...prev, isOpen: false })), 'user-confirm-modal');
+  useBackHandler(Boolean(userToEditPermissions), () => setUserToEditPermissions(null), 'user-permissions-editor');
   const [newUserRole, setNewUserRole] = useState<UserRole>(
     profile.role === 'COORDINATOR' ? 'TEACHER' : profile.role === 'DIRECTIVE' ? 'COORDINATOR' : 'TEACHER'
   );

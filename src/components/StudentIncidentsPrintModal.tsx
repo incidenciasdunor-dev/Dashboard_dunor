@@ -2,6 +2,7 @@ import React from 'react';
 import { Printer, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { Incident, SystemSettings, UserProfile, IncidentStatus, normalizeUserRole, isSuperAdminEmail } from '../types';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 interface StudentIncidentsPrintModalProps {
   studentName: string;
@@ -23,6 +24,8 @@ export const StudentIncidentsPrintModal: React.FC<StudentIncidentsPrintModalProp
   const normRole = normalizeUserRole(profile?.role);
   const isSuperAdmin = isSuperAdminEmail(profile?.email) || (profile as any)?.role === 'SUPER_ADMIN' || (profile as any)?.isSuperAdmin;
   const isAuthorized = (isSuperAdmin || normRole === 'COORDINATOR' || normRole === 'DIRECTIVE' || normRole === 'ADMIN') && incidents.length >= 2;
+
+  useBackHandler(true, onClose, `student-incidents-print-${studentName}`);
 
   if (!isAuthorized) {
     return null;
@@ -647,7 +650,9 @@ export const StudentIncidentsPrintModal: React.FC<StudentIncidentsPrintModalProp
             {/* Footer */}
             <div className="footer mt-8 pt-3 border-t border-slate-200 flex justify-between items-center text-[9px] text-slate-400 font-bold uppercase tracking-wider">
               <span>{logoAppName} • Concentrado Oficial de Incidencias</span>
-              <span>Expedido por: {profile?.name || 'Personal Autorizado'} ({profile?.role})</span>
+              <span>
+                Expedido por: {profile?.name || 'Personal Autorizado'} ({isSuperAdmin ? 'Soporte' : profile?.role === 'DIRECTIVE' ? 'Directivo' : profile?.role === 'COORDINATOR' ? 'Coordinador' : profile?.role === 'TEACHER' ? 'Docente' : profile?.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile?.role || 'Personal Autorizado'})
+              </span>
             </div>
           </div>
         </div>

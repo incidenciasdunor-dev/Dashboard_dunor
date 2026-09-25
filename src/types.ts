@@ -191,7 +191,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
-    canDeleteReferrals: true,
+    canDeleteReferrals: false,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,

@@ -11,6 +11,7 @@ import { cn, areStudentNamesEquivalent } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, setDoc, doc } from 'firebase/firestore';
 import { SystemModal, SystemModalState } from './SystemModal';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 export interface SharedReportStudentCard {
   expedienteId: string;
@@ -119,6 +120,9 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   const [anonymizeStudentNames, setAnonymizeStudentNames] = useState(false);
   const [hidePsychEvaluation, setHidePsychEvaluation] = useState(false);
   const [hideParentInterviews, setHideParentInterviews] = useState(false);
+
+  useBackHandler(isShareModalOpen, () => setIsShareModalOpen(false), 'informe-share-modal');
+  useBackHandler(Boolean(selectedSharedReport), () => setSelectedSharedReport(null), 'informe-preview-modal');
 
   // Editable copy data for share modal
   const [editableTitle, setEditableTitle] = useState('');

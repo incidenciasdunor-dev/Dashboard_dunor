@@ -38,6 +38,7 @@ import { doc, setDoc, updateDoc, deleteDoc, collection, query, orderBy, onSnapsh
 import { db } from '../lib/firebase';
 import { cn, normalizeSearchText, areStudentNamesEquivalent } from '../lib/utils';
 import { SystemModal, SystemModalState } from './SystemModal';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 interface ExpedientesManagerProps {
   expedientes: Expediente[];
@@ -158,6 +159,10 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [hiddenSections, setHiddenSections] = useState<string[]>([]);
   const [redactionMode, setRedactionMode] = useState<'editor' | 'words'>('editor');
+
+  useBackHandler(isShareModalOpen, () => setIsShareModalOpen(false), 'expediente-share-modal');
+  useBackHandler(Boolean(selectedSharedExpediente), () => setSelectedSharedExpediente(null), 'expediente-shared-detail-modal');
+  useBackHandler(viewMode === 'FORM', () => setViewMode('LIST'), 'expediente-form-view');
   const textareaRefs = React.useRef<Record<string, HTMLTextAreaElement | null>>({});
   const [sharedCopyData, setSharedCopyData] = useState({
     reasonAndBackground: '',
