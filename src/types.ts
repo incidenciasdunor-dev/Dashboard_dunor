@@ -336,6 +336,13 @@ export interface Task {
   lastReminderSentAt?: number;
   autoCompleted?: boolean;
   autoCompletedReason?: string;
+  taskType?: 'TASK' | 'CONGRATULATION' | 'COMUNICADO';
+  isComunicado?: boolean;
+  priority?: 'NORMAL' | 'IMPORTANTE' | 'URGENTE';
+  requireAcknowledgment?: boolean;
+  reactivatedAt?: number;
+  reactivatedByEmail?: string;
+  reactivatedByName?: string;
 }
 
 export interface Incident {
@@ -426,6 +433,16 @@ export interface Referral {
   createdByEmail?: string;
   createdByRole?: string;
   additionalRecipients?: { uid?: string; email: string; name: string; role: string }[];
+  reassignmentHistory?: {
+    previousPsychologistName?: string;
+    previousPsychologistEmail?: string;
+    newPsychologistName: string;
+    newPsychologistEmail: string;
+    reassignedByName: string;
+    reassignedByEmail: string;
+    date: number;
+    reason?: string;
+  }[];
   status?: 'PENDIENTE' | 'EN_VALORACION' | 'ATENDIDO';
   createdAt: number;
   updatedAt?: number;

@@ -8,7 +8,7 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop, MessageSquare } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Edit3, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop, MessageSquare, Megaphone, FolderKanban } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn, getUserEducationLevel, normalizeEducationLevel, areStudentNamesEquivalent, normalizeStudentName, normalizeSearchText, pickBetterStudentDisplayName, formatStudentNameTitleCase, getStudentNameTokens } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
@@ -2144,7 +2144,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   };
   const [searchTerm, setSearchTerm] = useState('');
-  const [isGroupedByStudent, setIsGroupedByStudent] = useState(false);
+  const [incidentGroupingMode, setIncidentGroupingMode] = useState<'individual' | 'student'>('individual');
+  const [incidentStatusFilter, setIncidentStatusFilter] = useState<'ALL' | IncidentStatus>('ALL');
+  const isGroupedByStudent = incidentGroupingMode === 'student';
+  const setIsGroupedByStudent = (val: boolean) => setIncidentGroupingMode(val ? 'student' : 'individual');
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
   const [isExportingDb, setIsExportingDb] = useState(false);
@@ -3864,16 +3867,30 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qTasks, (snapshot) => {
       const allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin) {
+      const normRole = normalizeUserRole(profile.role);
+      const isAdministrator = normRole === 'ADMIN' || isSuperAdmin;
+      if (isAdministrator) {
         setTasks(allDocs);
       } else {
-        const myEmailLower = profile.email?.toLowerCase();
+        const myEmailLower = profile.email?.toLowerCase().trim();
         const myUid = profile.uid;
-        const userTasks = allDocs.filter(t => 
-          (t.assignedToEmail && t.assignedToEmail.toLowerCase() === myEmailLower) || 
-          (t.createdByEmail && t.createdByEmail.toLowerCase() === myEmailLower) ||
-          (myUid && (t.assignedToEmail === myUid || t.createdByEmail === myUid))
-        );
+        const myNameLower = profile.name?.toLowerCase().trim();
+        const userTasks = allDocs.filter(t => {
+          const assignedEmail = (t.assignedToEmail || '').toLowerCase().trim();
+          const createdEmail = (t.createdByEmail || '').toLowerCase().trim();
+          const assignedName = (t.assignedToName || '').toLowerCase().trim();
+          const createdName = (t.createdByName || '').toLowerCase().trim();
+
+          const isAssigned = (assignedEmail && assignedEmail === myEmailLower) || 
+                             (myUid && (t.assignedToEmail === myUid || (t as any).assignedToId === myUid)) || 
+                             (myNameLower && assignedName === myNameLower);
+                             
+          const isCreator = (createdEmail && createdEmail === myEmailLower) || 
+                            (myUid && (t.createdByEmail === myUid || (t as any).createdById === myUid)) || 
+                            (myNameLower && createdName === myNameLower);
+
+          return isAssigned || isCreator;
+        });
         setTasks(userTasks);
       }
     }, (error) => {
@@ -5582,26 +5599,32 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   )}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
-                    onClick={() => setIsGroupedByStudent(false)}
+                    onClick={() => {
+                      setIncidentGroupingMode('individual');
+                      setIsGroupedByStudent(false);
+                    }}
                     className={cn(
-                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border",
-                      !isGroupedByStudent 
+                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer shadow-2xs",
+                      incidentGroupingMode === 'individual' 
                         ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" 
-                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
                     )}
                   >
                     <ClipboardList className="w-4 h-4" />
                     <span>Individuales</span>
                   </button>
                   <button
-                    onClick={() => setIsGroupedByStudent(true)}
+                    onClick={() => {
+                      setIncidentGroupingMode('student');
+                      setIsGroupedByStudent(true);
+                    }}
                     className={cn(
-                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border",
-                      isGroupedByStudent 
+                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer shadow-2xs",
+                      incidentGroupingMode === 'student' 
                         ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" 
-                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
                     )}
                   >
                     <Users className="w-4 h-4" />
@@ -5642,11 +5665,21 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 )}
 
                 {(() => {
-                  const filteredIncidents = incidents.filter(incident => {
-                    const normRole = normalizeUserRole(profile.role);
-                    const userEmail = (profile.email || '').toLowerCase().trim();
-                    const userUid = profile.uid;
+                  const getIncidentEffectiveStatus = (inc: Incident): IncidentStatus => {
+                    if (inc.status === 'CERRADO') return 'CERRADO';
+                    if (inc.status === 'EN_SEGUIMIENTO') return 'EN_SEGUIMIENTO';
+                    if (inc.status === 'RECIBIDO' || (inc.isReceived && (!inc.status || inc.status === 'PENDIENTE'))) {
+                      return 'RECIBIDO';
+                    }
+                    return 'PENDIENTE';
+                  };
 
+                  const normRole = normalizeUserRole(profile.role);
+                  const userEmail = (profile.email || '').toLowerCase().trim();
+                  const userUid = profile.uid;
+
+                  // Base filter with privacy and search term
+                  const baseIncidents = incidents.filter(incident => {
                     // Enforce teacher privacy: only own records or if in copy
                     if (!isSuperAdmin && !isSuperAdminEmail(userEmail) && normRole !== 'ADMIN' && normRole !== 'DIRECTIVE') {
                       if (normRole === 'TEACHER') {
@@ -5678,140 +5711,271 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                     return studentsMatch || placeMatch || descMatch || reporterMatch;
                   });
 
-                  if (filteredIncidents.length === 0) {
+                  // Allowed roles for status filter tabs: soporte (superAdmin), Admin, directivo y coordinador
+                  const canFilterByStatus = isSuperAdmin || ['ADMIN', 'DIRECTIVE', 'COORDINATOR'].includes(normRole || '');
+
+                  const statusCounts = {
+                    ALL: baseIncidents.length,
+                    PENDIENTE: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'PENDIENTE').length,
+                    RECIBIDO: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'RECIBIDO').length,
+                    EN_SEGUIMIENTO: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'EN_SEGUIMIENTO').length,
+                    CERRADO: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'CERRADO').length,
+                  };
+
+                  const incidentStatusTabs = [
+                    {
+                      id: 'ALL' as const,
+                      label: 'Todas',
+                      icon: ClipboardList,
+                      count: statusCounts.ALL,
+                      activeColor: 'bg-indigo-600 text-white shadow-sm border-indigo-600',
+                      inactiveColor: 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-600',
+                    },
+                    {
+                      id: 'PENDIENTE' as const,
+                      label: 'Pendiente',
+                      icon: Clock,
+                      count: statusCounts.PENDIENTE,
+                      activeColor: 'bg-amber-500 text-slate-950 font-black shadow-sm border-amber-500',
+                      inactiveColor: 'bg-amber-50/80 dark:bg-amber-950/40 text-amber-950 dark:text-amber-200 border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/60',
+                      activeBadge: 'bg-slate-950/20 text-slate-950 font-black',
+                      inactiveBadge: 'bg-amber-100 dark:bg-amber-900/60 text-amber-950 dark:text-amber-100 border border-amber-300 dark:border-amber-700',
+                    },
+                    {
+                      id: 'RECIBIDO' as const,
+                      label: 'Recibido',
+                      icon: CheckCircle2,
+                      count: statusCounts.RECIBIDO,
+                      activeColor: 'bg-emerald-600 text-white shadow-sm border-emerald-600',
+                      inactiveColor: 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-950 dark:text-emerald-200 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/60',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-950 dark:text-emerald-100 border border-emerald-300 dark:border-emerald-700',
+                    },
+                    {
+                      id: 'EN_SEGUIMIENTO' as const,
+                      label: 'En Seguimiento',
+                      icon: RefreshCw,
+                      count: statusCounts.EN_SEGUIMIENTO,
+                      activeColor: 'bg-indigo-600 text-white shadow-sm border-indigo-600',
+                      inactiveColor: 'bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-950 dark:text-indigo-200 border-indigo-300 dark:border-indigo-700 hover:bg-indigo-100 dark:hover:bg-indigo-900/60',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-950 dark:text-indigo-100 border border-indigo-300 dark:border-indigo-700',
+                    },
+                    {
+                      id: 'CERRADO' as const,
+                      label: 'Cerrado',
+                      icon: ShieldCheck,
+                      count: statusCounts.CERRADO,
+                      activeColor: 'bg-slate-700 text-white shadow-sm border-slate-700',
+                      inactiveColor: 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-200/80 dark:hover:bg-slate-700/80',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-200 border border-slate-300 dark:border-slate-600',
+                    },
+                  ];
+
+                  const filteredIncidents = (!canFilterByStatus || incidentStatusFilter === 'ALL')
+                    ? baseIncidents
+                    : baseIncidents.filter(inc => getIncidentEffectiveStatus(inc) === incidentStatusFilter);
+
+                  const renderEmptyState = () => {
+                    if (incidentStatusFilter !== 'ALL') {
+                      const labelMap: Record<string, string> = {
+                        PENDIENTE: 'Pendiente',
+                        RECIBIDO: 'Recibido',
+                        EN_SEGUIMIENTO: 'En Seguimiento',
+                        CERRADO: 'Cerrado',
+                      };
+                      return (
+                        <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center space-y-3">
+                          <ClipboardList className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto" />
+                          <p className="text-slate-700 dark:text-slate-300 font-bold text-sm">
+                            No hay incidencias en estatus "{labelMap[incidentStatusFilter] || incidentStatusFilter}".
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setIncidentStatusFilter('ALL')}
+                            className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                          >
+                            Mostrar todas las incidencias ({statusCounts.ALL})
+                          </button>
+                        </div>
+                      );
+                    }
                     return (
-                      <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center">
-                        <ClipboardList className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                        <p className="text-slate-500 font-medium">
+                      <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center">
+                        <ClipboardList className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
+                        <p className="text-slate-500 dark:text-slate-400 font-medium">
                           {searchTerm ? `No se encontraron incidencias que coincidan con "${searchTerm}".` : 'No hay incidencias registradas aún.'}
                         </p>
                       </div>
                     );
-                  }
+                  };
 
-                  if (isGroupedByStudent) {
-                    interface StudentGroupItem {
-                      id: string;
-                      displayName: string;
-                      incidents: Incident[];
+                  const renderContent = () => {
+                    if (filteredIncidents.length === 0) {
+                      return renderEmptyState();
                     }
 
-                    const groups: StudentGroupItem[] = [];
-
-                    filteredIncidents.forEach(inc => {
-                      const rawName = inc.students?.trim() || 'Sin Nombre';
-                      // Separar múltiples alumnos por coma, punto y coma, salto de línea, barra o " y " / " e "
-                      const names = rawName
-                        .split(/[,;\n/]+|\s+y\s+|\s+e\s+/i)
-                        .map(s => s.trim())
-                        .filter(Boolean);
-
-                      if (names.length === 0) {
-                        names.push('Sin Nombre');
+                    if (isGroupedByStudent) {
+                      interface StudentGroupItem {
+                        id: string;
+                        displayName: string;
+                        incidents: Incident[];
                       }
 
-                      names.forEach(name => {
-                        const isSinNombre = !name || name.toLowerCase() === 'sin nombre' || name.toLowerCase() === 'n/a';
-                        if (isSinNombre) {
-                          const existing = groups.find(g => g.displayName === 'Sin Nombre');
+                      const groups: StudentGroupItem[] = [];
+
+                      filteredIncidents.forEach(inc => {
+                        const rawName = inc.students?.trim() || 'Sin Nombre';
+                        const names = rawName
+                          .split(/[,;\n/]+|\s+y\s+|\s+e\s+/i)
+                          .map(s => s.trim())
+                          .filter(Boolean);
+
+                        if (names.length === 0) {
+                          names.push('Sin Nombre');
+                        }
+
+                        names.forEach(name => {
+                          const isSinNombre = !name || name.toLowerCase() === 'sin nombre' || name.toLowerCase() === 'n/a';
+                          if (isSinNombre) {
+                            const existing = groups.find(g => g.displayName === 'Sin Nombre');
+                            if (existing) {
+                              if (!existing.incidents.some(i => i.id === inc.id)) {
+                                existing.incidents.push(inc);
+                              }
+                            } else {
+                              groups.push({
+                                id: 'sin-nombre',
+                                displayName: 'Sin Nombre',
+                                incidents: [inc]
+                              });
+                            }
+                            return;
+                          }
+
+                          const existing = groups.find(g => 
+                            g.displayName !== 'Sin Nombre' && areStudentNamesEquivalent(g.displayName, name)
+                          );
+
                           if (existing) {
                             if (!existing.incidents.some(i => i.id === inc.id)) {
                               existing.incidents.push(inc);
                             }
+                            existing.displayName = pickBetterStudentDisplayName(existing.displayName, name);
                           } else {
                             groups.push({
-                              id: 'sin-nombre',
-                              displayName: 'Sin Nombre',
+                              id: normalizeStudentName(name) || 'sin-nombre',
+                              displayName: formatStudentNameTitleCase(name),
                               incidents: [inc]
                             });
                           }
-                          return;
-                        }
-
-                        // Coincidencia flexible: insensible a acentos, mayúsculas/minúsculas y subconjuntos de nombres
-                        const existing = groups.find(g => 
-                          g.displayName !== 'Sin Nombre' && areStudentNamesEquivalent(g.displayName, name)
-                        );
-
-                        if (existing) {
-                          if (!existing.incidents.some(i => i.id === inc.id)) {
-                            existing.incidents.push(inc);
-                          }
-                          existing.displayName = pickBetterStudentDisplayName(existing.displayName, name);
-                        } else {
-                          groups.push({
-                            id: normalizeStudentName(name) || 'sin-nombre',
-                            displayName: formatStudentNameTitleCase(name),
-                            incidents: [inc]
-                          });
-                        }
+                        });
                       });
-                    });
 
-                    // Ordenar por cantidad de incidencias descendente y luego alfabéticamente
-                    const studentEntries = groups
-                      .sort((a, b) => b.incidents.length - a.incidents.length || a.displayName.localeCompare(b.displayName))
-                      .map(g => [g.displayName, g.incidents] as [string, Incident[]]);
+                      const studentEntries = groups
+                        .sort((a, b) => b.incidents.length - a.incidents.length || a.displayName.localeCompare(b.displayName))
+                        .map(g => [g.displayName, g.incidents] as [string, Incident[]]);
 
-                    return (
-                      <div className="space-y-4">
-                        {studentEntries.map(([studentName, studentIncidents]) => (
-                          <StudentGroupCard
-                            key={studentName}
-                            studentName={studentName}
-                            incidents={studentIncidents}
-                            profile={profile}
-                            coordinators={coordinators}
-                            teachers={teachers}
-                            psychologists={psychologists}
-                            onMarkReceived={(id) => markAsReceived(id)}
-                            onUpdateStatus={(inc, status) => updateIncidentStatus(inc, status)}
-                            onUpdateReferralStatus={(inc, status) => updateIncidentReferralStatus(inc, status)}
-                            onUpdateReferralComments={(inc, comments) => updateReferralComments(inc, comments)}
-                            onUpdateFollowUp={(inc, followUp, history, comment) => updateIncidentFollowUp(inc, followUp, history, comment)}
-                            onDelete={(inc) => deleteIncident(inc)}
-                            onForward={(inc, adminId) => forwardIncidentToAdmin(inc, adminId)}
-                            onOpenGallery={openGallery}
-                            onPrint={(inc) => setPrintIncident(inc)}
-                            onPrintConcentratedReport={(sName, sIncidents) => setPrintStudentGroup({ studentName: sName, incidents: sIncidents })}
-                            systemSettings={effectiveSystemSettings}
-                            admins={admins}
-                            expandedIncidentId={expandedIncidentId}
-                          />
-                        ))}
-                      </div>
-                    );
-                  }
+                      return (
+                        <div className="space-y-4">
+                          {studentEntries.map(([studentName, studentIncidents]) => (
+                            <StudentGroupCard
+                              key={studentName}
+                              studentName={studentName}
+                              incidents={studentIncidents}
+                              profile={profile}
+                              coordinators={coordinators}
+                              teachers={teachers}
+                              psychologists={psychologists}
+                              onMarkReceived={(id) => markAsReceived(id)}
+                              onUpdateStatus={(inc, status) => updateIncidentStatus(inc, status)}
+                              onUpdateReferralStatus={(inc, status) => updateIncidentReferralStatus(inc, status)}
+                              onUpdateReferralComments={(inc, comments) => updateReferralComments(inc, comments)}
+                              onUpdateFollowUp={(inc, followUp, history, comment) => updateIncidentFollowUp(inc, followUp, history, comment)}
+                              onDelete={(inc) => deleteIncident(inc)}
+                              onForward={(inc, adminId) => forwardIncidentToAdmin(inc, adminId)}
+                              onOpenGallery={openGallery}
+                              onPrint={(inc) => setPrintIncident(inc)}
+                              onPrintConcentratedReport={(sName, sIncidents) => setPrintStudentGroup({ studentName: sName, incidents: sIncidents })}
+                              systemSettings={effectiveSystemSettings}
+                              admins={admins}
+                              expandedIncidentId={expandedIncidentId}
+                            />
+                          ))}
+                        </div>
+                      );
+                    }
 
-                  return filteredIncidents.map((incident) => (
-                    <IncidentCard
-                      key={incident.id}
-                      incident={incident}
-                      profile={profile}
-                      coordinators={coordinators}
-                      teachers={teachers}
-                      psychologists={psychologists}
-                      onMarkReceived={() => markAsReceived(incident.id)}
-                      onUpdateStatus={(status: IncidentStatus) => updateIncidentStatus(incident, status)}
-                      onUpdateReferralStatus={(status: 'SUGGESTED' | 'IN_PROGRESS') => updateIncidentReferralStatus(incident, status)}
-                      onUpdateReferralComments={(comments: string) => updateReferralComments(incident, comments)}
-                      onUpdateFollowUp={(followUp: string, history: FollowUpComment[], newCommentText: string) => updateIncidentFollowUp(incident, followUp, history, newCommentText)}
-                      onDelete={() => deleteIncident(incident)}
-                      onForward={(adminId: string) => forwardIncidentToAdmin(incident, adminId)}
-                      onOpenGallery={openGallery}
-                      onPrint={(inc) => setPrintIncident(inc)}
-                      systemSettings={effectiveSystemSettings}
-                      admins={admins}
-                      selectable={isSuperAdmin}
-                      selected={selectedIncidents.includes(incident.id)}
-                      onSelect={(id) => {
-                        setSelectedIncidents(prev => 
-                          prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-                        );
-                      }}
-                      expandedIncidentId={expandedIncidentId}
-                    />
-                  ));
+                    return filteredIncidents.map((incident) => (
+                      <IncidentCard
+                        key={incident.id}
+                        incident={incident}
+                        profile={profile}
+                        coordinators={coordinators}
+                        teachers={teachers}
+                        psychologists={psychologists}
+                        onMarkReceived={() => markAsReceived(incident.id)}
+                        onUpdateStatus={(status: IncidentStatus) => updateIncidentStatus(incident, status)}
+                        onUpdateReferralStatus={(status: 'SUGGESTED' | 'IN_PROGRESS') => updateIncidentReferralStatus(incident, status)}
+                        onUpdateReferralComments={(comments: string) => updateReferralComments(incident, comments)}
+                        onUpdateFollowUp={(followUp: string, history: FollowUpComment[], newCommentText: string) => updateIncidentFollowUp(incident, followUp, history, newCommentText)}
+                        onDelete={() => deleteIncident(incident)}
+                        onForward={(adminId: string) => forwardIncidentToAdmin(incident, adminId)}
+                        onOpenGallery={openGallery}
+                        onPrint={(inc) => setPrintIncident(inc)}
+                        systemSettings={effectiveSystemSettings}
+                        admins={admins}
+                        selectable={isSuperAdmin}
+                        selected={selectedIncidents.includes(incident.id)}
+                        onSelect={(id) => {
+                          setSelectedIncidents(prev => 
+                            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+                          );
+                        }}
+                        expandedIncidentId={expandedIncidentId}
+                      />
+                    ));
+                  };
+
+                  return (
+                    <div className="space-y-4">
+                      {/* Status Tabs Filter Bar (Only for support, Admin, Directivo, Coordinador) */}
+                      {canFilterByStatus && (
+                        <div className="bg-slate-100/90 dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto shadow-2xs">
+                          {incidentStatusTabs.map(tab => {
+                            const isSelected = incidentStatusFilter === tab.id;
+                            const TabIcon = tab.icon;
+
+                            return (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setIncidentStatusFilter(tab.id)}
+                                className={cn(
+                                  "px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 cursor-pointer border",
+                                  isSelected ? tab.activeColor : tab.inactiveColor
+                                )}
+                              >
+                                <TabIcon className="w-3.5 h-3.5" />
+                                <span>{tab.label}</span>
+                                <span className={cn(
+                                  "px-2 py-0.5 rounded-full text-xs font-bold transition-colors",
+                                  isSelected ? tab.activeBadge : tab.inactiveBadge
+                                )}>
+                                  {tab.count}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {renderContent()}
+                    </div>
+                  );
                 })()}
               </div>
             </motion.div>
@@ -9458,17 +9622,41 @@ const TaskManager = ({
 
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
+  const [showComunicadoModal, setShowComunicadoModal] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [reactivateTargetTask, setReactivateTargetTask] = useState<Task | null>(null);
+  const [editTaskData, setEditTaskData] = useState({
+    title: '',
+    description: '',
+    dueDate: '',
+    directiveFeedback: '',
+  });
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   useBackHandler(showAssignModal, () => setShowAssignModal(false), 'task-assign-modal');
   useBackHandler(showCongratulationModal, () => setShowCongratulationModal(false), 'task-congratulation-modal');
+  useBackHandler(showComunicadoModal, () => setShowComunicadoModal(false), 'task-comunicado-modal');
+  useBackHandler(Boolean(editingTask), () => setEditingTask(null), 'task-edit-modal');
   useBackHandler(Boolean(selectedTask), () => setSelectedTask(null), 'task-details-modal');
+  useBackHandler(Boolean(reactivateTargetTask), () => setReactivateTargetTask(null), 'task-reactivate-dialog');
   const [evidenceText, setEvidenceText] = useState('');
   const [evidenceFile, setEvidenceFile] = useState('');
   const [directiveFeedback, setDirectiveFeedback] = useState('');
-  const [taskFilter, setTaskFilter] = useState<'ALL' | 'ASIGNADA' | 'RECIBIDA' | 'REALIZADA' | 'COMPLETADA' | 'INCUMPLIDA'>('ALL');
+  const [taskFilter, setTaskFilter] = useState<'ALL' | 'COMUNICADOS' | 'ASIGNADA' | 'RECIBIDA' | 'REALIZADA' | 'COMPLETADA' | 'INCUMPLIDA'>('ALL');
+
+  const isTaskComunicado = (task: Task) => {
+    return Boolean(
+      task.isComunicado ||
+      task.taskType === 'COMUNICADO' ||
+      task.title?.startsWith('📢') ||
+      task.title?.includes('🚨 [URGENTE]') ||
+      task.title?.includes('⚡ [IMPORTANTE]') ||
+      task.title?.toLowerCase().includes('comunicado')
+    );
+  };
 
   const isTaskOverdue = (task: Task) => {
+    if (isTaskComunicado(task)) return false;
     if (task.status === 'COMPLETADA') return false;
     // Si una tarea ya está en estatus de realizada y se llega la fecha límite, cuenta como completada
     const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -9567,9 +9755,478 @@ const TaskManager = ({
   }, [tasks, profile, systemSettings]);
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
-  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin;
+  const normRole = normalizeUserRole(profile.role);
+  const isDirective = normRole === 'DIRECTIVE';
+  const isAdmin = normRole === 'ADMIN';
+  const isCoordinator = normRole === 'COORDINATOR';
+  const isDirectiveOrAdmin = isDirective || isAdmin || isCoordinator || isSuperAdmin;
+  const canSendComunicados = Boolean(isCoordinator || isDirective || isAdmin || isSuperAdmin);
   const canDeleteRecords = canCreateTask || canSendCongratulations || isDirectiveOrAdmin || isSuperAdmin;
   const assignableUsers = [...coordinators, ...teachers, ...psychologists];
+
+  // Docentes asignados al coordinador actual
+  const myAssignedTeachers = useMemo(() => {
+    const myUid = (profile.uid || '').trim();
+    const myEmail = (profile.email || '').toLowerCase().trim();
+    const myName = (profile.name || '').toLowerCase().trim();
+
+    return teachers.filter(t => {
+      const cId = (t.assignedCoordinatorId || '').trim();
+      const cEmail = (t.assignedCoordinatorEmail || '').toLowerCase().trim();
+      const cName = (t.assignedCoordinatorName || '').toLowerCase().trim();
+
+      const sId = (t.secondaryCoordinatorId || '').trim();
+      const sEmail = (t.secondaryCoordinatorEmail || '').toLowerCase().trim();
+      const sName = (t.secondaryCoordinatorName || '').toLowerCase().trim();
+
+      const isPrimary = (myUid && cId === myUid) || (myEmail && cEmail === myEmail) || (myName && cName === myName);
+      const isSecondary = (myUid && sId === myUid) || (myEmail && sEmail === myEmail) || (myName && sName === myName);
+
+      return isPrimary || isSecondary;
+    });
+  }, [teachers, profile]);
+
+  const adminAndDirectiveUsers = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    [...admins, ...directives].forEach(u => {
+      if (u.email && !map.has(u.email.toLowerCase())) {
+        map.set(u.email.toLowerCase(), u);
+      }
+    });
+    return Array.from(map.values());
+  }, [admins, directives]);
+
+  const allStaffUsers = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    [...teachers, ...coordinators, ...directives, ...admins, ...psychologists].forEach(u => {
+      if (u.email && !map.has(u.email.toLowerCase())) {
+        map.set(u.email.toLowerCase(), u);
+      }
+    });
+    return Array.from(map.values());
+  }, [teachers, coordinators, directives, admins, psychologists]);
+
+  const defaultComunicadoTarget = isCoordinator ? 'MY_ASSIGNED_TEACHERS' : 'ALL_STAFF';
+  const [comunicadoFormData, setComunicadoFormData] = useState({
+    title: '',
+    content: '',
+    attachmentUrl: '',
+    priority: 'NORMAL' as 'NORMAL' | 'IMPORTANTE' | 'URGENTE',
+    targetType: defaultComunicadoTarget,
+    selectedEmails: [] as string[],
+    requireAcknowledgment: true,
+  });
+
+  const getRecipientsForComunicado = (targetType: string, selectedEmails: string[]): UserProfile[] => {
+    if (targetType === 'SPECIFIC' || targetType === 'SPECIFIC_TEACHERS' || targetType === 'SPECIFIC_COORDINATORS') {
+      const emailSet = new Set(selectedEmails.map(e => e.toLowerCase()));
+      return allStaffUsers.filter(u => u.email && emailSet.has(u.email.toLowerCase()));
+    }
+    if (targetType === 'MY_ASSIGNED_TEACHERS') {
+      return myAssignedTeachers;
+    }
+    if (targetType === 'ALL_TEACHERS') {
+      return teachers;
+    }
+    if (targetType === 'OTHER_COORDINATORS') {
+      return coordinators.filter(c => c.email?.toLowerCase() !== profile.email?.toLowerCase());
+    }
+    if (targetType === 'ALL_COORDINATORS') {
+      return coordinators;
+    }
+    if (targetType === 'ADMINS_DIRECTIVES') {
+      return adminAndDirectiveUsers.filter(u => u.email?.toLowerCase() !== profile.email?.toLowerCase());
+    }
+    if (targetType === 'ALL_STAFF') {
+      return allStaffUsers.filter(u => u.email?.toLowerCase() !== profile.email?.toLowerCase());
+    }
+    return [];
+  };
+
+  const handleStartEditTask = (task: Task) => {
+    setEditingTask(task);
+    setEditTaskData({
+      title: task.title,
+      description: task.description,
+      dueDate: task.dueDate || '',
+      directiveFeedback: task.directiveFeedback || '',
+    });
+  };
+
+  const handleSaveEditTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    if (!editTaskData.title.trim()) {
+      showSystemPopup("Campo requerido", "Por favor ingresa un título para la tarea.", "info");
+      return;
+    }
+
+    try {
+      const isCompleted = editingTask.status === 'COMPLETADA' || (editingTask.status === 'REALIZADA' && isTaskOverdue(editingTask));
+      const newStatus: TaskStatus = isCompleted ? 'ASIGNADA' : editingTask.status;
+
+      const updates: any = {
+        title: editTaskData.title.trim(),
+        description: editTaskData.description.trim(),
+        dueDate: editTaskData.dueDate,
+        status: newStatus,
+        autoCompleted: false,
+        reactivatedAt: Date.now(),
+        reactivatedByEmail: profile.email.toLowerCase(),
+        reactivatedByName: profile.name,
+      };
+
+      if (editTaskData.directiveFeedback.trim()) {
+        updates.directiveFeedback = editTaskData.directiveFeedback.trim();
+      }
+
+      await updateDoc(doc(db, 'tasks', editingTask.id), updates);
+
+      const notifTitle = isCompleted 
+        ? `🔄 Tarea Activada: ${editTaskData.title.trim()}`
+        : `✏️ Tarea Actualizada: ${editTaskData.title.trim()}`;
+
+      const notifMsg = isCompleted
+        ? `${profile.name} ha reactivado la tarea "${editTaskData.title.trim()}". Ahora puedes ingresar y modificar tu evidencia de cumplimiento.`
+        : `${profile.name} ha modificado los datos de la tarea "${editTaskData.title.trim()}".`;
+
+      await sendNotification(
+        editingTask.assignedToEmail,
+        notifTitle,
+        notifMsg,
+        undefined,
+        false,
+        {
+          taskId: editingTask.id,
+          type: 'task_reactivated',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        isCompleted ? 'Reactivó tarea completada' : 'Modificó datos de tarea',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${editTaskData.title} | Asignado a: ${editingTask.assignedToName} | Nuevo estatus: ${newStatus}`,
+        { module: 'Tareas / Felicitaciones', recordId: editingTask.id }
+      );
+
+      if (selectedTask?.id === editingTask.id) {
+        setSelectedTask(prev => prev ? { ...prev, ...updates } : null);
+      }
+
+      setEditingTask(null);
+      showSystemPopup(
+        isCompleted ? "Tarea Activada" : "Tarea Actualizada",
+        isCompleted 
+          ? "La tarea ha sido activada y sus datos fueron actualizados. El docente asignado ahora puede volver a editar y subir su evidencia."
+          : "Los datos de la tarea han sido actualizados correctamente.",
+        "success"
+      );
+    } catch (err) {
+      console.error("Error updating task data:", err);
+      showSystemPopup("Error", "Ocurrió un error al actualizar los datos de la tarea.", "error");
+    }
+  };
+
+  const handleOpenReactivateOptions = (task: Task) => {
+    setReactivateTargetTask(task);
+  };
+
+  const handleSoloActivar = async (task: Task) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        status: 'ASIGNADA',
+        autoCompleted: false,
+        reactivatedAt: Date.now(),
+        reactivatedByEmail: profile.email.toLowerCase(),
+        reactivatedByName: profile.name,
+      });
+
+      await sendNotification(
+        task.assignedToEmail,
+        `🔄 Tarea Activada: ${task.title}`,
+        `${profile.name} ha reactivado la tarea "${task.title}". Ahora puedes editarla nuevamente y cargar tu evidencia actualizada.`,
+        undefined,
+        false,
+        {
+          taskId: task.id,
+          type: 'task_reactivated',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        'Reactivó tarea completada (sin modificar datos)',
+        `Activada por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado a: ${task.assignedToName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask({
+          ...selectedTask,
+          status: 'ASIGNADA',
+          autoCompleted: false,
+          reactivatedAt: Date.now()
+        });
+      }
+
+      setReactivateTargetTask(null);
+      showSystemPopup(
+        "Tarea Activada",
+        `La tarea "${task.title}" ha sido activada en estatus ASIGNADA. El docente (${task.assignedToName}) ya puede editar y cargar su evidencia nuevamente.`,
+        "success"
+      );
+    } catch (err) {
+      console.error("Error solo activando tarea:", err);
+      showSystemPopup("Error", "No se pudo activar la tarea.", "error");
+    }
+  };
+
+  const handleActivarYModificar = async (task: Task) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        status: 'ASIGNADA',
+        autoCompleted: false,
+        reactivatedAt: Date.now(),
+        reactivatedByEmail: profile.email.toLowerCase(),
+        reactivatedByName: profile.name,
+      });
+
+      await sendNotification(
+        task.assignedToEmail,
+        `🔄 Tarea Activada: ${task.title}`,
+        `${profile.name} ha reactivado la tarea "${task.title}". Ahora puedes editarla nuevamente y cargar tu evidencia actualizada.`,
+        undefined,
+        false,
+        {
+          taskId: task.id,
+          type: 'task_reactivated',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        'Reactivó tarea completada',
+        `Reactivado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado a: ${task.assignedToName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask({
+          ...selectedTask,
+          status: 'ASIGNADA',
+          autoCompleted: false,
+          reactivatedAt: Date.now()
+        });
+      }
+
+      setReactivateTargetTask(null);
+
+      handleStartEditTask({
+        ...task,
+        status: 'ASIGNADA',
+        autoCompleted: false
+      });
+    } catch (err) {
+      console.error("Error reactivating and editing task:", err);
+      showSystemPopup("Error", "No se pudo reactivar la tarea.", "error");
+    }
+  };
+
+  const handleCloseTaskAsCompleted = async (task: Task) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        status: 'COMPLETADA',
+        completedAt: Date.now(),
+        closedByEmail: profile.email.toLowerCase(),
+        closedByName: profile.name,
+      });
+
+      await sendNotification(
+        task.assignedToEmail,
+        `✅ Tarea Cerrada como Completada: ${task.title}`,
+        `${profile.name} ha cerrado la tarea "${task.title}" con el estatus de COMPLETADA.`,
+        undefined,
+        false,
+        {
+          taskId: task.id,
+          type: 'task_completed',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        'Cerró tarea con estatus completada',
+        `Cerrada por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado a: ${task.assignedToName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask(prev => prev ? {
+          ...prev,
+          status: 'COMPLETADA',
+          completedAt: Date.now()
+        } : null);
+      }
+
+      if (editingTask?.id === task.id) {
+        setEditingTask(null);
+      }
+
+      if (reactivateTargetTask?.id === task.id) {
+        setReactivateTargetTask(null);
+      }
+
+      showSystemPopup(
+        "Tarea Completada",
+        `La tarea "${task.title}" ha sido cerrada con el estatus de COMPLETADA exitosamente.`,
+        "success"
+      );
+    } catch (err) {
+      console.error("Error closing task as completed:", err);
+      showSystemPopup("Error", "No se pudo cerrar la tarea como completada.", "error");
+    }
+  };
+
+  const handleReactivateTask = async (task: Task) => {
+    handleOpenReactivateOptions(task);
+  };
+
+  const handleSendComunicado = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!comunicadoFormData.title.trim()) {
+      showSystemPopup("Campo requerido", "Por favor ingresa el título o asunto del comunicado.", "info");
+      return;
+    }
+    if (!comunicadoFormData.content.trim()) {
+      showSystemPopup("Campo requerido", "Por favor escribe el contenido o información del comunicado.", "info");
+      return;
+    }
+
+    const recipientsToNotify = getRecipientsForComunicado(comunicadoFormData.targetType, comunicadoFormData.selectedEmails);
+
+    if (recipientsToNotify.length === 0) {
+      showSystemPopup("Sin destinatarios", "No se encontraron destinatarios con la opción seleccionada. Por favor selecciona al menos una persona o grupo.", "info");
+      return;
+    }
+
+    const priorityPrefix = comunicadoFormData.priority === 'URGENTE' 
+      ? '🚨 [URGENTE]' 
+      : comunicadoFormData.priority === 'IMPORTANTE' 
+      ? '⚡ [IMPORTANTE]' 
+      : '📢';
+
+    const fullTitle = `${priorityPrefix} ${comunicadoFormData.title.trim()}`;
+
+    try {
+      for (const rec of recipientsToNotify) {
+        const isSelf = rec.email?.toLowerCase() === profile.email?.toLowerCase() || (rec.uid && rec.uid === profile.uid);
+
+        const comunicadoTaskDoc: Omit<Task, 'id'> = {
+          title: fullTitle,
+          description: comunicadoFormData.content.trim(),
+          dueDate: '',
+          assignedToEmail: rec.email.toLowerCase(),
+          assignedToName: rec.name,
+          assignedToRole: rec.role,
+          createdByEmail: profile.email.toLowerCase(),
+          createdByName: profile.name,
+          createdByRole: profile.role,
+          createdAt: Date.now(),
+          status: 'ASIGNADA',
+          taskType: 'COMUNICADO',
+          isComunicado: true,
+          priority: comunicadoFormData.priority,
+          evidenceFiles: comunicadoFormData.attachmentUrl.trim() ? [comunicadoFormData.attachmentUrl.trim()] : [],
+          requireAcknowledgment: comunicadoFormData.requireAcknowledgment,
+        };
+
+        const newTaskRef = await addDoc(collection(db, 'tasks'), comunicadoTaskDoc);
+
+        if (!isSelf) {
+          await sendNotification(
+            rec.email,
+            `📢 Nuevo Comunicado: ${comunicadoFormData.title.trim()}`,
+            `${profile.name} (${profile.role}) ha publicado un comunicado: "${comunicadoFormData.title.trim()}". Ingresa a Tareas para consultarlo.`,
+            '',
+            false,
+            {
+              type: 'comunicado',
+              taskId: newTaskRef.id,
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: true,
+              priority: comunicadoFormData.priority
+            }
+          );
+
+          if (systemSettings.emailNotificationsEnabled && rec.email) {
+            try {
+              await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: rec.email,
+                  subject: `📢 Comunicado Escolar: ${comunicadoFormData.title.trim()}`,
+                  html: `
+                    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #c7d2fe; border-radius: 14px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                      <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 22px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 19px; font-weight: 800;">${fullTitle}</h1>
+                        <p style="color: #c7d2fe; margin: 6px 0 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase;">DASHBOARD DUNOR - COMUNICADO OFICIAL</p>
+                      </div>
+                      <div style="padding: 24px;">
+                        <p style="font-size: 15px; color: #334155; margin-top: 0;">Estimado/a <strong>${rec.name}</strong>,</p>
+                        <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+                          Se ha publicado el siguiente comunicado institucional para su conocimiento y atención:
+                        </p>
+                        <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 18px; border-radius: 8px; margin: 20px 0;">
+                          <h3 style="margin: 0 0 8px 0; color: #1e293b; font-size: 16px; font-weight: 700;">${comunicadoFormData.title.trim()}</h3>
+                          <div style="font-size: 14px; color: #334155; line-height: 1.7; white-space: pre-line;">${comunicadoFormData.content.trim()}</div>
+                          ${comunicadoFormData.attachmentUrl.trim() ? `<p style="margin: 10px 0 0 0; font-size: 13px;"><a href="${comunicadoFormData.attachmentUrl.trim()}" target="_blank" style="color: #4f46e5; font-weight: bold; text-decoration: underline;">Ver Enlace / Archivo Adjunto</a></p>` : ''}
+                        </div>
+                        <p style="font-size: 12px; color: #64748b; font-weight: 600; margin: 16px 0 0 0;">
+                          Emitido por: <strong>${profile.name}</strong> (${profile.role})
+                        </p>
+                        <p style="font-size: 12px; color: #94a3b8; margin: 14px 0 0 0; text-align: center;">
+                          Ingresa a la sección de Tareas en la plataforma DUNOR para consultar y confirmar de enterado.
+                        </p>
+                      </div>
+                    </div>
+                  `
+                })
+              });
+            } catch (emailErr) {
+              console.error("Comunicado email error:", emailErr);
+            }
+          }
+        }
+      }
+
+      await addLog(
+        'Emitió comunicado oficial',
+        `Creado y emitido por: ${profile.name} (${profile.role} - ${profile.email}) | Asunto: ${comunicadoFormData.title} | Destinatarios (${recipientsToNotify.length}): ${recipientsToNotify.map(r => `${r.name} (${r.role})`).join(', ')}`,
+        { module: 'Tareas / Comunicados' }
+      );
+
+      setShowComunicadoModal(false);
+      setComunicadoFormData({
+        title: '',
+        content: '',
+        attachmentUrl: '',
+        priority: 'NORMAL',
+        targetType: defaultComunicadoTarget,
+        selectedEmails: [],
+        requireAcknowledgment: true,
+      });
+      showSystemPopup("Comunicado Emitido", `El comunicado ha sido enviado a ${recipientsToNotify.length} persona(s) y registrado en Tareas correctamente.`, "success");
+    } catch (err) {
+      console.error("Error sending comunicado:", err);
+      showSystemPopup("Error", "Ocurrió un error al emitir el comunicado.", "error");
+    }
+  };
 
   const handleDeleteTask = (taskToDelete: Task, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -9900,24 +10557,95 @@ const TaskManager = ({
     }
   };
 
-  const filteredTasks = tasks.map(t => {
+  const isCreatorOrAdminOfTask = (task: Task) => {
+    return Boolean(
+      (task.createdByEmail && profile?.email && task.createdByEmail.toLowerCase() === profile.email.toLowerCase()) ||
+      isSuperAdmin ||
+      isAdmin
+    );
+  };
+
+  const isAdministrator = Boolean(isSuperAdmin || isAdmin);
+
+  const visibleTasks = useMemo(() => {
+    if (isAdministrator) return tasks;
+    const myEmailLower = (profile?.email || '').toLowerCase().trim();
+    const myUid = profile?.uid;
+    const myNameLower = (profile?.name || '').toLowerCase().trim();
+    return tasks.filter(t => {
+      const assignedEmail = (t.assignedToEmail || '').toLowerCase().trim();
+      const createdEmail = (t.createdByEmail || '').toLowerCase().trim();
+      const assignedName = (t.assignedToName || '').toLowerCase().trim();
+      const createdName = (t.createdByName || '').toLowerCase().trim();
+
+      const isAssigned = (assignedEmail && assignedEmail === myEmailLower) || 
+                         (myUid && (t.assignedToEmail === myUid || (t as any).assignedToId === myUid)) || 
+                         (myNameLower && assignedName === myNameLower);
+                         
+      const isCreator = (createdEmail && createdEmail === myEmailLower) || 
+                        (myUid && (t.createdByEmail === myUid || (t as any).createdById === myUid)) || 
+                        (myNameLower && createdName === myNameLower);
+
+      return isAssigned || isCreator;
+    });
+  }, [tasks, isAdministrator, profile]);
+
+  const filteredTasks = visibleTasks.map(t => {
     const todayStr = format(new Date(), 'yyyy-MM-dd');
-    if (t.status === 'REALIZADA' && t.dueDate && todayStr >= t.dueDate) {
+    if (t.status === 'REALIZADA' && t.dueDate && todayStr >= t.dueDate && !isTaskComunicado(t)) {
       return { ...t, status: 'COMPLETADA' as TaskStatus };
     }
     return t;
   }).filter(t => {
     if (taskFilter === 'ALL') return true;
+    if (taskFilter === 'COMUNICADOS') return isTaskComunicado(t);
     if (taskFilter === 'INCUMPLIDA') return isTaskOverdue(t);
     return t.status === taskFilter;
   });
 
+  const statusCounts = useMemo(() => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const mapped = visibleTasks.map(t => {
+      if (t.status === 'REALIZADA' && t.dueDate && todayStr >= t.dueDate && !isTaskComunicado(t)) {
+        return { ...t, status: 'COMPLETADA' as TaskStatus };
+      }
+      return t;
+    });
+
+    const counts: Record<string, number> = {
+      ALL: mapped.length,
+      COMUNICADOS: mapped.filter(t => isTaskComunicado(t)).length,
+      RECIBIDA: mapped.filter(t => t.status === 'RECIBIDA').length,
+      ASIGNADA: mapped.filter(t => t.status === 'ASIGNADA').length,
+      REALIZADA: mapped.filter(t => t.status === 'REALIZADA').length,
+      COMPLETADA: mapped.filter(t => t.status === 'COMPLETADA').length,
+      INCUMPLIDA: mapped.filter(t => isTaskOverdue(t)).length,
+    };
+    return counts;
+  }, [visibleTasks]);
+
   const getStatusBadge = (task: Task) => {
+    if (isTaskComunicado(task)) {
+      if (task.status === 'COMPLETADA') {
+        return (
+          <span className="bg-sky-100 dark:bg-sky-950/80 text-sky-900 dark:text-sky-200 text-xs font-bold px-2.5 py-1 rounded-full border border-sky-300 dark:border-sky-800 flex items-center gap-1 shadow-2xs">
+            <CheckCircle2 className="w-3 h-3 text-sky-600 dark:text-sky-400" />
+            Comunicado (Confirmado)
+          </span>
+        );
+      }
+      return (
+        <span className="bg-sky-100 dark:bg-sky-950/80 text-sky-900 dark:text-sky-200 text-xs font-bold px-2.5 py-1 rounded-full border border-sky-300 dark:border-sky-800 flex items-center gap-1 shadow-2xs">
+          <Megaphone className="w-3 h-3 text-sky-600 dark:text-sky-400" />
+          Comunicado
+        </span>
+      );
+    }
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     const isAutoCompleted = task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate;
     if (isAutoCompleted || task.status === 'COMPLETADA') {
       return (
-        <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+        <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
           <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
           {isAutoCompleted ? 'Completada (Auto)' : 'Completada'}
         </span>
@@ -9925,84 +10653,202 @@ const TaskManager = ({
     }
     if (isTaskOverdue(task)) {
       return (
-        <span className="bg-red-100 dark:bg-red-950/80 text-red-800 dark:text-red-200 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 flex items-center gap-1 shadow-sm">
+        <span className="bg-red-100 dark:bg-red-950/80 text-red-900 dark:text-red-200 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 flex items-center gap-1 shadow-sm">
           <AlertTriangle className="w-3.5 h-3.5 text-red-600 dark:text-red-400 flex-shrink-0" /> Incumplida
         </span>
       );
     }
     switch (task.status) {
       case 'RECIBIDA':
-        return <span className="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800 flex items-center gap-1"><Eye className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Recibida</span>;
+        return <span className="bg-blue-100 dark:bg-blue-950/80 text-blue-900 dark:text-blue-200 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-300 dark:border-blue-800 flex items-center gap-1"><Eye className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Recibida</span>;
       case 'ASIGNADA':
-        return <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-800 flex items-center gap-1"><Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Re-asignada</span>;
+        return <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-950 dark:text-amber-200 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-300 dark:border-amber-800 flex items-center gap-1"><Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Re-asignada</span>;
       case 'REALIZADA':
-        return <span className="bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-200 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-200 dark:border-purple-800 flex items-center gap-1"><FileText className="w-3 h-3 text-purple-600 dark:text-purple-400" /> Realizada</span>;
+        return <span className="bg-purple-100 dark:bg-purple-950/80 text-purple-900 dark:text-purple-200 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-300 dark:border-purple-800 flex items-center gap-1"><FileText className="w-3 h-3 text-purple-600 dark:text-purple-400" /> Realizada</span>;
       default:
         return null;
     }
   };
 
+  const statusFilterTabs = [
+    {
+      id: 'ALL' as const,
+      label: 'Todas',
+      icon: ClipboardList,
+      activeColor: 'bg-indigo-600 text-white shadow-sm border-indigo-600',
+      inactiveColor: 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-600',
+    },
+    {
+      id: 'COMUNICADOS' as const,
+      label: 'Comunicados',
+      icon: Megaphone,
+      activeColor: 'bg-sky-600 text-white shadow-sm border-sky-600',
+      inactiveColor: 'bg-sky-50 dark:bg-sky-950/40 text-sky-900 dark:text-sky-200 border-sky-200 dark:border-sky-800 hover:bg-sky-100/80 dark:hover:bg-sky-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-sky-100 dark:bg-sky-900 text-sky-900 dark:text-sky-200 border border-sky-200 dark:border-sky-700',
+    },
+    {
+      id: 'RECIBIDA' as const,
+      label: 'Recibida',
+      icon: Eye,
+      activeColor: 'bg-blue-600 text-white shadow-sm border-blue-600',
+      inactiveColor: 'bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800 hover:bg-blue-100/80 dark:hover:bg-blue-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-200 border border-blue-200 dark:border-blue-700',
+    },
+    {
+      id: 'ASIGNADA' as const,
+      label: 'Re-asignada',
+      icon: Clock,
+      activeColor: 'bg-amber-500 text-slate-950 font-black shadow-sm border-amber-500',
+      inactiveColor: 'bg-amber-50 dark:bg-amber-950/40 text-amber-950 dark:text-amber-200 border-amber-300 dark:border-amber-700 hover:bg-amber-100/80 dark:hover:bg-amber-900/60',
+      activeBadge: 'bg-slate-950/20 text-slate-950 font-black',
+      inactiveBadge: 'bg-amber-100 dark:bg-amber-900 text-amber-950 dark:text-amber-100 border border-amber-300 dark:border-amber-700',
+    },
+    {
+      id: 'REALIZADA' as const,
+      label: 'Realizada',
+      icon: FileText,
+      activeColor: 'bg-purple-600 text-white shadow-sm border-purple-600',
+      inactiveColor: 'bg-purple-50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 border-purple-200 dark:border-purple-800 hover:bg-purple-100/80 dark:hover:bg-purple-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-purple-100 dark:bg-purple-900 text-purple-900 dark:text-purple-200 border border-purple-200 dark:border-purple-700',
+    },
+    {
+      id: 'COMPLETADA' as const,
+      label: 'Completada',
+      icon: CheckCircle2,
+      activeColor: 'bg-emerald-600 text-white shadow-sm border-emerald-600',
+      inactiveColor: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-emerald-100 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-700',
+    },
+    {
+      id: 'INCUMPLIDA' as const,
+      label: 'Incumplidas',
+      icon: AlertTriangle,
+      activeColor: 'bg-red-600 text-white shadow-sm border-red-600',
+      inactiveColor: 'bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-200 border-red-200 dark:border-red-800 hover:bg-red-100/80 dark:hover:bg-red-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-red-100 dark:bg-red-900 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-700',
+    },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Gestión de Tareas</h1>
-          <p className="text-slate-500 dark:text-slate-400">
+      {/* Top Header & Aesthetic Action Controls */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="p-2 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-xl">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Gestión de Tareas</h1>
+            {visibleTasks.length > 0 && (
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                {visibleTasks.length} {visibleTasks.length === 1 ? 'registro' : 'registros'}
+              </span>
+            )}
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 pl-0 sm:pl-9.5">
             {isDirectiveOrAdmin
-              ? 'Asigna, supervisa y revisa tareas y compromisos del personal'
-              : 'Consulta tus tareas asignadas y envía evidencias de cumplimiento'}
+              ? 'Asigna tareas, emite comunicados y supervisa el cumplimiento del personal'
+              : 'Consulta tus tareas asignadas, comunicados y envía evidencias de cumplimiento'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+
+        {/* Unified Aesthetic Action Menu */}
+        <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100/90 dark:bg-slate-800/80 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 shadow-2xs w-full lg:w-auto justify-start sm:justify-end">
+          {canSendComunicados && (
+            <button
+              type="button"
+              onClick={() => setShowComunicadoModal(true)}
+              className="flex items-center gap-2 bg-white dark:bg-slate-900 hover:bg-sky-50 dark:hover:bg-sky-950/60 text-sky-950 dark:text-sky-200 border border-slate-200 dark:border-slate-700 hover:border-sky-300 dark:hover:border-sky-700 px-3.5 py-2 rounded-xl transition-all font-bold text-xs sm:text-sm cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 group"
+              title="Publicar un comunicado o información para el personal o docentes"
+            >
+              <div className="w-6 h-6 rounded-lg bg-sky-100 dark:bg-sky-900/70 text-sky-600 dark:text-sky-300 flex items-center justify-center transition-colors group-hover:bg-sky-600 group-hover:text-white">
+                <Megaphone className="w-3.5 h-3.5" />
+              </div>
+              <span>Comunicados</span>
+            </button>
+          )}
           {canSendCongratulations && (
             <button
+              type="button"
               onClick={() => setShowCongratulationModal(true)}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl shadow-md transition-all font-bold text-sm cursor-pointer"
+              className="flex items-center gap-2 bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 text-emerald-950 dark:text-emerald-200 border border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 px-3.5 py-2 rounded-xl transition-all font-bold text-xs sm:text-sm cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 group"
+              title="Enviar felicitación o reconocimiento al personal"
             >
-              <Award className="w-4 h-4" />
+              <div className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-900/70 text-emerald-600 dark:text-emerald-300 flex items-center justify-center transition-colors group-hover:bg-emerald-600 group-hover:text-white">
+                <Award className="w-3.5 h-3.5" />
+              </div>
               <span>Enviar Felicitación</span>
             </button>
           )}
           {canCreateTask && (
             <button
+              type="button"
               onClick={() => setShowAssignModal(true)}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-md transition-all font-bold text-sm cursor-pointer"
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-sm hover:shadow-md hover:shadow-indigo-500/20 transition-all font-bold text-xs sm:text-sm cursor-pointer active:scale-95"
             >
-              <Plus className="w-4 h-4" />
+              <div className="w-6 h-6 rounded-lg bg-white/20 text-white flex items-center justify-center">
+                <Plus className="w-4 h-4" />
+              </div>
               <span>Asignar Tarea</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1 border-b border-slate-200 dark:border-slate-800">
-        {(['ALL', 'RECIBIDA', 'ASIGNADA', 'REALIZADA', 'COMPLETADA', 'INCUMPLIDA'] as const).map(st => (
-          <button
-            key={st}
-            onClick={() => setTaskFilter(st)}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer",
-              taskFilter === st
-                ? st === 'INCUMPLIDA' ? "bg-red-600 text-white shadow-sm" : "bg-indigo-600 text-white shadow-sm"
-                : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
-            )}
-          >
-            {st === 'ALL' ? 'Todas' : st === 'ASIGNADA' ? 'Re-asignada' : st === 'RECIBIDA' ? 'Recibida' : st === 'REALIZADA' ? 'Realizada' : st === 'COMPLETADA' ? 'Completada' : '⚠️ Incumplidas'}
-          </button>
-        ))}
+      {/* Filter Tabs Bar with Status Badges (Globos) */}
+      <div className="bg-slate-100/90 dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto shadow-2xs">
+        {statusFilterTabs.map(tab => {
+          const count = statusCounts[tab.id] || 0;
+          const isSelected = taskFilter === tab.id;
+          const TabIcon = tab.icon;
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setTaskFilter(tab.id)}
+              className={cn(
+                "px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 cursor-pointer border",
+                isSelected ? tab.activeColor : tab.inactiveColor
+              )}
+            >
+              <TabIcon className="w-3.5 h-3.5" />
+              <span>{tab.label}</span>
+              {count > 0 && (
+                <span
+                  className={cn(
+                    "px-2 py-0.5 text-[10px] font-black rounded-full min-w-[18px] text-center leading-tight transition-all shadow-2xs",
+                    isSelected ? tab.activeBadge : tab.inactiveBadge
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Task List */}
       {filteredTasks.length === 0 ? (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-12 text-center text-slate-400 dark:text-slate-500">
           <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-20" />
-          <p className="text-sm font-medium">No hay tareas en esta categoría.</p>
+          <p className="text-sm font-medium">No hay registros en esta categoría.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {filteredTasks.map((t) => {
             const overdue = isTaskOverdue(t);
+            const isComunicadoItem = isTaskComunicado(t);
+            const canReactivate = t.status === 'COMPLETADA' && !isComunicadoItem && isCreatorOrAdminOfTask(t);
+
             return (
               <div
                 key={t.id}
@@ -10011,6 +10857,8 @@ const TaskManager = ({
                   "rounded-2xl border p-5 transition-all cursor-pointer space-y-3",
                   overdue
                     ? "bg-red-50/40 dark:bg-red-950/30 border-red-200 dark:border-red-900/60 border-l-4 border-l-red-500 hover:border-red-300 dark:hover:border-red-700 hover:shadow-md"
+                    : isComunicadoItem
+                    ? "bg-sky-50/20 dark:bg-sky-950/20 border-sky-200 dark:border-sky-900/60 border-l-4 border-l-sky-500 hover:border-sky-300 dark:hover:border-sky-700 hover:shadow-md"
                     : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md"
                 )}
               >
@@ -10027,18 +10875,56 @@ const TaskManager = ({
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-500 dark:text-slate-400 font-medium">
                       <span>Para: <strong className="text-slate-800 dark:text-slate-200">{t.assignedToName}</strong> ({t.assignedToRole})</span>
                       <span>De: <strong className="text-slate-800 dark:text-slate-200">{t.createdByName}</strong> ({t.createdByRole})</span>
-                      {t.dueDate ? (
-                        <span className={cn("font-bold px-1.5 py-0.5 rounded", overdue ? "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300" : "text-red-600 dark:text-red-400")}>
+                      {isComunicadoItem ? (
+                        <span className="font-bold px-2 py-0.5 rounded-md bg-sky-100 dark:bg-sky-950 text-sky-900 dark:text-sky-200 border border-sky-200 dark:border-sky-800 text-xs flex items-center gap-1">
+                          📢 Comunicado Oficial
+                        </span>
+                      ) : t.dueDate ? (
+                        <span className={cn("font-bold px-2 py-0.5 rounded-md text-xs border", overdue ? "bg-red-100 dark:bg-red-950 text-red-900 dark:text-red-200 border-red-200 dark:border-red-800" : "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/60")}>
                           Límite: {t.dueDate}
                         </span>
                       ) : (
-                        <span className="font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-1">
+                        <span className="font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800 text-xs flex items-center gap-1">
                           🎉 Reconocimiento
                         </span>
                       )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {canReactivate && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleReactivateTask(t);
+                        }}
+                        title="Activar tarea para permitir que el docente edite nuevamente o modificar datos"
+                        className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Activar</span>
+                      </button>
+                    )}
+                    {t.status !== 'COMPLETADA' && !isComunicadoItem && isCreatorOrAdminOfTask(t) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          showSystemPopup(
+                            "Cerrar Tarea",
+                            `¿Deseas cerrar la tarea "${t.title}" con el estatus de COMPLETADA?`,
+                            "confirm",
+                            () => handleCloseTaskAsCompleted(t),
+                            "Cerrar como Completada"
+                          );
+                        }}
+                        title="Cerrar tarea con estatus de completada"
+                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Cerrar</span>
+                      </button>
+                    )}
                     <div>{getStatusBadge(t)}</div>
                     {(canDeleteRecords || t.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
                       <button
@@ -10333,6 +11219,48 @@ const TaskManager = ({
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Asignada a <strong className="text-slate-800 dark:text-slate-200">{selectedTask.assignedToName}</strong> por {selectedTask.createdByName}</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {isCreatorOrAdminOfTask(selectedTask) && !isTaskComunicado(selectedTask) && (
+                    selectedTask.status === 'COMPLETADA' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleReactivateTask(selectedTask)}
+                        className="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-indigo-200 dark:border-indigo-800 cursor-pointer shadow-2xs"
+                        title="Opciones para activar tarea"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Activar Tarea</span>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditTask(selectedTask)}
+                          className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-slate-200 dark:border-slate-700 cursor-pointer"
+                          title="Modificar datos de la tarea"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Modificar Datos</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            showSystemPopup(
+                              "Cerrar Tarea",
+                              `¿Deseas cerrar la tarea "${selectedTask.title}" con el estatus de COMPLETADA?`,
+                              "confirm",
+                              () => handleCloseTaskAsCompleted(selectedTask),
+                              "Cerrar como Completada"
+                            );
+                          }}
+                          className="px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-emerald-200 dark:border-emerald-800 cursor-pointer shadow-2xs"
+                          title="Cerrar esta tarea y marcarla con estatus COMPLETADA"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>Cerrar como Completada</span>
+                        </button>
+                      </div>
+                    )
+                  )}
                   {(canDeleteRecords || selectedTask.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
                     <button
                       type="button"
@@ -10363,7 +11291,9 @@ const TaskManager = ({
                 </div>
 
                 <div className="flex items-center gap-6 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 p-3 rounded-xl border border-slate-100 dark:border-slate-700/80">
-                  {selectedTask.dueDate ? (
+                  {isTaskComunicado(selectedTask) ? (
+                    <span>Tipo: <strong className="text-sky-700 dark:text-sky-400 font-bold">📢 Comunicado Oficial (Sin fecha de plazo)</strong></span>
+                  ) : selectedTask.dueDate ? (
                     <span>Fecha Límite: <strong className="text-red-600 dark:text-red-400 font-bold">{selectedTask.dueDate}</strong></span>
                   ) : (
                     <span>Tipo: <strong className="text-emerald-700 dark:text-emerald-400 font-bold">🎉 Reconocimiento / Felicitación (Sin Límite)</strong></span>
@@ -10403,14 +11333,66 @@ const TaskManager = ({
                   </div>
                 )}
 
-                {/* Form to Submit Evidence for Assigned User */}
-                {selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() &&
-                  (selectedTask.status === 'RECIBIDA' || selectedTask.status === 'ASIGNADA') && (
+                {/* Comunicado acknowledgment / confirmation */}
+                {isTaskComunicado(selectedTask) && (
+                  <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                    {selectedTask.status === 'COMPLETADA' ? (
+                      <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-xl p-3.5 text-xs text-emerald-800 dark:text-emerald-200 font-bold flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                        <span>Comunicado marcado como leído y confirmado de enterado.</span>
+                      </div>
+                    ) : selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() ? (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await updateDoc(doc(db, 'tasks', selectedTask.id), {
+                              status: 'COMPLETADA',
+                              readAt: Date.now(),
+                            });
+                            await sendNotification(
+                              selectedTask.createdByEmail,
+                              `✅ Comunicado Leído: ${selectedTask.title}`,
+                              `${profile.name} ha confirmado de enterado/leído el comunicado "${selectedTask.title}".`
+                            );
+                            setSelectedTask({
+                              ...selectedTask,
+                              status: 'COMPLETADA',
+                              readAt: Date.now()
+                            });
+                            showSystemPopup("Confirmado", "Has confirmado de enterado el comunicado.", "success");
+                          } catch (err) {
+                            console.error("Error confirming comunicado:", err);
+                          }
+                        }}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        <span>Confirmar de Enterado / Marcar como Leído</span>
+                      </button>
+                    ) : (
+                      <div className="bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 rounded-xl p-3 text-xs text-sky-800 dark:text-sky-300 font-medium flex items-center gap-2">
+                        <Megaphone className="w-4 h-4 text-sky-600 dark:text-sky-400 flex-shrink-0" />
+                        <span>Estado: <strong>{selectedTask.readAt ? 'Visto por el destinatario (Pendiente de confirmación)' : 'Pendiente de lectura y confirmación por el destinatario'}</strong></span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Form to Submit / Edit Evidence for Assigned User */}
+                {!isTaskComunicado(selectedTask) && selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() &&
+                  (selectedTask.status === 'RECIBIDA' || selectedTask.status === 'ASIGNADA' || selectedTask.status === 'REALIZADA') && (
                   <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
                     <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
                       <Send className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      Subir / Compartir Evidencia de Cumplimiento
+                      {selectedTask.evidenceText ? "Modificar / Actualizar Evidencia de Cumplimiento" : "Subir / Compartir Evidencia de Cumplimiento"}
                     </h4>
+                    {selectedTask.reactivatedAt && (
+                      <div className="bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 rounded-xl p-3 text-xs text-indigo-800 dark:text-indigo-300 font-semibold flex items-center gap-2">
+                        <RefreshCw className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                        <span>Esta tarea fue activada por {selectedTask.reactivatedByName || 'el creador'}. Ahora puedes editar nuevamente tus datos y reenviar tu evidencia.</span>
+                      </div>
+                    )}
                     <InputGroup label="Detalles de la Evidencia" required>
                       <textarea
                         rows={3}
@@ -10433,13 +11415,13 @@ const TaskManager = ({
                       onClick={() => handleSubmitEvidence(selectedTask)}
                       className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm cursor-pointer"
                     >
-                      Enviar Evidencia al Directivo (Estatus: Realizada)
+                      {selectedTask.evidenceText ? "Actualizar y Reenviar Evidencia (Estatus: Realizada)" : "Enviar Evidencia al Directivo (Estatus: Realizada)"}
                     </button>
                   </div>
                 )}
 
                 {/* Directive Review Options for REALIZADA status */}
-                {isDirectiveOrAdmin && selectedTask.status === 'REALIZADA' && (
+                {isDirectiveOrAdmin && selectedTask.status === 'REALIZADA' && !isTaskComunicado(selectedTask) && (
                   <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
                     <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Revisión de Evidencia por Dirección</h4>
                     <InputGroup label="Observaciones (si requiere corrección)">
@@ -10467,6 +11449,396 @@ const TaskManager = ({
                     </div>
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Emitir Comunicado */}
+      <AnimatePresence>
+        {showComunicadoModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowComunicadoModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-3 bg-sky-100 dark:bg-sky-950/80 text-sky-600 dark:text-sky-400 rounded-xl">
+                  <Megaphone className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Emitir Comunicado</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {isCoordinator
+                      ? 'Informa a tus docentes asignados, otros docentes, coordinadores o directivos'
+                      : 'Emisión de comunicados institucionales globales, por rol o específicos'}
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleSendComunicado} className="space-y-4">
+                <InputGroup label="Prioridad del Comunicado" required>
+                  <select
+                    value={comunicadoFormData.priority}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, priority: e.target.value as any })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="NORMAL">Normal (Informativo)</option>
+                    <option value="IMPORTANTE">⚡ Importante</option>
+                    <option value="URGENTE">🚨 Urgente</option>
+                  </select>
+                </InputGroup>
+
+                <InputGroup label="Destinatarios del Comunicado" required>
+                  <select
+                    value={comunicadoFormData.targetType}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, targetType: e.target.value, selectedEmails: [] })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-sky-500 mb-2"
+                  >
+                    {isCoordinator ? (
+                      <>
+                        <option value="MY_ASSIGNED_TEACHERS">👥 Mis Docentes Asignados ({myAssignedTeachers.length})</option>
+                        <option value="ALL_TEACHERS">👨‍🏫 Todos los Docentes ({teachers.length})</option>
+                        <option value="OTHER_COORDINATORS">🤝 Otros Coordinadores ({coordinators.filter(c => c.email?.toLowerCase() !== profile.email?.toLowerCase()).length})</option>
+                        <option value="ADMINS_DIRECTIVES">🏛️ Administradores y Directivos ({adminAndDirectiveUsers.length})</option>
+                        <option value="SPECIFIC">🎯 Seleccionar Personas Específicas...</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="ALL_STAFF">🌐 Global: Todo el Personal ({allStaffUsers.length})</option>
+                        <option value="ALL_TEACHERS">👨‍🏫 Por Rol: Todos los Docentes ({teachers.length})</option>
+                        <option value="ALL_COORDINATORS">🤝 Por Rol: Todos los Coordinadores ({coordinators.length})</option>
+                        <option value="ADMINS_DIRECTIVES">🏛️ Por Rol: Directivos y Administradores ({adminAndDirectiveUsers.length})</option>
+                        <option value="SPECIFIC_TEACHERS">🎯 Específico: Seleccionar Docente(s)...</option>
+                        <option value="SPECIFIC_COORDINATORS">🎯 Específico: Seleccionar Coordinador(es)...</option>
+                        <option value="SPECIFIC">🎯 Específico: Seleccionar Personas...</option>
+                      </>
+                    )}
+                  </select>
+                </InputGroup>
+
+                {/* Feedback info when target is MY_ASSIGNED_TEACHERS */}
+                {comunicadoFormData.targetType === 'MY_ASSIGNED_TEACHERS' && (
+                  <div className="bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl p-3 text-xs text-sky-900 dark:text-sky-200">
+                    {myAssignedTeachers.length > 0 ? (
+                      <div>
+                        <strong>Docentes asignados ({myAssignedTeachers.length}):</strong>{' '}
+                        <span>{myAssignedTeachers.map(t => t.name).join(', ')}</span>
+                      </div>
+                    ) : (
+                      <span className="text-amber-700 dark:text-amber-300 font-semibold">
+                        Aún no tienes docentes asignados directamente en el sistema. Puedes elegir "Todos los Docentes" o "Seleccionar Personas Específicas".
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Specific Picker when SPECIFIC, SPECIFIC_TEACHERS, or SPECIFIC_COORDINATORS */}
+                {(comunicadoFormData.targetType === 'SPECIFIC' || 
+                  comunicadoFormData.targetType === 'SPECIFIC_TEACHERS' || 
+                  comunicadoFormData.targetType === 'SPECIFIC_COORDINATORS') && (
+                  <InputGroup label="Seleccionar Personas" required={comunicadoFormData.selectedEmails.length === 0}>
+                    <div className="space-y-3">
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const email = e.target.value;
+                          if (email && !comunicadoFormData.selectedEmails.includes(email)) {
+                            setComunicadoFormData({ ...comunicadoFormData, selectedEmails: [...comunicadoFormData.selectedEmails, email] });
+                          }
+                        }}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="">-- Elige persona para agregar --</option>
+                        {(comunicadoFormData.targetType === 'SPECIFIC' || comunicadoFormData.targetType === 'SPECIFIC_TEACHERS') && (
+                          <optgroup label="Docentes">
+                            {teachers.map(t => (
+                              <option key={t.email} value={t.email} disabled={comunicadoFormData.selectedEmails.includes(t.email)}>
+                                {t.name} ({t.role})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {(comunicadoFormData.targetType === 'SPECIFIC' || comunicadoFormData.targetType === 'SPECIFIC_COORDINATORS') && (
+                          <optgroup label="Coordinadores">
+                            {coordinators.map(c => (
+                              <option key={c.email} value={c.email} disabled={comunicadoFormData.selectedEmails.includes(c.email)}>
+                                {c.name} ({c.role})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {comunicadoFormData.targetType === 'SPECIFIC' && (
+                          <>
+                            <optgroup label="Directivos y Administradores">
+                              {adminAndDirectiveUsers.map(u => (
+                                <option key={u.email} value={u.email} disabled={comunicadoFormData.selectedEmails.includes(u.email)}>
+                                  {u.name} ({u.role})
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Psicólogos">
+                              {psychologists.map(p => (
+                                <option key={p.email} value={p.email} disabled={comunicadoFormData.selectedEmails.includes(p.email)}>
+                                  {p.name} ({p.role})
+                                </option>
+                              ))}
+                            </optgroup>
+                          </>
+                        )}
+                      </select>
+
+                      <div className="flex flex-wrap gap-2">
+                        {comunicadoFormData.selectedEmails.map((email) => {
+                          const person = allStaffUsers.find(u => u.email?.toLowerCase() === email.toLowerCase());
+                          return (
+                            <div 
+                              key={email}
+                              onClick={() => {
+                                setComunicadoFormData({
+                                  ...comunicadoFormData,
+                                  selectedEmails: comunicadoFormData.selectedEmails.filter(e => e.toLowerCase() !== email.toLowerCase())
+                                });
+                              }}
+                              className="flex items-center gap-2 bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-200 px-3 py-1.5 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 dark:hover:bg-red-950 hover:text-red-700 dark:hover:text-red-300 border border-sky-100 dark:border-sky-800 transition-all group"
+                            >
+                              <UserIcon className="w-3.5 h-3.5" />
+                              <span>{person?.name || email}</span>
+                              <X className="w-3.5 h-3.5 ml-1 text-sky-400 group-hover:text-red-500" />
+                            </div>
+                          );
+                        })}
+                        {comunicadoFormData.selectedEmails.length === 0 && (
+                          <span className="text-xs text-slate-400 dark:text-slate-500 italic px-1">Sin destinatarios específicos seleccionados.</span>
+                        )}
+                      </div>
+                    </div>
+                  </InputGroup>
+                )}
+
+                <InputGroup label="Título o Asunto del Comunicado" required>
+                  <input
+                    required
+                    type="text"
+                    value={comunicadoFormData.title}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, title: e.target.value })}
+                    placeholder="Ej. Aviso sobre entrega de planeaciones / Reunión académica"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-sky-500"
+                  />
+                </InputGroup>
+
+                <InputGroup label="Contenido / Información del Comunicado" required>
+                  <textarea
+                    required
+                    rows={5}
+                    value={comunicadoFormData.content}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, content: e.target.value })}
+                    placeholder="Escribe las indicaciones, información o detalles que deseas comunicar..."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500"
+                  />
+                </InputGroup>
+
+                <InputGroup label="Enlace / Documento Adjunto (Opcional)">
+                  <input
+                    type="url"
+                    value={comunicadoFormData.attachmentUrl}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, attachmentUrl: e.target.value })}
+                    placeholder="https://drive.google.com/... o enlace de archivo"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500"
+                  />
+                </InputGroup>
+
+                <div className="flex gap-3 pt-4">
+                  <button type="button" onClick={() => setShowComunicadoModal(false)} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">Cancelar</button>
+                  <button type="submit" className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-sky-100 dark:shadow-none cursor-pointer flex items-center justify-center gap-2">
+                    <Send className="w-4 h-4" />
+                    <span>Emitir Comunicado</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Editar y Reactivar Tarea */}
+      <AnimatePresence>
+        {editingTask && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingTask(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-3 bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <Edit3 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Modificar Datos de Tarea</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Asignada a <strong className="text-slate-800 dark:text-slate-200">{editingTask.assignedToName}</strong>
+                  </p>
+                </div>
+              </div>
+
+              {editingTask.status === 'COMPLETADA' && (
+                <div className="mb-4 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 rounded-xl p-3.5 text-xs text-indigo-900 dark:text-indigo-200 flex items-start gap-2.5">
+                  <RefreshCw className="w-4 h-4 text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <strong>Activación de tarea completada:</strong> Al guardar, la tarea volverá a estatus <strong>ASIGNADA</strong> y el docente asignado ({editingTask.assignedToName}) podrá volver a editar y cargar evidencia nuevamente.
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveEditTask} className="space-y-4">
+                <InputGroup label="Título de la Tarea" required>
+                  <input
+                    required
+                    type="text"
+                    value={editTaskData.title}
+                    onChange={(e) => setEditTaskData({ ...editTaskData, title: e.target.value })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                  />
+                </InputGroup>
+
+                <InputGroup label="Descripción / Instrucciones" required>
+                  <textarea
+                    required
+                    rows={4}
+                    value={editTaskData.description}
+                    onChange={(e) => setEditTaskData({ ...editTaskData, description: e.target.value })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </InputGroup>
+
+                {!isTaskComunicado(editingTask) && (
+                  <InputGroup label="Fecha Límite">
+                    <input
+                      type="date"
+                      value={editTaskData.dueDate}
+                      onChange={(e) => setEditTaskData({ ...editTaskData, dueDate: e.target.value })}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </InputGroup>
+                )}
+
+                <InputGroup label="Observaciones o Indicaciones para el Docente (Opcional)">
+                  <textarea
+                    rows={2}
+                    value={editTaskData.directiveFeedback}
+                    onChange={(e) => setEditTaskData({ ...editTaskData, directiveFeedback: e.target.value })}
+                    placeholder="Instrucciones o motivo de modificación..."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </InputGroup>
+
+                <div className="flex flex-wrap gap-2.5 pt-4">
+                  <button type="button" onClick={() => setEditingTask(null)} className="flex-1 min-w-[80px] py-2.5 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer text-xs">Cancelar</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      showSystemPopup(
+                        "Cerrar Tarea",
+                        `¿Deseas cerrar esta tarea directamente con el estatus de COMPLETADA?`,
+                        "confirm",
+                        () => handleCloseTaskAsCompleted(editingTask),
+                        "Cerrar como Completada"
+                      );
+                    }}
+                    className="flex-1 min-w-[150px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-1.5 text-xs"
+                    title="Cerrar con el estatus de completada"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Cerrar como Completada</span>
+                  </button>
+                  <button type="submit" className="flex-1 min-w-[150px] bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-indigo-100 dark:shadow-none cursor-pointer flex items-center justify-center gap-1.5 text-xs">
+                    <Save className="w-4 h-4" />
+                    <span>{editingTask.status === 'COMPLETADA' ? 'Guardar y Activar Tarea' : 'Guardar Cambios'}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Opciones para Activar Tarea */}
+      <AnimatePresence>
+        {reactivateTargetTask && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setReactivateTargetTask(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4">
+              <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div className="p-3 bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <RefreshCw className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Opciones de Activación</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Tarea: <strong className="text-slate-800 dark:text-slate-200">{reactivateTargetTask.title}</strong></p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                Selecciona la opción deseada para esta tarea asignada a <strong>{reactivateTargetTask.assignedToName}</strong>:
+              </p>
+
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleSoloActivar(reactivateTargetTask)}
+                  className="w-full text-left p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-indigo-600 dark:text-indigo-400 group-hover:rotate-180 transition-transform duration-500" />
+                      Solo Activar (Sin modificar datos)
+                    </span>
+                    <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">Estatus: ASIGNADA</span>
+                  </div>
+                  <p className="text-[11px] text-indigo-800/80 dark:text-indigo-300/80 mt-1">
+                    Reactiva la tarea de inmediato para que el docente pueda editar y subir su evidencia nuevamente, manteniendo los datos actuales.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleActivarYModificar(reactivateTargetTask)}
+                  className="w-full text-left p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                      <Edit3 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                      Activar y Modificar Datos
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                    Reactiva la tarea y abre el formulario para cambiar instrucciones, descripción, observaciones o fecha límite.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCloseTaskAsCompleted(reactivateTargetTask)}
+                  className="w-full text-left p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/40 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/50 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950 dark:text-emerald-200 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      Cerrar con Estatus de Completada
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">Estatus: COMPLETADA</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 mt-1">
+                    Cierra la tarea y la mantiene formalmente como concluida/completada.
+                  </p>
+                </button>
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setReactivateTargetTask(null)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
               </div>
             </motion.div>
           </div>

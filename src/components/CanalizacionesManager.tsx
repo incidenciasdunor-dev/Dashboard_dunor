@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search,
   Plus,
@@ -14,7 +14,10 @@ import {
   CheckCircle2,
   BrainCircuit,
   Trash2,
-  UserCheck
+  UserCheck,
+  GraduationCap,
+  Users,
+  List
 } from 'lucide-react';
 import {
   Referral,
@@ -69,8 +72,13 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
+  const [reassignModalRef, setReassignModalRef] = useState<Referral | null>(null);
+  const [selectedNewPsychologistEmail, setSelectedNewPsychologistEmail] = useState<string>('');
+  const [reassignReason, setReassignReason] = useState<string>('');
+  const [isReassigning, setIsReassigning] = useState<boolean>(false);
 
   useBackHandler(isModalOpen, () => setIsModalOpen(false), 'canalizaciones-create-modal');
+  useBackHandler(Boolean(reassignModalRef), () => setReassignModalRef(null), 'referral-reassign-modal');
 
   const normRole = normalizeUserRole(profile?.role);
   const isSuper = Boolean(isSuperAdmin || isSuperAdminEmail(profile?.email));
@@ -82,6 +90,31 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   // La opción de eliminar NO debe aparecer en usuarios de docentes, coordinador, directivo ni psicólogo.
   const isDisallowedRole = normRole === 'TEACHER' || normRole === 'COORDINATOR' || normRole === 'DIRECTIVE' || normRole === 'PSYCHOLOGIST';
   const canDeleteReferralActual = Boolean((isSuper || isAdmin) && !isDisallowedRole);
+
+  // Grouping by teacher configuration (available and default for Admin, Directive, Coordinator, and Psychologist)
+  const canGroupByTeacher = Boolean(isSuper || isAdmin || normRole === 'DIRECTIVE' || normRole === 'COORDINATOR' || isPsychologistUser);
+  const [groupByTeacher, setGroupByTeacher] = useState<boolean>(canGroupByTeacher);
+  const [expandedTeachers, setExpandedTeachers] = useState<Record<string, boolean>>({});
+
+  const toggleTeacherCollapse = (key: string) => {
+    setExpandedTeachers(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  const expandAllTeachers = () => {
+    const all: Record<string, boolean> = {};
+    teacherGroups.forEach(g => {
+      all[g.key] = true;
+    });
+    setExpandedTeachers(all);
+  };
+
+  const collapseAllTeachers = () => {
+    setExpandedTeachers({});
+    setExpandedCardIds({});
+  };
 
   const [sysModal, setSysModal] = useState<SystemModalState>({
     isOpen: false,
@@ -104,6 +137,36 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     setSysModal({ isOpen: true, type, title, message, onConfirm, confirmText });
   };
 
+  // Helper to extract teacher information from referral
+  const getReferralTeacherInfo = (ref: Referral) => {
+    const email = (ref.teacherEmail || ref.createdByEmail || '').toLowerCase().trim();
+    const id = ref.teacherId || '';
+    const refName = (ref.teacherName || ref.createdByName || ref.referredByName || '').trim();
+
+    // Match in teachers list if possible
+    const matchedTeacher = teachers.find(t => 
+      (email && t.email?.toLowerCase().trim() === email) ||
+      (id && t.uid === id) ||
+      (refName && t.name?.toLowerCase().trim() === refName.toLowerCase().trim())
+    );
+
+    const displayName = 
+      matchedTeacher?.name || 
+      refName || 
+      (email ? email.split('@')[0] : 'Docente No Especificado');
+
+    const key = id || email || displayName.toLowerCase().trim();
+    const level = matchedTeacher ? getUserEducationLevel(matchedTeacher) : undefined;
+
+    return {
+      key,
+      name: displayName,
+      email: email || matchedTeacher?.email || '',
+      level,
+      matchedTeacher
+    };
+  };
+
   // Effect to auto-expand and scroll to highlighted referral when redirected from notifications
   useEffect(() => {
     if (highlightedReferralId) {
@@ -112,6 +175,11 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
       const targetId = targetRef ? targetRef.id : highlightedReferralId;
 
       setExpandedCardIds(prev => ({ ...prev, [targetId]: true }));
+
+      if (targetRef) {
+        const info = getReferralTeacherInfo(targetRef);
+        setExpandedTeachers(prev => ({ ...prev, [info.key]: true }));
+      }
 
       if (targetRef && searchTerm) {
         setSearchTerm('');
@@ -243,12 +311,12 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
   const toggleDetails = (id: string) => {
     setExpandedCardIds(prev => ({
       ...prev,
-      [id]: prev[id] === undefined ? false : !prev[id]
+      [id]: !prev[id]
     }));
   };
 
   const isDetailsExpanded = (id: string) => {
-    return expandedCardIds[id] !== false; // Default expanded
+    return Boolean(expandedCardIds[id]); // Default collapsed
   };
 
   // Filter referrals according to strict access control rules (Requirement 4)
@@ -320,6 +388,34 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     );
     return Boolean(isAuthor || isCc);
   });
+
+  const teacherGroups = useMemo(() => {
+    const map = new Map<string, {
+      key: string;
+      name: string;
+      email: string;
+      level?: string;
+      referrals: Referral[];
+    }>();
+
+    filteredReferrals.forEach(ref => {
+      const info = getReferralTeacherInfo(ref);
+      if (!map.has(info.key)) {
+        map.set(info.key, {
+          key: info.key,
+          name: info.name,
+          email: info.email,
+          level: info.level,
+          referrals: []
+        });
+      }
+      map.get(info.key)!.referrals.push(ref);
+    });
+
+    return Array.from(map.values()).sort((a, b) => 
+      a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
+    );
+  }, [filteredReferrals, teachers]);
 
   // Handle delete referral (Only Administrator and Superadmin)
   const handleDeleteReferral = (ref: Referral) => {
@@ -715,6 +811,309 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
     }
   };
 
+  const handleOpenReassignModal = (ref: Referral) => {
+    setReassignModalRef(ref);
+    const otherPsych = psychologists.find(p => p.email?.toLowerCase() !== (ref.psychologistEmail || '').toLowerCase());
+    setSelectedNewPsychologistEmail(otherPsych?.email || psychologists[0]?.email || '');
+    setReassignReason('');
+  };
+
+  const handleConfirmReassign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reassignModalRef) return;
+    if (!selectedNewPsychologistEmail) {
+      showAlert('Selecciona un psicólogo', 'Debes seleccionar el psicólogo al que deseas reasignar el registro.', 'warning');
+      return;
+    }
+
+    const targetPsych = psychologists.find(p => p.email?.toLowerCase() === selectedNewPsychologistEmail.toLowerCase());
+    if (!targetPsych) {
+      showAlert('Psicólogo no encontrado', 'No se encontró la información del psicólogo seleccionado.', 'error');
+      return;
+    }
+
+    if (reassignModalRef.psychologistEmail && reassignModalRef.psychologistEmail.toLowerCase() === targetPsych.email.toLowerCase()) {
+      showAlert('Mismo psicólogo', 'La canalización ya se encuentra asignada a este psicólogo.', 'info');
+      return;
+    }
+
+    setIsReassigning(true);
+    try {
+      const prevPsychName = reassignModalRef.psychologistName || 'Psicólogo no asignado';
+      const prevPsychEmail = reassignModalRef.psychologistEmail || '';
+
+      const reassignmentEntry = {
+        previousPsychologistName: prevPsychName,
+        previousPsychologistEmail: prevPsychEmail,
+        newPsychologistName: targetPsych.name,
+        newPsychologistEmail: targetPsych.email,
+        reassignedByName: profile.name,
+        reassignedByEmail: profile.email,
+        date: Date.now(),
+        reason: reassignReason.trim() || undefined
+      };
+
+      await updateDoc(doc(db, 'referrals', reassignModalRef.id), {
+        psychologistId: targetPsych.uid || '',
+        psychologistName: targetPsych.name,
+        psychologistEmail: targetPsych.email.toLowerCase(),
+        updatedAt: Date.now(),
+        reassignmentHistory: [
+          ...(reassignModalRef.reassignmentHistory || []),
+          reassignmentEntry
+        ]
+      });
+
+      // Notify new psychologist
+      if (sendNotification && targetPsych.email) {
+        await sendNotification(
+          targetPsych.uid || targetPsych.email,
+          `📋 Canalización Reasignada: ${reassignModalRef.studentName}`,
+          `${profile.name} (${profile.role}) te ha reasignado la canalización del estudiante "${reassignModalRef.studentName}" (${reassignModalRef.gradeGroup}).${reassignReason.trim() ? ` Motivo: "${reassignReason.trim()}"` : ''}`,
+          reassignModalRef.incidentId,
+          false,
+          {
+            referralId: reassignModalRef.id,
+            studentName: reassignModalRef.studentName,
+            type: 'referral_reassigned'
+          }
+        );
+      }
+
+      await addLog(
+        'Reasignó canalización a otro psicólogo',
+        `Canalización de estudiante "${reassignModalRef.studentName}" reasignada a: ${targetPsych.name} (${targetPsych.email}) por: ${profile.name} (${profile.role})${reassignReason.trim() ? ` | Motivo: ${reassignReason.trim()}` : ''}`
+      );
+
+      showAlert(
+        'Canalización Reasignada',
+        `El registro de "${reassignModalRef.studentName}" ha sido reasignado exitosamente al psicólogo ${targetPsych.name}.`,
+        'success'
+      );
+      setReassignModalRef(null);
+    } catch (err) {
+      console.error("Error reassigning referral:", err);
+      showAlert('Error', 'No se pudo completar la reasignación de la canalización.', 'error');
+    } finally {
+      setIsReassigning(false);
+    }
+  };
+
+  const renderReferralCard = (ref: Referral) => {
+    const expanded = isDetailsExpanded(ref.id);
+    const currentCommentVal = editingComments[ref.id] !== undefined ? editingComments[ref.id] : (ref.psychologistComment || '');
+    const isHighlighted = highlightedReferralId && (
+      ref.id === highlightedReferralId ||
+      ref.incidentId === highlightedReferralId ||
+      (ref.id && highlightedReferralId.includes(ref.id))
+    );
+
+    return (
+      <div
+        key={ref.id}
+        id={`referral-card-${ref.id}`}
+        className={cn(
+          "bg-white dark:bg-slate-900 rounded-2xl border p-5 sm:p-6 space-y-4 transition-all hover:border-indigo-200 dark:hover:border-indigo-800",
+          isHighlighted 
+            ? "ring-2 ring-indigo-500 border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/40 shadow-lg shadow-indigo-100/50" 
+            : "border-slate-200/90 dark:border-slate-800 shadow-xs"
+        )}
+      >
+        {/* Header Row */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800/80 font-extrabold text-xs rounded-lg uppercase">
+              {ref.gradeGroup || 'S/G'}
+            </span>
+            <div className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-400 font-medium">
+              <Calendar className="w-3.5 h-3.5" />
+              <span>{new Date(ref.createdAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {(isPsychologistUser || isSuper || isAdmin) && (
+              <button
+                type="button"
+                onClick={() => handleOpenReassignModal(ref)}
+                className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/60 dark:hover:bg-indigo-900/60"
+                title="Reasignar canalización a otro psicólogo"
+              >
+                <UserCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span>Reasignar Psicólogo</span>
+              </button>
+            )}
+
+            {onOpenExpedienteFromReferral && canManageExpedientes && (
+              <button
+                type="button"
+                onClick={() => onOpenExpedienteFromReferral(ref)}
+                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 dark:hover:bg-emerald-900/60"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Abrir / Vincular Expediente</span>
+              </button>
+            )}
+
+            {canDeleteReferralActual && (
+              <button
+                type="button"
+                onClick={() => handleDeleteReferral(ref)}
+                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
+                title="Eliminar canalización"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                <span>Eliminar</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => toggleDetails(ref.id)}
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+            >
+              <span>{expanded ? 'Ocultar detalles' : 'Ver detalles'}</span>
+              {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Student Name */}
+        <div className="space-y-1">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
+            {ref.studentName}
+          </h2>
+          <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center gap-x-6 gap-y-1 flex-wrap font-medium">
+            <span>
+              <strong className="text-slate-800 dark:text-slate-200">
+                {ref.createdByRole === 'PSYCHOLOGIST' || ref.referredByRole === 'PSYCHOLOGIST' || (ref.teacherEmail && psychologists.some(p => p.email?.toLowerCase() === ref.teacherEmail?.toLowerCase()))
+                  ? 'Psicólogo (Creador):'
+                  : 'Docente (Creador):'}
+              </strong> {ref.createdByName || ref.referredByName || ref.teacherName}
+            </span>
+            <span>
+              <strong className="text-slate-800 dark:text-slate-200">Coordinador:</strong> {ref.coordinatorName || 'Coordinador General'}
+            </span>
+            <span className="inline-flex items-center gap-1.5 flex-wrap">
+              <strong className="text-slate-800 dark:text-slate-200">Psicólogo Asignado:</strong>
+              <span>{ref.psychologistName || 'Psicólogo Escolar'}</span>
+              {(isPsychologistUser || isSuper || isAdmin) && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenReassignModal(ref)}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-md text-[11px] font-bold transition-all cursor-pointer ml-1"
+                  title="Reasignar a otro psicólogo"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>Reasignar</span>
+                </button>
+              )}
+            </span>
+          </div>
+          {ref.additionalRecipients && ref.additionalRecipients.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 text-xs">
+              <span className="font-bold text-slate-500 dark:text-slate-400">Copia a:</span>
+              {ref.additionalRecipients.map((rec, i) => (
+                <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-[11px] font-medium rounded-md">
+                  <span className="font-bold text-indigo-700 dark:text-indigo-400 uppercase text-[9px]">{rec.role}:</span> {rec.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Expanded Details Sections */}
+        {expanded && (
+          <div className="space-y-3 pt-2">
+            {/* Section 1: Motivo de la Canalización y Antecedentes */}
+            <div className="border border-slate-200 dark:border-slate-700/80 rounded-xl p-4 bg-slate-50/70 dark:bg-slate-800/40 space-y-1.5 shadow-2xs">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                <FileText className="w-4 h-4 text-slate-400 dark:text-slate-400" />
+                <span>MOTIVO DE LA CANALIZACIÓN Y ANTECEDENTES</span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-wrap font-normal">
+                {ref.reasonAndBackground}
+              </p>
+            </div>
+
+            {/* Section 2: Estrategias Utilizadas por el Docente */}
+            <div className="border border-slate-200 dark:border-slate-700/80 rounded-xl p-4 bg-slate-50/70 dark:bg-slate-800/40 space-y-1.5 shadow-2xs">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                <BookOpen className="w-4 h-4 text-slate-400 dark:text-slate-400" />
+                <span>ESTRATEGIAS UTILIZADAS POR EL DOCENTE</span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-wrap font-normal">
+                {ref.teacherStrategies || 'No se registraron estrategias previas.'}
+              </p>
+            </div>
+
+            {/* Section 3: Comentario del Psicólogo */}
+            <div className="border border-indigo-200/80 dark:border-indigo-900/60 rounded-xl p-4 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-2 shadow-2xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-indigo-900 dark:text-indigo-300 uppercase tracking-wider">
+                  <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>COMENTARIO DEL PSICÓLOGO</span>
+                </div>
+                {saveSuccessId === ref.id && (
+                  <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> ¡Guardado!
+                  </span>
+                )}
+              </div>
+
+              {isPsychologistUser ? (
+                <div className="space-y-2">
+                  <textarea
+                    rows={3}
+                    value={currentCommentVal}
+                    onChange={(e) => setEditingComments({ ...editingComments, [ref.id]: e.target.value })}
+                    placeholder="Escribe un comentario de respuesta o valoración..."
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleSavePsychologistComment(ref)}
+                      disabled={savingCommentId === ref.id}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-sm"
+                    >
+                      {savingCommentId === ref.id ? (
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      <span>Guardar y Enviar</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3 min-h-[44px] flex items-center">
+                  <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 font-medium">
+                    {ref.psychologistComment || <span className="text-slate-400 dark:text-slate-500 italic">En espera de respuesta o valoración por parte de psicología...</span>}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {canDeleteReferralActual && (
+              <div className="flex justify-end pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => handleDeleteReferral(ref)}
+                  className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
+                  title="Eliminar canalización permanentemente"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                  <span>Eliminar Canalización</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Header Section */}
@@ -769,214 +1168,168 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
         />
       </div>
 
-      {/* Counter Banner */}
-      <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
-        <span>MOSTRANDO {filteredReferrals.length} DE {referrals.length} CANALIZACIONES</span>
+      {/* Counter & View Mode Switcher Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span>MOSTRANDO {filteredReferrals.length} DE {referrals.length} CANALIZACIONES</span>
+          {canGroupByTeacher && groupByTeacher && (
+            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded-md font-extrabold text-[11px] normal-case">
+              {teacherGroups.length} {teacherGroups.length === 1 ? 'docente' : 'docentes'}
+            </span>
+          )}
+        </div>
+
+        {canGroupByTeacher && (
+          <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+            {/* View Mode Toggle */}
+            <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setGroupByTeacher(true)}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                  groupByTeacher 
+                    ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs" 
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                )}
+                title="Agrupar canalizaciones por docente que registró"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Agrupado por Docente</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGroupByTeacher(false)}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                  !groupByTeacher 
+                    ? "bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-xs" 
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                )}
+                title="Ver todas las canalizaciones en lista continua"
+              >
+                <List className="w-3.5 h-3.5" />
+                <span>Lista Continua</span>
+              </button>
+            </div>
+
+            {/* Quick Expand / Collapse all when in grouped view */}
+            {groupByTeacher && teacherGroups.length > 0 && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={expandAllTeachers}
+                  className="px-2.5 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-xs font-semibold transition-all cursor-pointer"
+                  title="Expandir todos los docentes"
+                >
+                  Expandir todo
+                </button>
+                <button
+                  type="button"
+                  onClick={collapseAllTeachers}
+                  className="px-2.5 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-xs font-semibold transition-all cursor-pointer"
+                  title="Colapsar todos los docentes"
+                >
+                  Colapsar todo
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Referral Cards List */}
-      <div className="space-y-4">
-        {filteredReferrals.length === 0 ? (
-          <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
-            <BrainCircuit className="w-12 h-12 text-slate-300 mx-auto" />
-            <h3 className="text-base font-bold text-slate-700">No hay canalizaciones registradas</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Utiliza el botón "+ Nueva Canalización" para derivar un alumno al área de psicología y dar seguimiento.
-            </p>
-          </div>
-        ) : (
-          filteredReferrals.map((ref) => {
-            const expanded = isDetailsExpanded(ref.id);
-            const currentCommentVal = editingComments[ref.id] !== undefined ? editingComments[ref.id] : (ref.psychologistComment || '');
-            const isHighlighted = highlightedReferralId && (
-              ref.id === highlightedReferralId ||
-              ref.incidentId === highlightedReferralId ||
-              (ref.id && highlightedReferralId.includes(ref.id))
-            );
+      {/* Content: Grouped by Teacher or Flat List */}
+      {filteredReferrals.length === 0 ? (
+        <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
+          <BrainCircuit className="w-12 h-12 text-slate-300 mx-auto" />
+          <h3 className="text-base font-bold text-slate-700">No hay canalizaciones registradas</h3>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            Utiliza el botón "+ Nueva Canalización" para derivar un alumno al área de psicología y dar seguimiento.
+          </p>
+        </div>
+      ) : canGroupByTeacher && groupByTeacher ? (
+        <div className="space-y-4">
+          {teacherGroups.map((group) => {
+            const isExpanded = Boolean(expandedTeachers[group.key]);
+            const atendidosCount = group.referrals.filter(r => r.status === 'ATENDIDO').length;
+            const pendientesCount = group.referrals.length - atendidosCount;
 
             return (
-              <div
-                key={ref.id}
-                id={`referral-card-${ref.id}`}
-                className={cn(
-                  "bg-white rounded-2xl border p-6 space-y-4 transition-all hover:border-indigo-200",
-                  isHighlighted 
-                    ? "ring-2 ring-indigo-500 border-indigo-500 bg-indigo-50/30 shadow-lg shadow-indigo-100/50" 
-                    : "border-slate-200/90 shadow-sm"
-                )}
+              <div 
+                key={group.key}
+                className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-all"
               >
-                {/* Header Row */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-100 font-extrabold text-xs rounded-lg uppercase">
-                      {ref.gradeGroup || 'S/G'}
-                    </span>
-                    <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
-                      <Calendar className="w-3.5 h-3.5" />
-                      <span>{new Date(ref.createdAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                {/* Teacher Group Header */}
+                <div 
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleTeacherCollapse(group.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleTeacherCollapse(group.key);
+                    }
+                  }}
+                  className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left cursor-pointer select-none"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-base flex-shrink-0">
+                      <GraduationCap className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                          {group.name}
+                        </h3>
+                        {group.level && (
+                          <span className="px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800 rounded-md text-[10px] font-extrabold uppercase tracking-wide">
+                            {group.level}
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 rounded-md text-[10px] font-bold">
+                          Docente
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                        {group.referrals.length} {group.referrals.length === 1 ? 'canalización registrada' : 'canalizaciones registradas'}
+                        {group.email && <span> • {group.email}</span>}
+                      </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {onOpenExpedienteFromReferral && canManageExpedientes && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenExpedienteFromReferral(ref)}
-                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 dark:hover:bg-emerald-900/60"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        <span>Abrir / Vincular Expediente</span>
-                      </button>
+                    {pendientesCount > 0 && (
+                      <span className="px-2.5 py-1 bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 font-bold text-xs rounded-lg hidden sm:inline-flex">
+                        {pendientesCount} en proceso
+                      </span>
                     )}
-
-                    {canDeleteReferralActual && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteReferral(ref)}
-                        className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
-                        title="Eliminar canalización"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
-                        <span>Eliminar</span>
-                      </button>
+                    {atendidosCount > 0 && (
+                      <span className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800 font-bold text-xs rounded-lg hidden sm:inline-flex">
+                        {atendidosCount} {atendidosCount === 1 ? 'atendida' : 'atendidas'}
+                      </span>
                     )}
-
-                    <button
-                      type="button"
-                      onClick={() => toggleDetails(ref.id)}
-                      className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
-                    >
-                      <span>{expanded ? 'Ocultar detalles' : 'Ver detalles'}</span>
-                      {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </button>
+                    <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-3 py-1 rounded-full border border-indigo-100 dark:border-indigo-800/60">
+                      {group.referrals.length}
+                    </span>
+                    <ChevronDown className={cn("w-5 h-5 text-slate-400 transition-transform duration-200", isExpanded && "rotate-180")} />
                   </div>
                 </div>
 
-                {/* Student Name */}
-                <div className="space-y-1">
-                  <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-                    {ref.studentName}
-                  </h2>
-                  <div className="text-xs text-slate-600 flex items-center gap-x-6 gap-y-1 flex-wrap font-medium">
-                    <span>
-                      <strong className="text-slate-800">
-                        {ref.createdByRole === 'PSYCHOLOGIST' || ref.referredByRole === 'PSYCHOLOGIST' || (ref.teacherEmail && psychologists.some(p => p.email?.toLowerCase() === ref.teacherEmail?.toLowerCase()))
-                          ? 'Psicólogo (Creador):'
-                          : 'Docente (Creador):'}
-                      </strong> {ref.createdByName || ref.referredByName || ref.teacherName}
-                    </span>
-                    <span>
-                      <strong className="text-slate-800">Coordinador:</strong> {ref.coordinatorName || 'Coordinador General'}
-                    </span>
-                    <span>
-                      <strong className="text-slate-800">Psicólogo Asignado:</strong> {ref.psychologistName || 'Psicólogo Escolar'}
-                    </span>
-                  </div>
-                  {ref.additionalRecipients && ref.additionalRecipients.length > 0 && (
-                    <div className="flex items-center gap-1.5 flex-wrap pt-1 text-xs">
-                      <span className="font-bold text-slate-500">Copia a:</span>
-                      {ref.additionalRecipients.map((rec, i) => (
-                        <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-medium rounded-md">
-                          <span className="font-bold text-indigo-700 uppercase text-[9px]">{rec.role}:</span> {rec.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Expanded Details Sections */}
-                {expanded && (
-                  <div className="space-y-3 pt-2">
-                    {/* Section 1: Motivo de la Canalización y Antecedentes */}
-                    <div className="border border-slate-300 rounded-xl p-4 bg-white space-y-1.5">
-                      <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        <FileText className="w-4 h-4 text-slate-400" />
-                        <span>MOTIVO DE LA CANALIZACIÓN Y ANTECEDENTES</span>
-                      </div>
-                      <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
-                        {ref.reasonAndBackground}
-                      </p>
-                    </div>
-
-                    {/* Section 2: Estrategias Utilizadas por el Docente */}
-                    <div className="border border-slate-300 rounded-xl p-4 bg-white space-y-1.5">
-                      <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        <BookOpen className="w-4 h-4 text-slate-400" />
-                        <span>ESTRATEGIAS UTILIZADAS POR EL DOCENTE</span>
-                      </div>
-                      <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
-                        {ref.teacherStrategies || 'No se registraron estrategias previas.'}
-                      </p>
-                    </div>
-
-                    {/* Section 3: Comentario del Psicólogo */}
-                    <div className="border border-slate-300 rounded-xl p-4 bg-indigo-50/20 space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-xs font-bold text-indigo-800 uppercase tracking-wider">
-                          <Globe className="w-4 h-4 text-indigo-600" />
-                          <span>COMENTARIO DEL PSICÓLOGO</span>
-                        </div>
-                        {saveSuccessId === ref.id && (
-                          <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> ¡Guardado!
-                          </span>
-                        )}
-                      </div>
-
-                      {isPsychologistUser ? (
-                        <div className="space-y-2">
-                          <textarea
-                            rows={3}
-                            value={currentCommentVal}
-                            onChange={(e) => setEditingComments({ ...editingComments, [ref.id]: e.target.value })}
-                            placeholder="Escribe un comentario de respuesta o valoración..."
-                            className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                          />
-                          <div className="flex justify-end">
-                            <button
-                              type="button"
-                              onClick={() => handleSavePsychologistComment(ref)}
-                              disabled={savingCommentId === ref.id}
-                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-sm"
-                            >
-                              {savingCommentId === ref.id ? (
-                                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <Send className="w-3.5 h-3.5" />
-                              )}
-                              <span>Guardar y Enviar</span>
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="bg-white border border-slate-200 rounded-xl p-3 min-h-[44px] flex items-center">
-                          <p className="text-xs text-slate-800 font-medium">
-                            {ref.psychologistComment || <span className="text-slate-400 italic">En espera de respuesta o valoración por parte de psicología...</span>}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    {canDeleteReferralActual && (
-                      <div className="flex justify-end pt-2 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteReferral(ref)}
-                          className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60 dark:hover:bg-rose-900/60"
-                          title="Eliminar canalización permanentemente"
-                        >
-                          <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
-                          <span>Eliminar Canalización</span>
-                        </button>
-                      </div>
-                    )}
+                {/* Referral Cards belonging to this teacher */}
+                {isExpanded && (
+                  <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 dark:bg-slate-950/40 border-t border-slate-200 dark:border-slate-800">
+                    {group.referrals.map(ref => renderReferralCard(ref))}
                   </div>
                 )}
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {filteredReferrals.map(ref => renderReferralCard(ref))}
+        </div>
+      )}
 
       {/* Modal: Nueva Canalización */}
       {isModalOpen && (
@@ -1473,6 +1826,111 @@ export const CanalizacionesManager: React.FC<CanalizacionesManagerProps> = ({
                     <Send className="w-4 h-4" />
                   )}
                   <span>Enviar Canalización</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Reasignar Canalización a otro Psicólogo */}
+      {reassignModalRef && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Reasignar a otro Psicólogo</h3>
+                  <p className="text-xs text-slate-500 font-medium">Canalización de {reassignModalRef.studentName}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReassignModalRef(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmReassign} className="p-6 space-y-4">
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Estudiante:</span>
+                  <span className="font-bold text-slate-800">{reassignModalRef.studentName} ({reassignModalRef.gradeGroup})</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Docente creador:</span>
+                  <span className="font-bold text-slate-700">{reassignModalRef.teacherName || reassignModalRef.createdByName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Psicólogo actual:</span>
+                  <span className="font-bold text-indigo-700">{reassignModalRef.psychologistName || 'Psicólogo Escolar'}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Seleccionar Nuevo Psicólogo Responsable *
+                </label>
+                <select
+                  required
+                  value={selectedNewPsychologistEmail}
+                  onChange={(e) => setSelectedNewPsychologistEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="">-- Selecciona psicólogo --</option>
+                  {psychologists.map(p => {
+                    const isCurrent = Boolean(reassignModalRef.psychologistEmail && p.email?.toLowerCase() === reassignModalRef.psychologistEmail.toLowerCase());
+                    return (
+                      <option key={p.uid || p.email} value={p.email} disabled={isCurrent}>
+                        {p.name} ({p.email}) {isCurrent ? '(Actual)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                {psychologists.length <= 1 && (
+                  <p className="text-[11px] text-amber-600 mt-1 font-medium">
+                    Nota: Solo hay 1 psicólogo registrado en el sistema. Puedes agregar o invitar más usuarios psicólogos en el panel de Gestión de Usuarios.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Motivo u Observaciones de la Reasignación (Opcional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={reassignReason}
+                  onChange={(e) => setReassignReason(e.target.value)}
+                  placeholder="Ej. Distribución equitativa de casos, seguimiento psicopedagógico especializado, cambio de turno..."
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReassignModalRef(null)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isReassigning || !selectedNewPsychologistEmail}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-200 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isReassigning ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <UserCheck className="w-4 h-4" />
+                  )}
+                  <span>Confirmar Reasignación</span>
                 </button>
               </div>
             </form>
