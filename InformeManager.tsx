@@ -7,10 +7,11 @@ import {
   ClipboardList
 } from 'lucide-react';
 import { UserProfile, Expediente, Referral, normalizeUserRole, isSuperAdminEmail, SUPER_ADMIN_EMAILS } from '../types';
-import { cn } from '../lib/utils';
+import { cn, areStudentNamesEquivalent } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, setDoc, doc } from 'firebase/firestore';
 import { SystemModal, SystemModalState } from './SystemModal';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 export interface SharedReportStudentCard {
   expedienteId: string;
@@ -120,6 +121,9 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
   const [hidePsychEvaluation, setHidePsychEvaluation] = useState(false);
   const [hideParentInterviews, setHideParentInterviews] = useState(false);
 
+  useBackHandler(isShareModalOpen, () => setIsShareModalOpen(false), 'informe-share-modal');
+  useBackHandler(Boolean(selectedSharedReport), () => setSelectedSharedReport(null), 'informe-preview-modal');
+
   // Editable copy data for share modal
   const [editableTitle, setEditableTitle] = useState('');
   const [editablePeriod, setEditablePeriod] = useState('');
@@ -180,7 +184,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       if (isSuperAdminEmail(u.email)) return true;
       if (u.role === 'SUPER_ADMIN') return true;
       const lowerName = (u.name || '').toLowerCase();
-      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor')) return true;
+      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor') || lowerName.includes('soporte principal') || lowerName.includes('soporte secundario')) return true;
       return false;
     };
 
@@ -253,7 +257,7 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
     const referrerCounts: Record<string, number> = {};
     filteredExpedientes.forEach(e => {
       // Find linked referral if any
-      const ref = referrals.find(r => r.id === e.linkedReferralId || r.studentName.toLowerCase() === e.studentName.toLowerCase());
+      const ref = referrals.find(r => r.id === e.linkedReferralId || areStudentNamesEquivalent(r.studentName, e.studentName));
       const referrer = ref ? `${ref.referredByName || ref.referredBy} (${ref.referredByRole || 'Docente'})` : (e.psychologistName ? 'Psicología' : 'Docencia / Coordinación');
       referrerCounts[referrer] = (referrerCounts[referrer] || 0) + 1;
     });
@@ -591,13 +595,15 @@ export const InformeManager: React.FC<InformeManagerProps> = ({
       admins.forEach(a => {
         if (a.email && (isSuperAdminEmail(a.email) || (a as any).role === 'SUPER_ADMIN') && !saEmailsSeen.has(a.email.toLowerCase())) {
           saEmailsSeen.add(a.email.toLowerCase());
-          superAdminRecipients.push({ email: a.email.toLowerCase(), name: a.name || 'Super Admin', roleLabel: 'Super Admin', uid: a.uid });
+          const defaultName = a.email.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : (a.email.toLowerCase().includes('dunor') ? 'Soporte Secundario' : 'Soporte');
+          superAdminRecipients.push({ email: a.email.toLowerCase(), name: a.name || defaultName, roleLabel: 'Soporte', uid: a.uid });
         }
       });
       SUPER_ADMIN_EMAILS.forEach(saEmail => {
         if (!saEmailsSeen.has(saEmail.toLowerCase())) {
           saEmailsSeen.add(saEmail.toLowerCase());
-          superAdminRecipients.push({ email: saEmail.toLowerCase(), name: 'Super Admin', roleLabel: 'Super Admin' });
+          const defaultName = saEmail.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : 'Soporte Secundario';
+          superAdminRecipients.push({ email: saEmail.toLowerCase(), name: defaultName, roleLabel: 'Soporte' });
         }
       });
 

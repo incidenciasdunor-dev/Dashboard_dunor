@@ -36,8 +36,9 @@ import {
 } from '../types';
 import { doc, setDoc, updateDoc, deleteDoc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { cn } from '../lib/utils';
+import { cn, normalizeSearchText, areStudentNamesEquivalent } from '../lib/utils';
 import { SystemModal, SystemModalState } from './SystemModal';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 interface ExpedientesManagerProps {
   expedientes: Expediente[];
@@ -158,6 +159,10 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [hiddenSections, setHiddenSections] = useState<string[]>([]);
   const [redactionMode, setRedactionMode] = useState<'editor' | 'words'>('editor');
+
+  useBackHandler(isShareModalOpen, () => setIsShareModalOpen(false), 'expediente-share-modal');
+  useBackHandler(Boolean(selectedSharedExpediente), () => setSelectedSharedExpediente(null), 'expediente-shared-detail-modal');
+  useBackHandler(viewMode === 'FORM', () => setViewMode('LIST'), 'expediente-form-view');
   const textareaRefs = React.useRef<Record<string, HTMLTextAreaElement | null>>({});
   const [sharedCopyData, setSharedCopyData] = useState({
     reasonAndBackground: '',
@@ -178,7 +183,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       if (isSuperAdminEmail(u.email)) return true;
       if (u.role === 'SUPER_ADMIN') return true;
       const lowerName = (u.name || '').toLowerCase();
-      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor')) return true;
+      if (lowerName.includes('super admin') || lowerName.includes('administrador dunor') || lowerName.includes('soporte principal') || lowerName.includes('soporte secundario')) return true;
       return false;
     };
 
@@ -572,6 +577,7 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
             { 
               expedienteId: id, 
               type: 'expediente',
+              eventId: editingExpedienteId ? `expediente_update_${id}_${Math.floor(Date.now() / 30000)}` : `expediente_create_${id}`,
               creatorUid: profile.uid,
               creatorEmail: profile.email,
               isCreationNotification: !editingExpedienteId
@@ -638,13 +644,15 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       (admins || []).forEach(a => {
         if (a.email && (isSuperAdminEmail(a.email) || (a as any).role === 'SUPER_ADMIN') && !saEmailsSeen.has(a.email.toLowerCase())) {
           saEmailsSeen.add(a.email.toLowerCase());
-          superAdminRecipients.push({ email: a.email, name: a.name || 'Super Admin', roleLabel: 'Super Admin', uid: a.uid });
+          const defaultName = a.email.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : (a.email.toLowerCase().includes('dunor') ? 'Soporte Secundario' : 'Soporte');
+          superAdminRecipients.push({ email: a.email, name: a.name || defaultName, roleLabel: 'Soporte', uid: a.uid });
         }
       });
       SUPER_ADMIN_EMAILS.forEach(saEmail => {
         if (!saEmailsSeen.has(saEmail.toLowerCase())) {
           saEmailsSeen.add(saEmail.toLowerCase());
-          superAdminRecipients.push({ email: saEmail, name: 'Super Admin', roleLabel: 'Super Admin' });
+          const defaultName = saEmail.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : 'Soporte Secundario';
+          superAdminRecipients.push({ email: saEmail, name: defaultName, roleLabel: 'Soporte' });
         }
       });
 
@@ -725,13 +733,15 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       (admins || []).forEach(a => {
         if (a.email && (isSuperAdminEmail(a.email) || (a as any).role === 'SUPER_ADMIN') && !saEmailsSeen.has(a.email.toLowerCase())) {
           saEmailsSeen.add(a.email.toLowerCase());
-          superAdminRecipients.push({ email: a.email, name: a.name || 'Super Admin', roleLabel: 'Super Admin', uid: a.uid });
+          const defaultName = a.email.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : (a.email.toLowerCase().includes('dunor') ? 'Soporte Secundario' : 'Soporte');
+          superAdminRecipients.push({ email: a.email, name: a.name || defaultName, roleLabel: 'Soporte', uid: a.uid });
         }
       });
       SUPER_ADMIN_EMAILS.forEach(saEmail => {
         if (!saEmailsSeen.has(saEmail.toLowerCase())) {
           saEmailsSeen.add(saEmail.toLowerCase());
-          superAdminRecipients.push({ email: saEmail, name: 'Super Admin', roleLabel: 'Super Admin' });
+          const defaultName = saEmail.toLowerCase() === 'mi_yorch@hotmail.com' ? 'Soporte Principal' : 'Soporte Secundario';
+          superAdminRecipients.push({ email: saEmail, name: defaultName, roleLabel: 'Soporte' });
         }
       });
 
@@ -938,11 +948,11 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
   };
 
   const filteredExpedientes = expedientes.filter(exp => {
-    const term = searchTerm.toLowerCase();
+    const term = normalizeSearchText(searchTerm);
     return (
-      exp.studentName?.toLowerCase().includes(term) ||
-      exp.gradeGroup?.toLowerCase().includes(term) ||
-      exp.psychologistName?.toLowerCase().includes(term)
+      normalizeSearchText(exp.studentName).includes(term) ||
+      normalizeSearchText(exp.gradeGroup).includes(term) ||
+      normalizeSearchText(exp.psychologistName).includes(term)
     );
   });
 
@@ -961,11 +971,11 @@ export const ExpedientesManager: React.FC<ExpedientesManagerProps> = ({
       if (!isRecipient && !isOwner) return false;
     }
 
-    const term = searchTerm.toLowerCase();
+    const term = normalizeSearchText(searchTerm);
     return (
-      exp.studentName?.toLowerCase().includes(term) ||
-      exp.gradeGroup?.toLowerCase().includes(term) ||
-      exp.sharedBy?.toLowerCase().includes(term)
+      normalizeSearchText(exp.studentName).includes(term) ||
+      normalizeSearchText(exp.gradeGroup).includes(term) ||
+      normalizeSearchText(exp.sharedBy).includes(term)
     );
   });
 

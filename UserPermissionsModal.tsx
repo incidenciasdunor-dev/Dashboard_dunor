@@ -12,6 +12,7 @@ import {
 } from '../types';
 import { ShieldCheck, Save, RotateCcw, X, CheckCircle2, User, Star, XCircle, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useBackHandler } from '../lib/mobileNavigation';
 
 interface UserPermissionsModalProps {
   user: UserProfile | null;
@@ -32,6 +33,8 @@ export const UserPermissionsModal: React.FC<UserPermissionsModalProps> = ({
   onClose,
   onSave
 }) => {
+  useBackHandler(isOpen && Boolean(user), onClose, 'user-permissions-modal');
+
   const getRoleBase = (roleStr?: string): RolePermissions => {
     const normalizedRole: UserRole = normalizeUserRole(roleStr) || 'TEACHER';
     return firestoreRolePermissions?.[normalizedRole] || systemSettings?.rolePermissions?.[normalizedRole] || DEFAULT_ROLE_PERMISSIONS[normalizedRole] || DEFAULT_ROLE_PERMISSIONS.TEACHER;

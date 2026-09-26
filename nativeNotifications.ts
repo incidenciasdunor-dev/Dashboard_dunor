@@ -43,6 +43,7 @@ export interface SystemNotificationOptions {
   url?: string;
   data?: any;
   silent?: boolean;
+  vibrate?: number[];
 }
 
 export async function showSystemNotification(

@@ -191,7 +191,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
 
     canEditIncidents: false,
     canDeleteIncidents: false,
-    canDeleteReferrals: true,
+    canDeleteReferrals: false,
     canChangeStatus: false,
     canAssignPsychologist: false,
     canAddFollowUp: true,
@@ -311,6 +311,7 @@ export interface SystemSettings {
   coordinatorAdminMapping: Record<string, string[]>; // coordinatorId -> adminIds[]
   categories?: string[];
   rolePermissions?: Partial<RolePermissionsMap>;
+  teacherChatTtlHours?: number;
 }
 
 export interface Task {
@@ -333,6 +334,15 @@ export interface Task {
   readAt?: number;
   overdueReminderSent?: boolean;
   lastReminderSentAt?: number;
+  autoCompleted?: boolean;
+  autoCompletedReason?: string;
+  taskType?: 'TASK' | 'CONGRATULATION' | 'COMUNICADO';
+  isComunicado?: boolean;
+  priority?: 'NORMAL' | 'IMPORTANTE' | 'URGENTE';
+  requireAcknowledgment?: boolean;
+  reactivatedAt?: number;
+  reactivatedByEmail?: string;
+  reactivatedByName?: string;
 }
 
 export interface Incident {
@@ -359,6 +369,12 @@ export interface Incident {
   notifiedTeacherId?: string;
   notifiedTeacherName?: string;
   notifiedTeacherEmail?: string;
+  notifiedTeacherIds?: string[];
+  notifiedTeachers?: {
+    uid: string;
+    name: string;
+    email: string;
+  }[];
   suggestReferral?: boolean;
   referralStatus?: 'SUGGESTED' | 'IN_PROGRESS';
   referralComments?: string;
@@ -417,6 +433,16 @@ export interface Referral {
   createdByEmail?: string;
   createdByRole?: string;
   additionalRecipients?: { uid?: string; email: string; name: string; role: string }[];
+  reassignmentHistory?: {
+    previousPsychologistName?: string;
+    previousPsychologistEmail?: string;
+    newPsychologistName: string;
+    newPsychologistEmail: string;
+    reassignedByName: string;
+    reassignedByEmail: string;
+    date: number;
+    reason?: string;
+  }[];
   status?: 'PENDIENTE' | 'EN_VALORACION' | 'ATENDIDO';
   createdAt: number;
   updatedAt?: number;
@@ -456,4 +482,48 @@ export interface Expediente {
   status?: 'EN_PROCESO' | 'CASO_CONCLUIDO' | 'CONCLUIDO' | 'DERIVADO_EXTERNO';
   createdAt: number;
   updatedAt: number;
+}
+
+export interface TeacherMessage {
+  id: string;
+  conversationId: string;
+  senderUid: string;
+  senderName: string;
+  senderEmail: string;
+  receiverUid?: string;
+  receiverName?: string;
+  receiverEmail?: string;
+  participantUids?: string[];
+  isSystem?: boolean;
+  text: string;
+  fileData?: string;
+  fileName?: string;
+  fileType?: 'image' | 'file';
+  fileSize?: number;
+  createdAt: number;
+  expiresAt: number;
+  read?: boolean;
+}
+
+export interface TeacherConversation {
+  id: string;
+  isGroup: boolean;
+  name?: string;
+  participantUids: string[];
+  participantNames: Record<string, string>;
+  participantEmails?: Record<string, string>;
+  createdByUid: string;
+  createdAt: number;
+  updatedAt: number;
+  lastMessageText?: string;
+  lastMessageSenderName?: string;
+  lastMessageAt?: number;
+}
+
+export interface TeacherTypingState {
+  conversationId: string;
+  userId: string;
+  userName: string;
+  isTyping: boolean;
+  timestamp: number;
 }

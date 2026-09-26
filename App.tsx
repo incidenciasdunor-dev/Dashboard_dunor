@@ -8,9 +8,9 @@ import { auth, db, restoreFirestoreConnection, getStoredFirebaseConfig, safeGetD
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode, signOut, onAuthStateChanged, signInAnonymously, User } from 'firebase/auth';
 import { doc, getDoc, getDocFromCache, setDoc, collection, query, where, or, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, deleteField, getDocs, collectionGroup, arrayUnion, limit, writeBatch } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop } from 'lucide-react';
+import { Plus, LogOut, UserPlus, Users, ClipboardList, CheckCircle2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, ChevronDown, Menu, X, Trash2, Edit2, Edit3, Phone, Mail, User as UserIcon, School, Lock, Eye, EyeOff, Image as ImageIcon, History, Send, Settings, Printer, Brain, BrainCircuit, Check, CheckCheck, Shield, ShieldCheck, ShieldAlert, FileText, Search, GraduationCap, Building2, Database, Key, Clock, Award, Download, Upload, Save, FolderHeart, BarChart2, Sun, Moon, Sparkles, RefreshCw, UserCheck, Filter, Copy, RotateCcw, Bell, BellRing, Smartphone, Laptop, MessageSquare, Megaphone, FolderKanban } from 'lucide-react';
 import { format } from 'date-fns';
-import { cn, getUserEducationLevel, normalizeEducationLevel } from './lib/utils';
+import { cn, getUserEducationLevel, normalizeEducationLevel, areStudentNamesEquivalent, normalizeStudentName, normalizeSearchText, pickBetterStudentDisplayName, formatStudentNameTitleCase, getStudentNameTokens } from './lib/utils';
 import { UserProfile, Incident, UserRole, IncidentStatus, FollowUpComment, SystemSettings, Log, Task, TaskStatus, RolePermissions, RolePermissionsMap, DEFAULT_ROLE_PERMISSIONS, getRolePermission, hasPermission, normalizeUserRole, Referral, Expediente } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAppStructurePdf } from './lib/generateAppStructurePdf';
@@ -20,6 +20,9 @@ import { InformeManager } from './components/InformeManager';
 import { UserPermissionsModal } from './components/UserPermissionsModal';
 import { RolePermissionsManager, ROLE_LABELS } from './components/PermissionsManager';
 import { SystemModal, SystemModalState } from './components/SystemModal';
+import { TeacherSecretChat } from './components/TeacherSecretChat';
+import { StudentIncidentsPrintModal } from './components/StudentIncidentsPrintModal';
+import { useBackHandler, handleGlobalPopstate } from './lib/mobileNavigation';
 import {
   isNotificationSupported,
   getNotificationPermission,
@@ -213,6 +216,7 @@ class ErrorBoundary extends React.Component<{ children?: React.ReactNode }, { ha
 // --- Components ---
 
 const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident: Incident, systemSettings?: SystemSettings, profile?: UserProfile, onClose: () => void }) => {
+  useBackHandler(true, onClose, `print-preview-${incident.id}`);
   const logoSrc = systemSettings?.appLogoUrl || "/logo.svg";
   const logoAppName = systemSettings?.appName || "DASHBOARD DUNOR";
   const isDirective = profile?.role === 'DIRECTIVE' || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email);
@@ -670,7 +674,7 @@ const PrintPreview = ({ incident, systemSettings, profile, onClose }: { incident
                   <span className="label">Reportado por</span>
                   <span className="content">
                     {incident.reporterName || incident.creatorName || 'Personal Escolar'}
-                    {incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}
+                    {incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'SUPER_ADMIN' ? 'Soporte' : incident.reporterRole})` : ''}
                   </span>
                 </div>
                 <div className="info-item">
@@ -872,6 +876,8 @@ const FirebaseSecretsModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: (
   const [messagingSenderId, setMessagingSenderId] = useState(currentConfig.messagingSenderId || '');
   const [appId, setAppId] = useState(currentConfig.appId || '');
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  useBackHandler(isOpen, onClose, 'firebase-secrets-modal');
 
   if (!isOpen) return null;
 
@@ -1077,7 +1083,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
     const isSuper = isSuperAdminEmail(emailId);
 
     if (isSuper) {
-      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador DUNOR";
+      const adminName = emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Soporte");
       const adminProfile: UserProfile = {
         uid: emailId,
         name: adminName,
@@ -1181,7 +1187,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
       const authUid = userCred.user?.uid || uData?.uid || cleanEmail;
       const fullProfile: UserProfile | null = uData ? { ...uData, uid: authUid, isRegistered: true } : (isSuper ? {
         uid: authUid,
-        name: cleanEmail.includes('dunor') ? "Administrador DUNOR" : (cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+        name: cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : "Administrador"),
         email: cleanEmail,
         role: "ADMIN" as UserRole,
         isRegistered: true
@@ -1217,7 +1223,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
           return;
         }
 
-        const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial";
+        const adminName = cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : "Administrador Inicial");
         const adminProfile: UserProfile = {
           uid: uData?.uid || cleanEmail,
           name: uData?.name || adminName,
@@ -1413,7 +1419,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         ...(existingData || preProfile || {}),
         uid: authUid,
         email: cleanEmail,
-        name: existingData?.name || preProfile?.name || (isSuper ? "Administrador Dunor" : cleanEmail.split('@')[0]),
+        name: existingData?.name || preProfile?.name || (cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : cleanEmail.split('@')[0])),
         role: existingData?.role || preProfile?.role || (isSuper ? "ADMIN" : "TEACHER"),
         isRegistered: true,
         password: password,
@@ -1529,7 +1535,7 @@ const LoginScreen = ({ onCustomLogin, systemSettings }: { onCustomLogin: (userDa
         const updatedProfile: UserProfile = {
           ...(existingData || {}),
           uid: authUid,
-          name: existingData?.name || (isSuper ? "Super Admin (Yorch)" : cleanEmail.split('@')[0]),
+          name: existingData?.name || (cleanEmail === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (cleanEmail.includes('dunor') ? "Soporte Secundario" : cleanEmail.split('@')[0])),
           email: cleanEmail,
           role: existingData?.role || (isSuper ? "ADMIN" : "TEACHER"),
           isRegistered: true,
@@ -1996,7 +2002,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         if (isSuperAdminEmail(emailId)) {
           const autoAdmin: UserProfile = {
             uid: activeUser.uid || emailId,
-            name: emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador"),
+            name: emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador"),
             email: emailId,
             role: "ADMIN",
             isRegistered: true
@@ -2064,6 +2070,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     message: '',
     onConfirm: () => {},
   });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'notifications' | 'tasks' | 'incidents' | 'users' | 'add-incident' | 'settings' | 'logs' | 'referrals' | 'expedientes' | 'informes'>('notifications');
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -2079,6 +2086,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<UserProfile[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [chatOpenPartner, setChatOpenPartner] = useState<UserProfile | null>(null);
   const [liveToast, setLiveToast] = useState<{
     id: string;
     title: string;
@@ -2087,6 +2095,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     incidentId?: string;
     referralId?: string;
     taskId?: string;
+    type?: string;
+    chatPartnerUid?: string;
+    chatPartnerEmail?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -2133,7 +2144,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     }
   };
   const [searchTerm, setSearchTerm] = useState('');
-  const [isGroupedByStudent, setIsGroupedByStudent] = useState(false);
+  const [incidentGroupingMode, setIncidentGroupingMode] = useState<'individual' | 'student'>('individual');
+  const [incidentStatusFilter, setIncidentStatusFilter] = useState<'ALL' | IncidentStatus>('ALL');
+  const isGroupedByStudent = incidentGroupingMode === 'student';
+  const setIsGroupedByStudent = (val: boolean) => setIncidentGroupingMode(val ? 'student' : 'individual');
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
   const [isExportingDb, setIsExportingDb] = useState(false);
@@ -2158,16 +2172,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       'Accidente Escolar',
       'Falta de Respeto al Docente'
     ],
-    rolePermissions: DEFAULT_ROLE_PERMISSIONS
+    rolePermissions: DEFAULT_ROLE_PERMISSIONS,
+    teacherChatTtlHours: 6
   };
 
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(DEFAULT_SETTINGS);
+  const [chatTtlCustomInput, setChatTtlCustomInput] = useState<number>(6);
+  const [chatTtlSavedFeedback, setChatTtlSavedFeedback] = useState(false);
+
+  useEffect(() => {
+    if (systemSettings.teacherChatTtlHours) {
+      setChatTtlCustomInput(systemSettings.teacherChatTtlHours);
+    }
+  }, [systemSettings.teacherChatTtlHours]);
+
   const [selectedMappingAdmin, setSelectedMappingAdmin] = useState('');
   const [selectedMappingCoordinator, setSelectedMappingCoordinator] = useState('');
   const [selectedIncidents, setSelectedIncidents] = useState<string[]>([]);
   const [selectedNotifications, setSelectedNotifications] = useState<string[]>([]);
   const [isNotifSelectionMode, setIsNotifSelectionMode] = useState(false);
   const [expandedIncidentId, setExpandedIncidentId] = useState<string | null>(null);
+  const recentAlertedKeysRef = useRef<Map<string, number>>(new Map());
+  const updatingIncidentStatusRef = useRef<Set<string>>(new Set());
+  const processedAutoTasksRef = useRef<Set<string>>(new Set());
   const [celebrationData, setCelebrationData] = useState<{
     notif: any;
     title: string;
@@ -2222,17 +2249,39 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   }, [celebrationData]);
 
   const processNotificationClickAndDelete = async (notif: any) => {
-    if (notif && notif.id) {
-      setNotifications(prev => prev.filter(n => n.id !== notif.id));
-      try {
-        await deleteDoc(doc(db, 'notifications', notif.id));
-      } catch (err) {
-        console.error("Error deleting clicked notification:", err);
+    if (notif) {
+      const docIdsToDelete = new Set<string>();
+      if (notif.id) docIdsToDelete.add(notif.id);
+      if (Array.isArray(notif.allDocIds)) {
+        notif.allDocIds.forEach((dId: string) => { if (dId) docIdsToDelete.add(dId); });
+      }
+
+      setNotifications(prev => prev.filter(n => !docIdsToDelete.has(n.id)));
+      for (const dId of Array.from(docIdsToDelete)) {
+        try {
+          await deleteDoc(doc(db, 'notifications', dId));
+        } catch (err) {
+          console.error("Error deleting clicked notification:", err);
+        }
       }
     }
 
     const titleLower = (notif?.title || '').toLowerCase();
     const msgLower = (notif?.message || '').toLowerCase();
+
+    // Notificación de Chat Docente Secreto
+    if (notif?.type === 'teacher_chat') {
+      const partnerUid = notif.chatPartnerUid || notif.senderUid || notif.creatorUid;
+      const partnerEmail = notif.chatPartnerEmail || notif.senderEmail || notif.creatorEmail;
+      const partner = teachers.find(t => 
+        (partnerUid && t.uid === partnerUid) || 
+        (partnerEmail && t.email?.toLowerCase() === String(partnerEmail).toLowerCase())
+      );
+      if (partner) {
+        setChatOpenPartner(partner);
+      }
+      return;
+    }
 
     const isReferralNotif = 
       notif?.type === 'referral' ||
@@ -2331,8 +2380,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   });
 
   const [printIncident, setPrintIncident] = useState<Incident | null>(null);
+  const [printStudentGroup, setPrintStudentGroup] = useState<{ studentName: string; incidents: Incident[] } | null>(null);
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
+
+  useBackHandler(Boolean(printStudentGroup), () => setPrintStudentGroup(null), 'app-print-student-group');
+  useBackHandler(Boolean(printIncident), () => setPrintIncident(null), 'app-print-incident');
+  useBackHandler(galleryConfig.isOpen, () => setGalleryConfig(prev => ({ ...prev, isOpen: false })), 'app-image-gallery');
+  useBackHandler(Boolean(selectedLogDetail), () => setSelectedLogDetail(null), 'app-log-detail');
+  useBackHandler(showAppSecretsModal, () => setShowAppSecretsModal(false), 'app-secrets-modal');
+  useBackHandler(Boolean(celebrationData), () => setCelebrationData(null), 'app-celebration');
+  useBackHandler(confirmModal.isOpen, () => setConfirmModal(prev => ({ ...prev, isOpen: false })), 'app-confirm-modal');
+  useBackHandler(systemPopup.isOpen, () => setSystemPopup(prev => ({ ...prev, isOpen: false })), 'app-system-popup');
+  useBackHandler(Boolean(chatOpenPartner), () => setChatOpenPartner(null), 'app-chat-open-partner');
+  useBackHandler(Boolean(editingCategory), () => setEditingCategory(null), 'app-editing-category');
 
   const effectiveRolePermissions = useMemo(() => {
     const merged: RolePermissionsMap = { ...DEFAULT_ROLE_PERMISSIONS };
@@ -2430,30 +2491,89 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     return () => unsubscribe();
   }, []);
 
-  // Session inactivity auto-logout (15 minutes of no activity)
+  // Keep session open in background permanently (no auto-logout on inactivity) so real-time notifications remain active
+  // Mobile device back button navigation handler:
+  // Returns to the previous screen/tab or closes modals, windows, forms, and print views instead of exiting the app
+  const tabHistoryRef = useRef<string[]>(['notifications']);
+  const isPopNavRef = useRef(false);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const isSidebarOpenRef = useRef(isSidebarOpen);
+  isSidebarOpenRef.current = isSidebarOpen;
+
   useEffect(() => {
-    if (!activeUser && !customUser) return;
+    // Ensure initial history state exists
+    if (!window.history.state || !window.history.state.dunorApp) {
+      window.history.replaceState({ dunorApp: true, tab: activeTabRef.current }, '');
+    }
 
-    let inactivityTimer: NodeJS.Timeout;
-    const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+    const handleAppPopState = (e: PopStateEvent) => {
+      // If a secret chat is handling this popstate, let it handle
+      if (e.state && e.state.teacherChatOpen) {
+        return;
+      }
 
-    const resetInactivityTimer = () => {
-      clearTimeout(inactivityTimer);
-      inactivityTimer = setTimeout(() => {
-        handleLogout();
-        showSystemPopup("Sesión Expirada", "Tu sesión se ha cerrado automáticamente por inactividad (15 minutos) para proteger la seguridad de tu cuenta.", "warning");
-      }, INACTIVITY_TIMEOUT_MS);
+      // 1. FIRST PRIORITY: Check if any open window, modal, form, or print view wants to consume this back action
+      if (handleGlobalPopstate()) {
+        return;
+      }
+
+      // 2. Close mobile sidebar if open
+      if (window.innerWidth < 768 && isSidebarOpenRef.current) {
+        setIsSidebarOpen(false);
+        return;
+      }
+
+      const currentTab = activeTabRef.current;
+
+      // 3. If user is in the incident form ('add-incident'), return to 'incidents' screen or previous tab
+      if (currentTab === 'add-incident') {
+        if (tabHistoryRef.current.length > 1) {
+          tabHistoryRef.current.pop();
+          const prevTab = tabHistoryRef.current[tabHistoryRef.current.length - 1];
+          if (prevTab && prevTab !== 'add-incident') {
+            isPopNavRef.current = true;
+            setActiveTab(prevTab as any);
+            return;
+          }
+        }
+        isPopNavRef.current = true;
+        setActiveTab('incidents');
+        return;
+      }
+
+      // 4. Navigate back to previous screen/tab if available
+      if (tabHistoryRef.current.length > 1) {
+        tabHistoryRef.current.pop(); // Remove current tab
+        const prevTab = tabHistoryRef.current[tabHistoryRef.current.length - 1];
+        if (prevTab) {
+          isPopNavRef.current = true;
+          setActiveTab(prevTab as any);
+          return;
+        }
+      }
+
+      // 5. If already at base screen, ensure app doesn't abruptly exit
+      window.history.pushState({ dunorApp: true, tab: currentTab }, '');
     };
 
-    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
-    events.forEach(evt => window.addEventListener(evt, resetInactivityTimer, { passive: true }));
-    resetInactivityTimer();
+    window.addEventListener('popstate', handleAppPopState);
+    return () => window.removeEventListener('popstate', handleAppPopState);
+  }, []);
 
-    return () => {
-      clearTimeout(inactivityTimer);
-      events.forEach(evt => window.removeEventListener(evt, resetInactivityTimer));
-    };
-  }, [activeUser, customUser]);
+  // Track tab transitions in history stack
+  useEffect(() => {
+    if (isPopNavRef.current) {
+      isPopNavRef.current = false;
+      return;
+    }
+    const stack = tabHistoryRef.current;
+    if (stack[stack.length - 1] !== activeTab) {
+      stack.push(activeTab);
+      if (stack.length > 30) stack.shift();
+      window.history.pushState({ dunorApp: true, tab: activeTab }, '');
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
@@ -2620,20 +2740,28 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
     });
 
-    const notificationData = {
+    const determinedCreatorUid = extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification && profile?.uid ? profile.uid : '') || '';
+    const determinedCreatorEmail = extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification && profile?.email ? profile.email : '') || '';
+
+    const derivedEventId = extraData?.eventId ||
+      `${(title || '').trim().toLowerCase()}_${(message || '').trim().toLowerCase()}_${incidentId || extraData?.referralId || extraData?.taskId || ''}_${Math.floor(Date.now() / 30000)}`;
+
+    const notificationData: Record<string, any> = {
       title,
       message,
       incidentId: incidentId || '',
       read: false,
       createdAt: Date.now(),
-      ...extraData,
-      creatorUid: extraData?.creatorUid || extraData?.excludeUserId || (extraData?.isCreationNotification ? profile?.uid : undefined),
-      creatorEmail: extraData?.creatorEmail || extraData?.excludeUserEmail || (extraData?.isCreationNotification ? profile?.email : undefined),
+      ...(extraData || {}),
+      eventId: derivedEventId,
+      creatorUid: determinedCreatorUid,
+      creatorEmail: determinedCreatorEmail,
       isCreationNotification: Boolean(extraData?.isCreationNotification)
     };
 
     const finalTargetUserIds = new Set<string>();
     const targetEmails = new Set<string>();
+    const seenUserKeys = new Set<string>();
     const rawTargets: string[] = Array.isArray(userIdOrIds) ? userIdOrIds : [userIdOrIds];
 
     const addTargetUser = (str: string) => {
@@ -2644,31 +2772,42 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (excludedIdsAndEmails.has(cleanLower)) return;
 
       const matched = allUsers.find(u =>
-        u.uid === clean ||
-        (u.email && u.email.toLowerCase() === cleanLower)
+        (u.uid && u.uid.trim() === clean) ||
+        (u.email && u.email.toLowerCase().trim() === cleanLower)
       );
 
       if (matched) {
-        const mUidLower = matched.uid ? matched.uid.toLowerCase().trim() : '';
-        const mEmailLower = matched.email ? matched.email.toLowerCase().trim() : '';
-        if (excludedIdsAndEmails.has(mUidLower) || excludedIdsAndEmails.has(mEmailLower)) {
+        const mUid = matched.uid ? matched.uid.trim() : '';
+        const mEmail = matched.email ? matched.email.toLowerCase().trim() : '';
+        if (
+          (mUid && excludedIdsAndEmails.has(mUid.toLowerCase())) ||
+          (mEmail && excludedIdsAndEmails.has(mEmail))
+        ) {
           return;
         }
 
-        const targetId = matched.uid || (matched.email ? matched.email.toLowerCase() : cleanLower);
+        const canonicalKey = (mEmail || mUid).toLowerCase();
+        if (seenUserKeys.has(canonicalKey)) return;
+        seenUserKeys.add(canonicalKey);
+
+        const targetId = mUid || (mEmail ? mEmail : cleanLower);
         finalTargetUserIds.add(targetId);
-        if (matched.email && matched.email.includes('@')) {
-          targetEmails.add(matched.email.toLowerCase());
+        if (mEmail && mEmail.includes('@')) {
+          targetEmails.add(mEmail);
         }
       } else {
-        finalTargetUserIds.add(cleanLower);
+        const key = cleanLower;
+        if (seenUserKeys.has(key)) return;
+        seenUserKeys.add(key);
+
+        finalTargetUserIds.add(clean.includes('@') ? cleanLower : clean);
         if (cleanLower.includes('@')) {
           targetEmails.add(cleanLower);
         }
       }
     };
 
-    // 1. Explicit target recipients (expanding roles & ALL broadcasts)
+    // 1. Explicit target recipients (expanding roles & ALL broadcasts to unique canonical user IDs)
     for (const raw of rawTargets) {
       if (!raw || typeof raw !== 'string' || !raw.trim()) continue;
       const clean = raw.trim();
@@ -2682,15 +2821,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (roleMatches.length > 0) {
         roleMatches.forEach(u => {
           if (u.uid) addTargetUser(u.uid);
-          if (u.email) addTargetUser(u.email);
+          else if (u.email) addTargetUser(u.email);
         });
-        finalTargetUserIds.add(cleanUpper.toLowerCase());
       } else if (cleanUpper === 'ALL') {
         allUsers.forEach(u => {
           if (u.uid) addTargetUser(u.uid);
-          if (u.email) addTargetUser(u.email);
+          else if (u.email) addTargetUser(u.email);
         });
-        finalTargetUserIds.add('all');
       } else {
         addTargetUser(clean);
       }
@@ -2701,17 +2838,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       SUPER_ADMIN_EMAILS.forEach(email => {
         const eLower = email.toLowerCase().trim();
         if (!excludedIdsAndEmails.has(eLower)) {
-          finalTargetUserIds.add(eLower);
+          addTargetUser(eLower);
         }
       });
       allUsers.filter(u => isSuperAdminEmail(u.email)).forEach(sa => {
-        const saUid = sa.uid ? sa.uid.toLowerCase().trim() : '';
-        const saEmail = sa.email ? sa.email.toLowerCase().trim() : '';
-        if (sa.uid && !excludedIdsAndEmails.has(saUid) && !excludedIdsAndEmails.has(saEmail)) {
-          finalTargetUserIds.add(sa.uid);
-        }
-        if (sa.email && !excludedIdsAndEmails.has(saEmail) && !excludedIdsAndEmails.has(saUid)) {
-          finalTargetUserIds.add(sa.email.toLowerCase().trim());
+        if (sa.uid) {
+          addTargetUser(sa.uid);
+        } else if (sa.email) {
+          addTargetUser(sa.email);
         }
       });
     }
@@ -2734,10 +2868,19 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     for (const userId of finalTargetUserIds) {
       if (!userId) continue;
       try {
-        await addDoc(collection(db, 'notifications'), {
+        const docToSave: Record<string, any> = {
           ...notificationData,
           userId
+        };
+
+        // Remove any undefined keys to guarantee Firestore addDoc never throws 'Unsupported field value: undefined'
+        Object.keys(docToSave).forEach((key) => {
+          if (docToSave[key] === undefined) {
+            delete docToSave[key];
+          }
         });
+
+        await addDoc(collection(db, 'notifications'), docToSave);
       } catch (e) {
         console.error("Error sending notification doc to:", userId, e);
       }
@@ -2810,7 +2953,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   ) => {
     try {
       const effectiveEmail = profile?.email || activeUser?.email || extra?.creatorEmail || extra?.userEmail || 'incidencias.dunor@gmail.com';
-      const effectiveName = profile?.name || activeUser?.displayName || extra?.creatorName || extra?.userName || (isSuperAdmin ? 'Superadministrador' : effectiveEmail.split('@')[0]);
+      const effectiveName = profile?.name || activeUser?.displayName || extra?.creatorName || extra?.userName || (isSuperAdmin ? 'Soporte' : effectiveEmail.split('@')[0]);
       const effectiveRole = profile?.role || (isSuperAdmin ? 'ADMIN' : (extra?.creatorRole || extra?.userRole || 'ADMIN'));
       const creatorName = extra?.creatorName || effectiveName;
       const creatorEmail = extra?.creatorEmail || effectiveEmail;
@@ -2900,48 +3043,47 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       if (excludeSet.has(clean.toLowerCase())) return;
 
       const matched = allUsers.find(u =>
-        u.uid === clean ||
-        (u.email && u.email.toLowerCase() === clean.toLowerCase())
+        (u.uid && u.uid.trim() === clean) ||
+        (u.email && u.email.toLowerCase().trim() === clean.toLowerCase())
       );
 
       if (matched) {
-        const mUid = matched.uid ? matched.uid.toLowerCase().trim() : '';
+        const mUid = matched.uid ? matched.uid.trim() : '';
         const mEmail = matched.email ? matched.email.toLowerCase().trim() : '';
-        if (excludeSet.has(mUid) || excludeSet.has(mEmail)) {
+        if (
+          (mUid && excludeSet.has(mUid.toLowerCase())) ||
+          (mEmail && excludeSet.has(mEmail))
+        ) {
           return;
         }
-        if (matched.uid) {
-          targetUserIds.add(matched.uid);
-        }
-        if (matched.email) {
-          targetEmails.add(matched.email.toLowerCase());
+        const canonicalId = mUid || (mEmail ? mEmail : clean);
+        targetUserIds.add(canonicalId);
+        if (mEmail && mEmail.includes('@')) {
+          targetEmails.add(mEmail);
         }
       } else {
+        const canonicalId = clean.includes('@') ? clean.toLowerCase() : clean;
+        targetUserIds.add(canonicalId);
         if (clean.includes('@')) {
           targetEmails.add(clean.toLowerCase());
-          targetUserIds.add(clean.toLowerCase());
-        } else {
-          targetUserIds.add(clean);
         }
       }
     };
 
     // 1. Reporter (Docente que levanta el reporte) - Only if NOT a creation event
     if (!isCreation) {
-      addTarget(incident.reporterId);
-      addTarget(incident.reporterEmail);
+      addTarget(incident.reporterId || incident.reporterEmail);
     }
 
     // 2. Coordinators (ÚNICAMENTE los coordinadores asignados al reporte o al docente que levantó el reporte)
-    if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds)) {
+    if (incident.coordinatorIds && Array.isArray(incident.coordinatorIds) && incident.coordinatorIds.length > 0) {
       incident.coordinatorIds.forEach(id => addTarget(id));
-    }
-    if (incident.coordinatorId) {
+    } else if (incident.coordinatorId) {
       addTarget(incident.coordinatorId);
-    }
-    if (incident.coordinatorEmail) {
+    } else if (incident.coordinatorEmail) {
       addTarget(incident.coordinatorEmail);
     }
+
     // Coordinador asignado específicamente en el perfil del docente que levantó el reporte
     const reportingTeacher = allUsers.find(u => 
       (incident.reporterId && u.uid === incident.reporterId) || 
@@ -2950,25 +3092,26 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     if (reportingTeacher) {
       if (reportingTeacher.assignedCoordinatorId) {
         addTarget(reportingTeacher.assignedCoordinatorId);
-      }
-      if (reportingTeacher.assignedCoordinatorEmail) {
+      } else if (reportingTeacher.assignedCoordinatorEmail) {
         addTarget(reportingTeacher.assignedCoordinatorEmail);
-      }
-      if (reportingTeacher.assignedCoordinatorName) {
-        const foundCoordByName = coordinators.find(c => c.name === reportingTeacher.assignedCoordinatorName);
-        if (foundCoordByName) {
-          addTarget(foundCoordByName.uid);
-          addTarget(foundCoordByName.email);
-        }
       }
     }
 
-    // 3. Notified Teacher (Docente en copia si aplica)
-    if (incident.notifiedTeacherId) {
-      addTarget(incident.notifiedTeacherId);
-    }
-    if (incident.notifiedTeacherEmail) {
-      addTarget(incident.notifiedTeacherEmail);
+    // 3. Notified Teachers (Docentes en copia si aplica) - Omit on creation as they receive dedicated 'Copia de Incidencia'
+    if (!isCreation) {
+      if (incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0) {
+        incident.notifiedTeacherIds.forEach(tId => addTarget(tId));
+      } else if (incident.notifiedTeacherId) {
+        addTarget(incident.notifiedTeacherId);
+      } else if (incident.notifiedTeacherEmail) {
+        addTarget(incident.notifiedTeacherEmail);
+      }
+      if (incident.notifiedTeachers && incident.notifiedTeachers.length > 0) {
+        incident.notifiedTeachers.forEach(t => {
+          if (t.uid) addTarget(t.uid);
+          else if (t.email) addTarget(t.email);
+        });
+      }
     }
 
     // 4. Directives and Admins (Directivos y Administradores de la institución)
@@ -2976,8 +3119,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       const nr = normalizeUserRole(u.role);
       return nr === 'DIRECTIVE' || nr === 'ADMIN' || isSuperAdminEmail(u.email);
     }).forEach(u => {
-      addTarget(u.uid);
-      addTarget(u.email);
+      addTarget(u.uid || u.email);
     });
 
     // Exclude SuperAdmin from routine incident email alerts ("solo notificaciones NO CORREOS, le lleguen al superadmin")
@@ -3001,13 +3143,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
     const finalTargetIds = Array.from(targetUserIds);
 
-    // Send in-app notification in real-time (skipEmail: true since notifyIncidentInvolvedUsers handles the rich email below)
+    // Send in-app notification in real-time (skipAdmins: true because admins & directives are already in finalTargetIds)
     if (finalTargetIds.length > 0) {
-      await sendNotification(finalTargetIds, title, message, incident.id, false, {
+      await sendNotification(finalTargetIds, title, message, incident.id, true, {
         ...extraData,
         skipEmail: true,
-        creatorUid: excludeUserId || profile?.uid,
-        creatorEmail: excludeUserEmail || profile?.email,
+        creatorUid: excludeUserId || profile?.uid || '',
+        creatorEmail: excludeUserEmail || profile?.email || '',
         isCreationNotification: isCreation
       });
     }
@@ -3032,7 +3174,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Lugar / Espacio:</strong> ${incident.place || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Alumno(s):</strong> ${incident.students || 'N/A'}</p>
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Reportado por:</strong> ${incident.reporterName || incident.creatorName || 'Personal Escolar'}${incident.reporterRole ? ` (${incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole})` : ''}</p>
-              ${(incident.notifiedTeacherName || incident.notifiedTeacherId) ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente:</strong> ${incident.notifiedTeacherName || 'Docente seleccionado'}</p>` : ''}
+              ${(() => {
+                const teachersList = incident.notifiedTeachers?.map(t => t.name).filter(Boolean) || [];
+                const teachersStr = teachersList.length > 0
+                  ? teachersList.join(', ')
+                  : (incident.notifiedTeacherName || (incident.notifiedTeacherId ? 'Docente seleccionado' : ''));
+                return teachersStr ? `<p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Copia a Docente(s):</strong> ${teachersStr}</p>` : '';
+              })()}
               <p style="margin: 0 0 10px 0; font-size: 14px; color: #334155;"><strong>Estatus del Reporte:</strong> <span style="background-color: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 6px; font-weight: 700; font-size: 13px;">${statusLabel}</span></p>
               ${actionDetails ? `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #cbd5e1; font-size: 13px; color: #475569;">${actionDetails}</div>` : ''}
             </div>
@@ -3375,6 +3523,12 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           return false;
         }
 
+        // 0.1 CHAT SECRETO ENTRE DOCENTES
+        // Únicamente relevante para el docente destinatario directo (no administradores, no directores, no coordinadores)
+        if (d.type === 'teacher_chat' || titleLower.includes('💬 mensaje de')) {
+          return Boolean(isDirectTarget && role === 'TEACHER');
+        }
+
         // Descartar confirmaciones personales de creación
         if (
           titleLower.includes('reporte registrado exitosamente') ||
@@ -3515,7 +3669,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
             const inc = incidents.find(i => i.id === d.incidentId);
             if (inc) {
               const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
-              const isNotified = inc.notifiedTeacherId === uid || (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email);
+              const isNotified = inc.notifiedTeacherId === uid || 
+                (inc.notifiedTeacherEmail && inc.notifiedTeacherEmail.toLowerCase() === email) ||
+                (inc.notifiedTeacherIds && inc.notifiedTeacherIds.includes(uid)) ||
+                (inc.notifiedTeachers && inc.notifiedTeachers.some(t => t.uid === uid || (t.email && t.email.toLowerCase() === email)));
               return Boolean(isReporter || isNotified);
             }
             return isDirectTarget;
@@ -3543,26 +3700,67 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           return isDirectTarget;
         }
 
-        // 4. PSICÓLOGOS
+        // 4. PSICÓLOGOS: Evitar notificaciones duplicadas y asegurar que solo llegue una a quien deba llegar
         if (role === 'PSYCHOLOGIST') {
-          const isPsychRelated = d.type === 'referral' || d.referralId || titleLower.includes('canaliz') || titleLower.includes('psicol');
+          const isCanalizacionNotif = d.type === 'referral' || Boolean(d.referralId) || titleLower.includes('canaliz') || titleLower.includes('psicol');
+
           if (d.incidentId) {
             const inc = incidents.find(i => i.id === d.incidentId);
+
+            // Si el aviso es de incidencia general ("Nueva Incidencia") pero la incidencia tiene canalización,
+            // no duplicar la notificación al psicólogo: le llegará exclusivamente la de canalización correspondiente
+            if (!isCanalizacionNotif && (inc?.referralStatus === 'SUGGESTED' || inc?.referralStatus === 'IN_PROGRESS')) {
+              return false;
+            }
+
             if (inc) {
               const isReporter = inc.reporterId === uid || (inc.reporterEmail && inc.reporterEmail.toLowerCase() === email);
-              const hasReferral = inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS' || (inc as any).psychologistId === uid;
-              return Boolean(isReporter || hasReferral || isPsychRelated);
+              if (isReporter) return true;
+
+              // Verificar si el psicólogo está asignado a la incidencia o al docente
+              const assignedPsychId = (inc as any).assignedPsychologistId || (inc as any).psychologistId;
+              const assignedPsychEmail = (inc as any).assignedPsychologistEmail;
+              const isDirectlyAssigned = (assignedPsychId && (assignedPsychId === uid || assignedPsychId === email)) ||
+                                         (assignedPsychEmail && assignedPsychEmail.toLowerCase() === email);
+
+              if (isDirectlyAssigned) return true;
+
+              const repTeacher = teachers.find(t => 
+                (inc.reporterId && t.uid === inc.reporterId) || 
+                (inc.reporterEmail && t.email?.toLowerCase() === inc.reporterEmail.toLowerCase())
+              );
+              if (repTeacher?.assignedPsychologistId || repTeacher?.assignedPsychologistEmail) {
+                const isTeacherPsych = repTeacher.assignedPsychologistId === uid || repTeacher.assignedPsychologistEmail?.toLowerCase() === email;
+                return isTeacherPsych && isDirectTarget;
+              }
+
+              return Boolean(isDirectTarget && (isCanalizacionNotif || inc.referralStatus === 'SUGGESTED' || inc.referralStatus === 'IN_PROGRESS'));
             }
-            return Boolean(isPsychRelated || (isDirectTarget && isPsychRelated));
+            return Boolean(isDirectTarget && isCanalizacionNotif);
           }
-          if (isPsychRelated) return true;
-          if (titleLower.includes('expediente') || titleLower.includes('informe')) return true;
+
+          if (isCanalizacionNotif && d.referralId) {
+            const ref = referrals.find(r => r.id === d.referralId);
+            if (ref) {
+              const isAssigned = (ref.psychologistId && ref.psychologistId === uid) ||
+                                 (ref.psychologistEmail && ref.psychologistEmail.toLowerCase() === email);
+              if (ref.psychologistId || ref.psychologistEmail) {
+                return Boolean(isAssigned);
+              }
+            }
+            return isDirectTarget;
+          }
+
+          if (titleLower.includes('expediente') || titleLower.includes('informe')) {
+            return isDirectTarget;
+          }
+
           return isDirectTarget;
         }
 
-        // 4. Expedientes & Informes
+        // 5. Expedientes & Informes
         if (titleLower.includes('expediente') || titleLower.includes('informe')) {
-          if (roleStr === 'PSYCHOLOGIST' || roleStr === 'DIRECTIVE' || roleStr === 'ADMIN') return true;
+          if (roleStr === 'DIRECTIVE' || roleStr === 'ADMIN') return true;
           return isDirectTarget;
         }
 
@@ -3573,17 +3771,29 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         return false;
       };
 
-      // Clean deduplication and strictly exclude welcome, new user registration, and non-competent notifications
+      // Clean deduplication for all users: group by eventId / normalized event attributes
       const uniqueMap = new Map<string, any>();
       for (const d of rawDocs) {
         if (!d.id) continue;
         if (!checkIsNotificationRelevant(d)) continue;
 
-        const eventKey = isSuperAdmin
-          ? (d.eventId || `${d.title || ''}_${d.message || ''}_${d.incidentId || ''}_${Math.floor((d.createdAt || 0) / 10000)}`)
-          : d.id;
+        const normTitle = (d.title || '').trim().toLowerCase();
+        const normMessage = (d.message || '').trim().toLowerCase();
+        const refEntity = d.incidentId || d.referralId || d.taskId || d.chatPartnerUid || '';
+        const timeBucket = Math.floor((d.createdAt || 0) / 120000);
+
+        // Deduplication key: combines same entity within 2 minutes into single unique notification
+        const entityKey = refEntity ? `${refEntity}_${timeBucket}` : null;
+        const eventKey = d.eventId || entityKey || `${normTitle}_${normMessage}_${timeBucket}`;
         if (!uniqueMap.has(eventKey)) {
-          uniqueMap.set(eventKey, d);
+          uniqueMap.set(eventKey, { ...d, allDocIds: [d.id] });
+        } else {
+          const existing = uniqueMap.get(eventKey);
+          if (!existing.allDocIds) existing.allDocIds = [existing.id];
+          if (!existing.allDocIds.includes(d.id)) existing.allDocIds.push(d.id);
+          if (d.read && !existing.read) {
+            existing.read = true;
+          }
         }
       }
 
@@ -3593,33 +3803,52 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       snapshot.docChanges().forEach((change) => {
         if (change.type === "added") {
           const data = change.doc.data();
-          // Trigger instant real-time audio and visual alert ONLY for relevant unread notifications
+          // Trigger instant real-time audio and visual alert ONLY once per unique event
           if (!isInitialLoad && !data.read && checkIsNotificationRelevant({ id: change.doc.id, ...data })) {
-            playNotificationSound();
+            const normTitle = (data.title || '').trim().toLowerCase();
+            const normMessage = (data.message || '').trim().toLowerCase();
+            const refEntity = data.incidentId || data.referralId || data.taskId || data.chatPartnerUid || '';
+            const timeBucket = Math.floor((data.createdAt || Date.now()) / 120000);
+            const entityKey = refEntity ? `${refEntity}_${timeBucket}` : null;
+            const alertEventKey = data.eventId || entityKey || `${normTitle}_${normMessage}_${timeBucket}`;
 
-            setLiveToast({
-              id: change.doc.id,
-              title: data.title || 'Nueva Notificación',
-              message: data.message || 'Tienes un nuevo aviso en la plataforma.',
-              timestamp: Date.now(),
-              incidentId: data.incidentId,
-              referralId: data.referralId,
-              taskId: data.taskId
-            });
+            const now = Date.now();
+            const lastAlertTime = recentAlertedKeysRef.current.get(alertEventKey) || 0;
+            if (now - lastAlertTime > 25000) {
+              recentAlertedKeysRef.current.set(alertEventKey, now);
 
-            showSystemNotification(data.title || 'Aviso de Incidencia - DUNOR', {
-              body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
-              icon: '/logo_dunor.png',
-              badge: '/logo_dunor.png',
-              tag: change.doc.id,
-              data: {
+              playNotificationSound();
+
+              setLiveToast({
+                id: change.doc.id,
+                title: data.title || 'Nueva Notificación',
+                message: data.message || 'Tienes un nuevo aviso en la plataforma.',
+                timestamp: Date.now(),
                 incidentId: data.incidentId,
                 referralId: data.referralId,
-                taskId: data.taskId
-              }
-            }).catch((e) => {
-              console.warn('Native system notification delivery error:', e);
-            });
+                taskId: data.taskId,
+                type: data.type,
+                chatPartnerUid: data.chatPartnerUid,
+                chatPartnerEmail: data.chatPartnerEmail
+              });
+
+              showSystemNotification(data.title || 'Aviso - DUNOR', {
+                body: data.message || 'Tienes una nueva notificación en el sistema DUNOR.',
+                icon: '/logo_dunor.png',
+                badge: '/logo_dunor.png',
+                tag: alertEventKey,
+                data: {
+                  incidentId: data.incidentId,
+                  referralId: data.referralId,
+                  taskId: data.taskId,
+                  type: data.type,
+                  chatPartnerUid: data.chatPartnerUid,
+                  chatPartnerEmail: data.chatPartnerEmail
+                }
+              }).catch((e) => {
+                console.warn('Native system notification delivery error:', e);
+              });
+            }
           }
         }
       });
@@ -3638,16 +3867,30 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(qTasks, (snapshot) => {
       const allDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-      if (profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin) {
+      const normRole = normalizeUserRole(profile.role);
+      const isAdministrator = normRole === 'ADMIN' || isSuperAdmin;
+      if (isAdministrator) {
         setTasks(allDocs);
       } else {
-        const myEmailLower = profile.email?.toLowerCase();
+        const myEmailLower = profile.email?.toLowerCase().trim();
         const myUid = profile.uid;
-        const userTasks = allDocs.filter(t => 
-          (t.assignedToEmail && t.assignedToEmail.toLowerCase() === myEmailLower) || 
-          (t.createdByEmail && t.createdByEmail.toLowerCase() === myEmailLower) ||
-          (myUid && (t.assignedToEmail === myUid || t.createdByEmail === myUid))
-        );
+        const myNameLower = profile.name?.toLowerCase().trim();
+        const userTasks = allDocs.filter(t => {
+          const assignedEmail = (t.assignedToEmail || '').toLowerCase().trim();
+          const createdEmail = (t.createdByEmail || '').toLowerCase().trim();
+          const assignedName = (t.assignedToName || '').toLowerCase().trim();
+          const createdName = (t.createdByName || '').toLowerCase().trim();
+
+          const isAssigned = (assignedEmail && assignedEmail === myEmailLower) || 
+                             (myUid && (t.assignedToEmail === myUid || (t as any).assignedToId === myUid)) || 
+                             (myNameLower && assignedName === myNameLower);
+                             
+          const isCreator = (createdEmail && createdEmail === myEmailLower) || 
+                            (myUid && (t.createdByEmail === myUid || (t as any).createdById === myUid)) || 
+                            (myNameLower && createdName === myNameLower);
+
+          return isAssigned || isCreator;
+        });
         setTasks(userTasks);
       }
     }, (error) => {
@@ -3655,6 +3898,49 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     });
     return () => unsubscribe();
   }, [activeUser, profile, isSuperAdmin]);
+
+  // REQUISITO 1: Si una tarea ya está en estatus de realizada y se llega la fecha límite, pasa en automático a completada
+  useEffect(() => {
+    if (!activeUser || !profile || !tasks || tasks.length === 0) return;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+    tasks.forEach(async (task) => {
+      if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate && !task.autoCompleted) {
+        if (processedAutoTasksRef.current.has(task.id)) return;
+        processedAutoTasksRef.current.add(task.id);
+        try {
+          await updateDoc(doc(db, 'tasks', task.id), {
+            status: 'COMPLETADA',
+            completedAt: Date.now(),
+            autoCompleted: true,
+            autoCompletedReason: 'Fecha límite alcanzada en estatus REALIZADA'
+          });
+
+          await addLog(
+            'Tarea Completada Automáticamente por Fecha Límite',
+            `La tarea "${task.title}" (asignada a: ${task.assignedToName}) estaba en estatus REALIZADA y al llegar su fecha límite (${task.dueDate}) pasó automáticamente a COMPLETADA.`,
+            { module: 'Tareas / Felicitaciones', recordId: task.id }
+          );
+
+          if (task.assignedToEmail) {
+            await sendNotification(
+              task.assignedToEmail,
+              `✅ Tarea Completada Automáticamente: ${task.title}`,
+              `Tu tarea "${task.title}" estaba en estatus REALIZADA y al cumplirse su fecha límite (${task.dueDate}) ha pasado en automático a COMPLETADA.`,
+              undefined,
+              true,
+              {
+                taskId: task.id,
+                eventId: `task_auto_completed_${task.id}`
+              }
+            );
+          }
+        } catch (e) {
+          console.warn('Notice updating realizada task to completed on deadline:', e);
+        }
+      }
+    });
+  }, [tasks, activeUser, profile]);
 
   useEffect(() => {
     if (!activeUser || !profile) return;
@@ -3680,9 +3966,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     return () => unsubscribe();
   }, [activeUser, profile]);
 
-  const markNotificationAsRead = async (id: string) => {
+  const markNotificationAsRead = async (id: string, allDocIds?: string[]) => {
     try {
-      await updateDoc(doc(db, 'notifications', id), { read: true });
+      const idsToMark = (allDocIds && allDocIds.length > 0) ? allDocIds : [id];
+      const batch = writeBatch(db);
+      idsToMark.forEach(docId => {
+        batch.update(doc(db, 'notifications', docId), { read: true });
+      });
+      await batch.commit();
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `notifications/${id}`);
     }
@@ -3691,9 +3982,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
   const markAllNotificationsAsRead = async () => {
     try {
       if (notifications.length === 0) return;
-      const batch = writeBatch(db);
+      const allIds = new Set<string>();
       notifications.forEach(n => {
-        batch.delete(doc(db, 'notifications', n.id));
+        if (n.id) allIds.add(n.id);
+        if (Array.isArray(n.allDocIds)) {
+          n.allDocIds.forEach((dId: string) => { if (dId) allIds.add(dId); });
+        }
+      });
+      const batch = writeBatch(db);
+      allIds.forEach(docId => {
+        batch.delete(doc(db, 'notifications', docId));
       });
       await batch.commit();
       setNotifications([]);
@@ -3721,7 +4019,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       return () => unsubscribe();
     }
   }, [profile, isSuperAdmin]);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
 
 
@@ -3781,7 +4078,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           if (isSuperAdminEmail(emailId)) {
             const fallbackAdmin: UserProfile = {
               uid: activeUserUidStr || emailId,
-              name: emailId.includes('dunor') ? "Administrador DUNOR" : "Super Admin (Yorch)",
+              name: emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador"),
               email: emailId,
               role: "ADMIN",
               isRegistered: true
@@ -3811,6 +4108,16 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
               console.error("Error updating UID:", e);
             }
           }
+          let currentName = data.name;
+          if (emailId === 'mi_yorch@hotmail.com' && (currentName === 'Super Admin (Yorch)' || currentName === 'Super Admin' || !currentName)) {
+            currentName = 'Soporte Principal';
+            data.name = currentName;
+            updateDoc(doc(db, 'users', emailId), { name: 'Soporte Principal' }).catch(() => {});
+          } else if (emailId.includes('dunor') && (currentName === 'Administrador DUNOR' || currentName === 'Administrador Dunor' || currentName === 'Administrador' || !currentName)) {
+            currentName = 'Soporte Secundario';
+            data.name = currentName;
+            updateDoc(doc(db, 'users', emailId), { name: 'Soporte Secundario' }).catch(() => {});
+          }
           const profileWithUid = { ...data, uid: activeUserUidStr || data.uid || emailId };
           try {
             localStorage.setItem('app_user_profile', JSON.stringify(profileWithUid));
@@ -3830,7 +4137,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           // If doc by emailId doesn't exist, check by query or check if super admin
           const isSuper = isSuperAdminEmail(emailId);
           if (isSuper) {
-            const adminName = emailId.includes('dunor') ? "Administrador DUNOR" : (emailId === 'mi_yorch@hotmail.com' ? "Super Admin (Yorch)" : "Administrador Inicial");
+            const adminName = emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador Inicial");
             const autoProfile: UserProfile = {
               uid: activeUserUidStr || emailId,
               name: adminName,
@@ -3892,7 +4199,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         if (isSuper) {
           const fallbackProfile: UserProfile = {
             uid: activeUserUidStr || emailId,
-            name: emailId.includes('dunor') ? "Administrador DUNOR" : "Administrador",
+            name: emailId === 'mi_yorch@hotmail.com' ? "Soporte Principal" : (emailId.includes('dunor') ? "Soporte Secundario" : "Administrador"),
             email: emailId,
             role: "ADMIN",
             isRegistered: true
@@ -3955,7 +4262,9 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           doc.reporterId === userUid ||
           (doc.reporterEmail && doc.reporterEmail.toLowerCase() === userEmail) ||
           doc.notifiedTeacherId === userUid ||
-          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail)
+          (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+          (doc.notifiedTeacherIds && doc.notifiedTeacherIds.includes(userUid)) ||
+          (doc.notifiedTeachers && doc.notifiedTeachers.some(t => t.uid === userUid || (t.email && t.email.toLowerCase() === userEmail)))
         ));
         setIncidents(docs);
         return;
@@ -3971,6 +4280,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const isCopied = 
           (doc.notifiedTeacherId && doc.notifiedTeacherId === userUid) ||
           (doc.notifiedTeacherEmail && doc.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+          (doc.notifiedTeacherIds && doc.notifiedTeacherIds.includes(userUid)) ||
+          (doc.notifiedTeachers && doc.notifiedTeachers.some(t => t.uid === userUid || (t.email && t.email.toLowerCase() === userEmail))) ||
           (doc.coordinatorIds && doc.coordinatorIds.includes(userUid));
 
         return Boolean(isAuthor || isCopied);
@@ -4091,7 +4402,6 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
     // Auto initialize empty database
     const autoInitializeDb = async () => {
       try {
-        await restoreFirestoreConnection();
         const settingsSnap = await safeGetDoc(doc(db, 'settings', 'global')).catch(() => null);
         if (settingsSnap && !settingsSnap.exists()) {
           console.log("Inicializando colecciones iniciales en la base de datos Firestore...");
@@ -4251,7 +4561,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           emailSubject: `Reporte Recibido - ${incident.place}`,
           emailHeaderTitle: 'Reporte de Incidencia Recibido',
           actionDetails: `Confirmado por <strong>${profile.name}</strong> (Coordinación)`,
-          excludeUserId: profile.uid
+          excludeUserId: profile.uid,
+          extraData: {
+            eventId: `incident_received_${incidentId}`
+          }
         });
       }
     } catch (error) {
@@ -4261,6 +4574,10 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
   const updateIncidentStatus = async (incident: Incident, status: IncidentStatus) => {
     if (!can('canChangeStatus') && profile.role !== 'COORDINATOR' && !isSuperAdmin) return;
+    if (incident.status === status) return;
+    if (updatingIncidentStatusRef.current.has(incident.id)) return;
+    updatingIncidentStatusRef.current.add(incident.id);
+
     try {
       await updateDoc(doc(db, 'incidents', incident.id), { status });
       await addLog(
@@ -4284,10 +4601,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         emailSubject: `Actualización de Estatus (${label}) - ${incident.place}`,
         emailHeaderTitle: 'Cambio de Estatus de Incidencia',
         actionDetails: `Nuevo Estatus: <strong>${label}</strong> | Modificado por <strong>${profile.name}</strong> (${profile.role === 'COORDINATOR' ? 'Coordinación' : 'Administrador'})`,
-        excludeUserId: profile.uid
+        excludeUserId: profile.uid,
+        extraData: {
+          eventId: `incident_status_${incident.id}_${status}`
+        }
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `incidents/${incident.id}`);
+    } finally {
+      setTimeout(() => {
+        updatingIncidentStatusRef.current.delete(incident.id);
+      }, 1500);
     }
   };
 
@@ -4312,7 +4636,13 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           p.uid === (incident as any).assignedPsychologistId || 
           p.email.toLowerCase() === (incident as any).assignedPsychologistEmail?.toLowerCase()
         );
-        if (!assignedPsych && psychologists.length === 1) {
+        if (!assignedPsych) {
+          const repTeacher = teachers.find(t => t.uid === incident.reporterId || t.email?.toLowerCase() === incident.reporterEmail?.toLowerCase());
+          if (repTeacher?.assignedPsychologistId || repTeacher?.assignedPsychologistEmail) {
+            assignedPsych = psychologists.find(p => p.uid === repTeacher.assignedPsychologistId || p.email?.toLowerCase() === repTeacher.assignedPsychologistEmail?.toLowerCase());
+          }
+        }
+        if (!assignedPsych && psychologists.length > 0) {
           assignedPsych = psychologists[0];
         }
 
@@ -4344,14 +4674,20 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const title = 'Nueva Canalización Sugerida';
         const message = `Se ha sugerido una canalización para la incidencia en "${incident.place}".`;
         
-        // Notify Psychologists (assigned one or all if unassigned)
-        const psychsToNotify = assignedPsych ? [assignedPsych] : psychologists;
-        for (const psych of psychsToNotify) {
-          await sendNotification(psych.uid, title, message, incident.id, false, { referralId: refId, type: 'referral' });
+        // Notificar ÚNICAMENTE al psicólogo asignado (sin duplicar bucles)
+        if (assignedPsych && assignedPsych.uid !== profile.uid) {
+          await sendNotification(
+            assignedPsych.uid,
+            title,
+            message,
+            incident.id,
+            false,
+            { referralId: refId, type: 'referral', eventId: `referral_suggest_${incident.id}` }
+          );
           
-          if (systemSettings.emailNotificationsEnabled) {
+          if (systemSettings.emailNotificationsEnabled && sendEmail) {
             await sendEmail(
-              psych.email,
+              assignedPsych.email,
               `Sugerencia de Canalización - ${incident.place}`,
               `
               <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
@@ -4359,7 +4695,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   <h2 style="color: white; margin: 0;">Sugerencia de Canalización</h2>
                 </div>
                 <div style="padding: 30px; color: #1e293b; line-height: 1.6;">
-                  <p>Hola <strong>${psych.name}</strong>,</p>
+                  <p>Hola <strong>${assignedPsych.name}</strong>,</p>
                   <p>Se ha generado una nueva sugerencia de canalización para una incidencia:</p>
                   <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
                     <p style="margin: 5px 0;"><strong>Lugar:</strong> ${incident.place}</p>
@@ -4380,10 +4716,14 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         const message = `La incidencia en "${incident.place}" ha sido puesta "En canalización" por el equipo de psicología.`;
 
         // Batch all recipients to send only one set of notifications (and avoid duplicate admin notifications)
+        const copiedTeacherIds = incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0
+          ? incident.notifiedTeacherIds
+          : (incident.notifiedTeacherId ? [incident.notifiedTeacherId] : []);
+
         const recipients = [
           ...(incident.coordinatorIds || [incident.coordinatorId]),
           incident.reporterId,
-          ...(incident.notifiedTeacherId ? [incident.notifiedTeacherId] : [])
+          ...copiedTeacherIds
         ];
         
         await sendNotification(recipients, title, message, incident.id);
@@ -4590,8 +4930,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       message: `¿Estás seguro de eliminar ${selectedNotifications.length} notificaciones seleccionadas?`,
       onConfirm: async () => {
         try {
-          const batch = writeBatch(db);
+          const allIdsToDelete = new Set<string>();
           selectedNotifications.forEach(id => {
+            allIdsToDelete.add(id);
+            const foundNotif = notifications.find(n => n.id === id);
+            if (foundNotif?.allDocIds && Array.isArray(foundNotif.allDocIds)) {
+              foundNotif.allDocIds.forEach((dId: string) => { if (dId) allIdsToDelete.add(dId); });
+            }
+          });
+
+          const batch = writeBatch(db);
+          allIdsToDelete.forEach(id => {
             batch.delete(doc(db, 'notifications', id));
           });
           await batch.commit();
@@ -4620,8 +4969,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
       }
 
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
-        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Soporte Principal', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Soporte Secundario', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -4731,8 +5080,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
 
       // 2. Ensure super admin documents exist
       const superAdmins = [
-        { email: 'mi_yorch@hotmail.com', name: 'Super Admin (Yorch)', role: 'ADMIN' },
-        { email: 'incidencias.dunor@gmail.com', name: 'Administrador DUNOR', role: 'ADMIN' }
+        { email: 'mi_yorch@hotmail.com', name: 'Soporte Principal', role: 'ADMIN' },
+        { email: 'incidencias.dunor@gmail.com', name: 'Soporte Secundario', role: 'ADMIN' }
       ];
       for (const sa of superAdmins) {
         await setDoc(doc(db, 'users', sa.email), {
@@ -5156,7 +5505,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{profile.name}</p>
                     <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                      {isSuperAdmin ? 'Super Admin' : profile.role === 'DIRECTIVE' ? 'Directivo (Observador)' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
+                      {isSuperAdmin ? 'Soporte' : profile.role === 'DIRECTIVE' ? 'Directivo (Observador)' : profile.role === 'COORDINATOR' ? 'Coordinador' : profile.role === 'TEACHER' ? 'Docente' : profile.role === 'PSYCHOLOGIST' ? 'Psicólogo' : profile.role}
                     </p>
                   </div>
                 </div>
@@ -5250,26 +5599,32 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                   )}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
-                    onClick={() => setIsGroupedByStudent(false)}
+                    onClick={() => {
+                      setIncidentGroupingMode('individual');
+                      setIsGroupedByStudent(false);
+                    }}
                     className={cn(
-                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border",
-                      !isGroupedByStudent 
+                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer shadow-2xs",
+                      incidentGroupingMode === 'individual' 
                         ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" 
-                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
                     )}
                   >
                     <ClipboardList className="w-4 h-4" />
                     <span>Individuales</span>
                   </button>
                   <button
-                    onClick={() => setIsGroupedByStudent(true)}
+                    onClick={() => {
+                      setIncidentGroupingMode('student');
+                      setIsGroupedByStudent(true);
+                    }}
                     className={cn(
-                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border",
-                      isGroupedByStudent 
+                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer shadow-2xs",
+                      incidentGroupingMode === 'student' 
                         ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" 
-                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
                     )}
                   >
                     <Users className="w-4 h-4" />
@@ -5310,11 +5665,21 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 )}
 
                 {(() => {
-                  const filteredIncidents = incidents.filter(incident => {
-                    const normRole = normalizeUserRole(profile.role);
-                    const userEmail = (profile.email || '').toLowerCase().trim();
-                    const userUid = profile.uid;
+                  const getIncidentEffectiveStatus = (inc: Incident): IncidentStatus => {
+                    if (inc.status === 'CERRADO') return 'CERRADO';
+                    if (inc.status === 'EN_SEGUIMIENTO') return 'EN_SEGUIMIENTO';
+                    if (inc.status === 'RECIBIDO' || (inc.isReceived && (!inc.status || inc.status === 'PENDIENTE'))) {
+                      return 'RECIBIDO';
+                    }
+                    return 'PENDIENTE';
+                  };
 
+                  const normRole = normalizeUserRole(profile.role);
+                  const userEmail = (profile.email || '').toLowerCase().trim();
+                  const userUid = profile.uid;
+
+                  // Base filter with privacy and search term
+                  const baseIncidents = incidents.filter(incident => {
                     // Enforce teacher privacy: only own records or if in copy
                     if (!isSuperAdmin && !isSuperAdminEmail(userEmail) && normRole !== 'ADMIN' && normRole !== 'DIRECTIVE') {
                       if (normRole === 'TEACHER') {
@@ -5324,6 +5689,8 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                         const isCopied = 
                           (incident.notifiedTeacherId && incident.notifiedTeacherId === userUid) ||
                           (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === userEmail) ||
+                          (incident.notifiedTeacherIds && incident.notifiedTeacherIds.includes(userUid)) ||
+                          (incident.notifiedTeachers && incident.notifiedTeachers.some(t => t.uid === userUid || (t.email && t.email.toLowerCase() === userEmail))) ||
                           (incident.coordinatorIds && incident.coordinatorIds.includes(userUid));
                         if (!isAuthor && !isCopied) return false;
                       } else if (normRole === 'COORDINATOR') {
@@ -5336,105 +5703,279 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                     }
 
                     if (!searchTerm.trim()) return true;
-                    const term = searchTerm.toLowerCase().trim();
-                    const studentsMatch = incident.students?.toLowerCase().includes(term);
-                    const placeMatch = incident.place?.toLowerCase().includes(term);
-                    const descMatch = incident.description?.toLowerCase().includes(term);
-                    const reporterMatch = incident.reporterName?.toLowerCase().includes(term);
+                    const term = normalizeSearchText(searchTerm);
+                    const studentsMatch = normalizeSearchText(incident.students).includes(term);
+                    const placeMatch = normalizeSearchText(incident.place).includes(term);
+                    const descMatch = normalizeSearchText(incident.description).includes(term);
+                    const reporterMatch = normalizeSearchText(incident.reporterName).includes(term);
                     return studentsMatch || placeMatch || descMatch || reporterMatch;
                   });
 
-                  if (filteredIncidents.length === 0) {
+                  // Allowed roles for status filter tabs: soporte (superAdmin), Admin, directivo y coordinador
+                  const canFilterByStatus = isSuperAdmin || ['ADMIN', 'DIRECTIVE', 'COORDINATOR'].includes(normRole || '');
+
+                  const statusCounts = {
+                    ALL: baseIncidents.length,
+                    PENDIENTE: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'PENDIENTE').length,
+                    RECIBIDO: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'RECIBIDO').length,
+                    EN_SEGUIMIENTO: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'EN_SEGUIMIENTO').length,
+                    CERRADO: baseIncidents.filter(i => getIncidentEffectiveStatus(i) === 'CERRADO').length,
+                  };
+
+                  const incidentStatusTabs = [
+                    {
+                      id: 'ALL' as const,
+                      label: 'Todas',
+                      icon: ClipboardList,
+                      count: statusCounts.ALL,
+                      activeColor: 'bg-indigo-600 text-white shadow-sm border-indigo-600',
+                      inactiveColor: 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-600',
+                    },
+                    {
+                      id: 'PENDIENTE' as const,
+                      label: 'Pendiente',
+                      icon: Clock,
+                      count: statusCounts.PENDIENTE,
+                      activeColor: 'bg-amber-500 text-slate-950 font-black shadow-sm border-amber-500',
+                      inactiveColor: 'bg-amber-50/80 dark:bg-amber-950/40 text-amber-950 dark:text-amber-200 border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/60',
+                      activeBadge: 'bg-slate-950/20 text-slate-950 font-black',
+                      inactiveBadge: 'bg-amber-100 dark:bg-amber-900/60 text-amber-950 dark:text-amber-100 border border-amber-300 dark:border-amber-700',
+                    },
+                    {
+                      id: 'RECIBIDO' as const,
+                      label: 'Recibido',
+                      icon: CheckCircle2,
+                      count: statusCounts.RECIBIDO,
+                      activeColor: 'bg-emerald-600 text-white shadow-sm border-emerald-600',
+                      inactiveColor: 'bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-950 dark:text-emerald-200 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/60',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-950 dark:text-emerald-100 border border-emerald-300 dark:border-emerald-700',
+                    },
+                    {
+                      id: 'EN_SEGUIMIENTO' as const,
+                      label: 'En Seguimiento',
+                      icon: RefreshCw,
+                      count: statusCounts.EN_SEGUIMIENTO,
+                      activeColor: 'bg-indigo-600 text-white shadow-sm border-indigo-600',
+                      inactiveColor: 'bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-950 dark:text-indigo-200 border-indigo-300 dark:border-indigo-700 hover:bg-indigo-100 dark:hover:bg-indigo-900/60',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-950 dark:text-indigo-100 border border-indigo-300 dark:border-indigo-700',
+                    },
+                    {
+                      id: 'CERRADO' as const,
+                      label: 'Cerrado',
+                      icon: ShieldCheck,
+                      count: statusCounts.CERRADO,
+                      activeColor: 'bg-slate-700 text-white shadow-sm border-slate-700',
+                      inactiveColor: 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-200/80 dark:hover:bg-slate-700/80',
+                      activeBadge: 'bg-white/25 text-white',
+                      inactiveBadge: 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-200 border border-slate-300 dark:border-slate-600',
+                    },
+                  ];
+
+                  const filteredIncidents = (!canFilterByStatus || incidentStatusFilter === 'ALL')
+                    ? baseIncidents
+                    : baseIncidents.filter(inc => getIncidentEffectiveStatus(inc) === incidentStatusFilter);
+
+                  const renderEmptyState = () => {
+                    if (incidentStatusFilter !== 'ALL') {
+                      const labelMap: Record<string, string> = {
+                        PENDIENTE: 'Pendiente',
+                        RECIBIDO: 'Recibido',
+                        EN_SEGUIMIENTO: 'En Seguimiento',
+                        CERRADO: 'Cerrado',
+                      };
+                      return (
+                        <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center space-y-3">
+                          <ClipboardList className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto" />
+                          <p className="text-slate-700 dark:text-slate-300 font-bold text-sm">
+                            No hay incidencias en estatus "{labelMap[incidentStatusFilter] || incidentStatusFilter}".
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setIncidentStatusFilter('ALL')}
+                            className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                          >
+                            Mostrar todas las incidencias ({statusCounts.ALL})
+                          </button>
+                        </div>
+                      );
+                    }
                     return (
-                      <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center">
-                        <ClipboardList className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                        <p className="text-slate-500 font-medium">
+                      <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-12 text-center">
+                        <ClipboardList className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
+                        <p className="text-slate-500 dark:text-slate-400 font-medium">
                           {searchTerm ? `No se encontraron incidencias que coincidan con "${searchTerm}".` : 'No hay incidencias registradas aún.'}
                         </p>
                       </div>
                     );
-                  }
+                  };
 
-                  if (isGroupedByStudent) {
-                    const studentMap = new Map<string, Incident[]>();
-                    filteredIncidents.forEach(inc => {
-                      const rawName = inc.students?.trim() || 'Sin Nombre';
-                      const names = rawName.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
-                      if (names.length === 0) {
-                        const existing = studentMap.get('Sin Nombre') || [];
-                        existing.push(inc);
-                        studentMap.set('Sin Nombre', existing);
-                      } else {
-                        names.forEach(name => {
-                          const existing = studentMap.get(name) || [];
-                          if (!existing.some(i => i.id === inc.id)) {
-                            existing.push(inc);
-                          }
-                          studentMap.set(name, existing);
-                        });
+                  const renderContent = () => {
+                    if (filteredIncidents.length === 0) {
+                      return renderEmptyState();
+                    }
+
+                    if (isGroupedByStudent) {
+                      interface StudentGroupItem {
+                        id: string;
+                        displayName: string;
+                        incidents: Incident[];
                       }
-                    });
 
-                    const studentEntries = Array.from(studentMap.entries()).sort((a, b) => b[1].length - a[1].length);
+                      const groups: StudentGroupItem[] = [];
 
-                    return (
-                      <div className="space-y-4">
-                        {studentEntries.map(([studentName, studentIncidents]) => (
-                          <StudentGroupCard
-                            key={studentName}
-                            studentName={studentName}
-                            incidents={studentIncidents}
-                            profile={profile}
-                            coordinators={coordinators}
-                            teachers={teachers}
-                            psychologists={psychologists}
-                            onMarkReceived={(id) => markAsReceived(id)}
-                            onUpdateStatus={(inc, status) => updateIncidentStatus(inc, status)}
-                            onUpdateReferralStatus={(inc, status) => updateIncidentReferralStatus(inc, status)}
-                            onUpdateReferralComments={(inc, comments) => updateReferralComments(inc, comments)}
-                            onUpdateFollowUp={(inc, followUp, history, comment) => updateIncidentFollowUp(inc, followUp, history, comment)}
-                            onDelete={(inc) => deleteIncident(inc)}
-                            onForward={(inc, adminId) => forwardIncidentToAdmin(inc, adminId)}
-                            onOpenGallery={openGallery}
-                            onPrint={(inc) => setPrintIncident(inc)}
-                            systemSettings={effectiveSystemSettings}
-                            admins={admins}
-                            expandedIncidentId={expandedIncidentId}
-                          />
-                        ))}
-                      </div>
-                    );
-                  }
+                      filteredIncidents.forEach(inc => {
+                        const rawName = inc.students?.trim() || 'Sin Nombre';
+                        const names = rawName
+                          .split(/[,;\n/]+|\s+y\s+|\s+e\s+/i)
+                          .map(s => s.trim())
+                          .filter(Boolean);
 
-                  return filteredIncidents.map((incident) => (
-                    <IncidentCard
-                      key={incident.id}
-                      incident={incident}
-                      profile={profile}
-                      coordinators={coordinators}
-                      teachers={teachers}
-                      psychologists={psychologists}
-                      onMarkReceived={() => markAsReceived(incident.id)}
-                      onUpdateStatus={(status: IncidentStatus) => updateIncidentStatus(incident, status)}
-                      onUpdateReferralStatus={(status: 'SUGGESTED' | 'IN_PROGRESS') => updateIncidentReferralStatus(incident, status)}
-                      onUpdateReferralComments={(comments: string) => updateReferralComments(incident, comments)}
-                      onUpdateFollowUp={(followUp: string, history: FollowUpComment[], newCommentText: string) => updateIncidentFollowUp(incident, followUp, history, newCommentText)}
-                      onDelete={() => deleteIncident(incident)}
-                      onForward={(adminId: string) => forwardIncidentToAdmin(incident, adminId)}
-                      onOpenGallery={openGallery}
-                      onPrint={(inc) => setPrintIncident(inc)}
-                      systemSettings={effectiveSystemSettings}
-                      admins={admins}
-                      selectable={isSuperAdmin}
-                      selected={selectedIncidents.includes(incident.id)}
-                      onSelect={(id) => {
-                        setSelectedIncidents(prev => 
-                          prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
-                        );
-                      }}
-                      expandedIncidentId={expandedIncidentId}
-                    />
-                  ));
+                        if (names.length === 0) {
+                          names.push('Sin Nombre');
+                        }
+
+                        names.forEach(name => {
+                          const isSinNombre = !name || name.toLowerCase() === 'sin nombre' || name.toLowerCase() === 'n/a';
+                          if (isSinNombre) {
+                            const existing = groups.find(g => g.displayName === 'Sin Nombre');
+                            if (existing) {
+                              if (!existing.incidents.some(i => i.id === inc.id)) {
+                                existing.incidents.push(inc);
+                              }
+                            } else {
+                              groups.push({
+                                id: 'sin-nombre',
+                                displayName: 'Sin Nombre',
+                                incidents: [inc]
+                              });
+                            }
+                            return;
+                          }
+
+                          const existing = groups.find(g => 
+                            g.displayName !== 'Sin Nombre' && areStudentNamesEquivalent(g.displayName, name)
+                          );
+
+                          if (existing) {
+                            if (!existing.incidents.some(i => i.id === inc.id)) {
+                              existing.incidents.push(inc);
+                            }
+                            existing.displayName = pickBetterStudentDisplayName(existing.displayName, name);
+                          } else {
+                            groups.push({
+                              id: normalizeStudentName(name) || 'sin-nombre',
+                              displayName: formatStudentNameTitleCase(name),
+                              incidents: [inc]
+                            });
+                          }
+                        });
+                      });
+
+                      const studentEntries = groups
+                        .sort((a, b) => b.incidents.length - a.incidents.length || a.displayName.localeCompare(b.displayName))
+                        .map(g => [g.displayName, g.incidents] as [string, Incident[]]);
+
+                      return (
+                        <div className="space-y-4">
+                          {studentEntries.map(([studentName, studentIncidents]) => (
+                            <StudentGroupCard
+                              key={studentName}
+                              studentName={studentName}
+                              incidents={studentIncidents}
+                              profile={profile}
+                              coordinators={coordinators}
+                              teachers={teachers}
+                              psychologists={psychologists}
+                              onMarkReceived={(id) => markAsReceived(id)}
+                              onUpdateStatus={(inc, status) => updateIncidentStatus(inc, status)}
+                              onUpdateReferralStatus={(inc, status) => updateIncidentReferralStatus(inc, status)}
+                              onUpdateReferralComments={(inc, comments) => updateReferralComments(inc, comments)}
+                              onUpdateFollowUp={(inc, followUp, history, comment) => updateIncidentFollowUp(inc, followUp, history, comment)}
+                              onDelete={(inc) => deleteIncident(inc)}
+                              onForward={(inc, adminId) => forwardIncidentToAdmin(inc, adminId)}
+                              onOpenGallery={openGallery}
+                              onPrint={(inc) => setPrintIncident(inc)}
+                              onPrintConcentratedReport={(sName, sIncidents) => setPrintStudentGroup({ studentName: sName, incidents: sIncidents })}
+                              systemSettings={effectiveSystemSettings}
+                              admins={admins}
+                              expandedIncidentId={expandedIncidentId}
+                            />
+                          ))}
+                        </div>
+                      );
+                    }
+
+                    return filteredIncidents.map((incident) => (
+                      <IncidentCard
+                        key={incident.id}
+                        incident={incident}
+                        profile={profile}
+                        coordinators={coordinators}
+                        teachers={teachers}
+                        psychologists={psychologists}
+                        onMarkReceived={() => markAsReceived(incident.id)}
+                        onUpdateStatus={(status: IncidentStatus) => updateIncidentStatus(incident, status)}
+                        onUpdateReferralStatus={(status: 'SUGGESTED' | 'IN_PROGRESS') => updateIncidentReferralStatus(incident, status)}
+                        onUpdateReferralComments={(comments: string) => updateReferralComments(incident, comments)}
+                        onUpdateFollowUp={(followUp: string, history: FollowUpComment[], newCommentText: string) => updateIncidentFollowUp(incident, followUp, history, newCommentText)}
+                        onDelete={() => deleteIncident(incident)}
+                        onForward={(adminId: string) => forwardIncidentToAdmin(incident, adminId)}
+                        onOpenGallery={openGallery}
+                        onPrint={(inc) => setPrintIncident(inc)}
+                        systemSettings={effectiveSystemSettings}
+                        admins={admins}
+                        selectable={isSuperAdmin}
+                        selected={selectedIncidents.includes(incident.id)}
+                        onSelect={(id) => {
+                          setSelectedIncidents(prev => 
+                            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+                          );
+                        }}
+                        expandedIncidentId={expandedIncidentId}
+                      />
+                    ));
+                  };
+
+                  return (
+                    <div className="space-y-4">
+                      {/* Status Tabs Filter Bar (Only for support, Admin, Directivo, Coordinador) */}
+                      {canFilterByStatus && (
+                        <div className="bg-slate-100/90 dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto shadow-2xs">
+                          {incidentStatusTabs.map(tab => {
+                            const isSelected = incidentStatusFilter === tab.id;
+                            const TabIcon = tab.icon;
+
+                            return (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setIncidentStatusFilter(tab.id)}
+                                className={cn(
+                                  "px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 cursor-pointer border",
+                                  isSelected ? tab.activeColor : tab.inactiveColor
+                                )}
+                              >
+                                <TabIcon className="w-3.5 h-3.5" />
+                                <span>{tab.label}</span>
+                                <span className={cn(
+                                  "px-2 py-0.5 rounded-full text-xs font-bold transition-colors",
+                                  isSelected ? tab.activeBadge : tab.inactiveBadge
+                                )}>
+                                  {tab.count}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {renderContent()}
+                    </div>
+                  );
                 })()}
               </div>
             </motion.div>
@@ -5589,9 +6130,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                               {selectedNotifications.includes(notif.id) && <CheckCircle2 className="w-3 h-3 text-white" />}
                             </div>
                           )}
-                          <h3 className={cn("font-bold", notif.read ? "text-slate-700" : "text-indigo-900")}>
-                            {notif.title}
-                          </h3>
+                          <div className="flex items-center gap-2">
+                            {notif.type === 'teacher_chat' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 flex items-center gap-1">
+                                <MessageSquare className="w-3 h-3" />
+                                Chat
+                              </span>
+                            )}
+                            <h3 className={cn("font-bold", notif.read ? "text-slate-700" : "text-indigo-900")}>
+                              {notif.title}
+                            </h3>
+                          </div>
                         </div>
                         <span className="text-[10px] text-slate-400 font-medium">
                           {format(notif.createdAt, "dd/MM HH:mm")}
@@ -5755,6 +6304,124 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                       <Database className="w-4 h-4 text-white" />
                       {isSeeding ? 'Inicializando datos...' : 'Cargar / Inicializar Datos de Ejemplo'}
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Tiempo de Vida de los Mensajes del Chat Docente Cifrado (SuperAdmin) */}
+              {isSuperAdmin && (
+                <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Clock className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                        Tiempo de Vida de Mensajes - Chat Docente
+                      </h2>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                        Configura el período de autodestrucción automática tras el cual los mensajes, fotos y archivos adjuntos del canal secreto de docentes se eliminan permanentemente.
+                      </p>
+                    </div>
+                    <span className="text-xs font-black px-3.5 py-1.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shrink-0 self-start sm:self-auto">
+                      Actualmente: {systemSettings.teacherChatTtlHours ?? 6} horas
+                    </span>
+                  </div>
+                  <div className="p-6 space-y-5">
+                    {/* Botones de selección rápida */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
+                        Opciones de Duración Rápidas
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { hours: 1, label: '1 hora (Ultra efímero)' },
+                          { hours: 2, label: '2 horas' },
+                          { hours: 4, label: '4 horas' },
+                          { hours: 6, label: '6 horas (Predeterminado)' },
+                          { hours: 12, label: '12 horas' },
+                          { hours: 24, label: '24 horas (1 Día)' },
+                          { hours: 48, label: '48 horas (2 Días)' },
+                          { hours: 72, label: '72 horas (3 Días)' },
+                          { hours: 168, label: '168 horas (7 Días)' }
+                        ].map((preset) => {
+                          const isSelected = (systemSettings.teacherChatTtlHours ?? 6) === preset.hours;
+                          return (
+                            <button
+                              key={preset.hours}
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await setDoc(doc(db, 'settings', 'global'), {
+                                    teacherChatTtlHours: preset.hours
+                                  }, { merge: true });
+                                  setSystemSettings(prev => ({ ...prev, teacherChatTtlHours: preset.hours }));
+                                  setChatTtlCustomInput(preset.hours);
+                                  await addLog('Modificó tiempo de vida del chat docente', `Nuevo tiempo: ${preset.hours} horas`);
+                                } catch (e) {
+                                  console.error('Error saving chat TTL:', e);
+                                }
+                              }}
+                              className={cn(
+                                "px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer",
+                                isSelected
+                                  ? "bg-indigo-600 text-white border-indigo-600 shadow-md scale-105"
+                                  : "bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                              )}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>{preset.label}</span>
+                              {isSelected && <Check className="w-3.5 h-3.5 ml-0.5" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Input personalizado */}
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+                      <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">
+                        O especificar duración personalizada (en horas):
+                      </label>
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="1"
+                            max="720"
+                            value={chatTtlCustomInput}
+                            onChange={(e) => setChatTtlCustomInput(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-24 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-800 dark:text-white text-center focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                          />
+                          <span className="text-xs text-slate-500 font-medium">horas</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const val = chatTtlCustomInput;
+                            if (val < 1) return;
+                            try {
+                              await setDoc(doc(db, 'settings', 'global'), {
+                                teacherChatTtlHours: val
+                              }, { merge: true });
+                              setSystemSettings(prev => ({ ...prev, teacherChatTtlHours: val }));
+                              await addLog('Modificó tiempo de vida del chat docente', `Nuevo tiempo personalizado: ${val} horas`);
+                              setChatTtlSavedFeedback(true);
+                              setTimeout(() => setChatTtlSavedFeedback(false), 2500);
+                            } catch (e) {
+                              console.error('Error saving custom TTL:', e);
+                            }
+                          }}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Guardar horas
+                        </button>
+                        {chatTtlSavedFeedback && (
+                          <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" /> ¡Guardado con éxito!
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -6748,7 +7415,7 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
                 addLog={addLog}
                 isSuperAdmin={isSuperAdmin}
                 canCreateReferral={can('canCreateReferral')}
-                canDeleteReferral={can('canDeleteReferrals') || isSuperAdmin || profile?.role === 'ADMIN' || profile?.role === 'PSYCHOLOGIST' || (profile?.role && String(profile?.role).toLowerCase().includes('psico'))}
+                canDeleteReferral={Boolean((isSuperAdmin || profile?.role === 'ADMIN' || isSuperAdminEmail(profile?.email)) && profile?.role !== 'TEACHER' && profile?.role !== 'COORDINATOR' && profile?.role !== 'DIRECTIVE' && profile?.role !== 'PSYCHOLOGIST')}
                 canManageExpedientes={can('canManageExpedientes')}
                 canAddFollowUp={can('canAddFollowUp')}
                 highlightedReferralId={highlightedReferralId}
@@ -7015,6 +7682,17 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
         />
       )}
 
+      {printStudentGroup && (
+        <StudentIncidentsPrintModal 
+          studentName={printStudentGroup.studentName}
+          incidents={printStudentGroup.incidents}
+          systemSettings={effectiveSystemSettings}
+          profile={profile}
+          coordinators={coordinators}
+          onClose={() => setPrintStudentGroup(null)}
+        />
+      )}
+
       <FirebaseSecretsModal 
         isOpen={showAppSecretsModal} 
         onClose={() => setShowAppSecretsModal(false)} 
@@ -7094,6 +7772,66 @@ function AppContent({ user, loading }: { user: User | null | undefined, loading:
           </div>
         )}
       </AnimatePresence>
+
+      {/* Floating In-App Live Toast Notification Banner */}
+      <AnimatePresence>
+        {liveToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              handleNotificationClick(liveToast);
+              setLiveToast(null);
+            }}
+            className="fixed bottom-6 right-6 z-[99990] max-w-sm w-full bg-slate-900/95 dark:bg-slate-950/95 text-white p-4 rounded-2xl shadow-2xl border border-indigo-500/30 backdrop-blur-md cursor-pointer hover:border-indigo-400 transition-all group"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-indigo-600/30 border border-indigo-400/30 flex items-center justify-center shrink-0 text-indigo-400 group-hover:scale-105 transition-transform">
+                {liveToast.type === 'teacher_chat' ? (
+                  <MessageSquare className="w-5 h-5 text-emerald-400" />
+                ) : (
+                  <Bell className="w-5 h-5 text-indigo-400" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold text-white truncate tracking-wide">
+                    {liveToast.title}
+                  </h4>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLiveToast(null);
+                    }}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-300 line-clamp-2 mt-0.5">
+                  {liveToast.message}
+                </p>
+                <div className="flex items-center gap-1.5 mt-2 text-[10px] text-indigo-300 font-medium">
+                  <span>Toca para abrir</span>
+                  <span>→</span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Teacher Secret Internal Chat (Exclusivo para el rol de docente con activación secreta en las 4 esquinas) */}
+      <TeacherSecretChat
+        currentUser={profile}
+        allUsers={teachers}
+        sendNotification={sendNotification}
+        externalOpenPartner={chatOpenPartner}
+        onCloseExternal={() => setChatOpenPartner(null)}
+        ttlHours={systemSettings.teacherChatTtlHours ?? 6}
+      />
     </ErrorBoundary>
   );
 }
@@ -7131,6 +7869,7 @@ interface StudentGroupCardProps {
   onForward: (inc: Incident, adminId: string) => void;
   onOpenGallery: (images: string[], index: number) => void;
   onPrint: (inc: Incident) => void;
+  onPrintConcentratedReport?: (studentName: string, incidents: Incident[]) => void;
   systemSettings: SystemSettings;
   admins: UserProfile[];
   expandedIncidentId?: string | null;
@@ -7152,17 +7891,31 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
   onForward,
   onOpenGallery,
   onPrint,
+  onPrintConcentratedReport,
   systemSettings,
   admins,
   expandedIncidentId,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
 
+  const normRole = normalizeUserRole(profile?.role);
+  const isSuperAdmin = isSuperAdminEmail(profile?.email) || (profile as any)?.isSuperAdmin;
+  const isAuthorizedRole = isSuperAdmin || normRole === 'COORDINATOR' || normRole === 'DIRECTIVE' || normRole === 'ADMIN';
+  const canPrintConcentrated = isAuthorizedRole && incidents.length >= 2;
+
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-all">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsOpen(!isOpen);
+          }
+        }}
+        className="w-full flex items-center justify-between p-4 md:p-5 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left cursor-pointer select-none"
       >
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-base">
@@ -7176,15 +7929,55 @@ const StudentGroupCard: React.FC<StudentGroupCardProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {canPrintConcentrated && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPrintConcentratedReport?.(studentName, incidents);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 transition-all shadow-xs"
+              title={`Imprimir concentrado de reportes de ${studentName}`}
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Imprimir Concentrado</span>
+              <span className="sm:hidden">Concentrado</span>
+            </button>
+          )}
           <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-3 py-1 rounded-full border border-indigo-100 dark:border-indigo-800/60">
             {incidents.length}
           </span>
           <ChevronDown className={cn("w-5 h-5 text-slate-400 transition-transform duration-200", isOpen && "rotate-180")} />
         </div>
-      </button>
+      </div>
 
       {isOpen && (
         <div className="p-4 md:p-6 space-y-4 bg-slate-50/50 dark:bg-slate-950/40 border-t border-slate-200 dark:border-slate-800">
+          {canPrintConcentrated && (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-950/60 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900 dark:text-white">
+                    Concentrado de Reportes ({incidents.length} {incidents.length === 1 ? 'incidencia' : 'incidencias'})
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Expediente oficial con resumen general de cada incidente, fechas y seguimiento
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onPrintConcentratedReport?.(studentName, incidents)}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Imprimir Concentrado de Reportes</span>
+              </button>
+            </div>
+          )}
           {incidents.map((incident) => (
             <IncidentCard
               key={incident.id}
@@ -7292,12 +8085,16 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
     setIsEditingFollowUp(false);
   };
 
+  const effectiveStatus: IncidentStatus = (incident.status === 'PENDIENTE' && incident.isReceived) 
+    ? 'RECIBIDO' 
+    : (incident.status || 'PENDIENTE');
+
   const getStatusColor = (status?: IncidentStatus) => {
     switch (status) {
-      case 'RECIBIDO': return 'text-emerald-600 bg-emerald-50';
-      case 'EN_SEGUIMIENTO': return 'text-indigo-600 bg-indigo-50';
-      case 'CERRADO': return 'text-slate-600 bg-slate-100';
-      default: return 'text-amber-600 bg-amber-50';
+      case 'RECIBIDO': return 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/60 dark:border-emerald-800/60';
+      case 'EN_SEGUIMIENTO': return 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60';
+      case 'CERRADO': return 'text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60';
+      default: return 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border border-amber-200/60 dark:border-amber-800/60';
     }
   };
 
@@ -7310,22 +8107,36 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
     }
   };
 
-    const getStatusBorderColor = (status?: IncidentStatus) => {
+  const getStatusBorderColor = (status?: IncidentStatus) => {
     switch (status) {
-      case 'RECIBIDO': return 'border-l-emerald-500';
-      case 'EN_SEGUIMIENTO': return 'border-l-indigo-600';
-      case 'CERRADO': return 'border-l-slate-400';
-      default: return 'border-l-amber-500';
+      case 'RECIBIDO': return 'border-l-emerald-500 dark:border-l-emerald-500';
+      case 'EN_SEGUIMIENTO': return 'border-l-indigo-600 dark:border-l-indigo-500';
+      case 'CERRADO': return 'border-l-slate-400 dark:border-l-slate-400';
+      default: return 'border-l-amber-500 dark:border-l-amber-500';
+    }
+  };
+
+  const getIncidentBorderLeftColor = (status?: IncidentStatus) => {
+    switch (status) {
+      case 'RECIBIDO': return '#10b981';
+      case 'EN_SEGUIMIENTO': return '#6366f1';
+      case 'CERRADO': return '#94a3b8';
+      default: return '#f59e0b';
     }
   };
 
   return (
     <div 
       id={`incident-${incident.id}`}
+      style={{
+        borderLeftColor: getIncidentBorderLeftColor(effectiveStatus)
+      }}
       className={cn(
-        "bg-white rounded-2xl border border-l-4 transition-all duration-200 hover:shadow-md",
-        selected ? "border-indigo-600 ring-2 ring-indigo-100 shadow-md" : "border-slate-200",
-        getStatusBorderColor(incident.status)
+        "bg-white dark:bg-slate-900 rounded-2xl border border-l-4 transition-all duration-200 hover:shadow-md",
+        selected 
+          ? "border-indigo-600 ring-2 ring-indigo-100 dark:ring-indigo-950/60 shadow-md" 
+          : "border-slate-200 dark:border-slate-800",
+        getStatusBorderColor(effectiveStatus)
       )}
     >
       <div className="flex items-stretch">
@@ -7335,11 +8146,11 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               e.stopPropagation();
               onSelect?.(incident.id);
             }}
-            className="flex items-center justify-center px-4 border-r border-slate-100 cursor-pointer hover:bg-slate-50 transition-colors"
+            className="flex items-center justify-center px-4 border-r border-slate-100 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
           >
             <div className={cn(
               "w-5 h-5 rounded border-2 flex items-center justify-center transition-all",
-              selected ? "bg-indigo-600 border-indigo-600" : "border-slate-300 bg-white"
+              selected ? "bg-indigo-600 border-indigo-600" : "border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800"
             )}>
               {selected && <CheckCircle2 className="w-4 h-4 text-white" />}
             </div>
@@ -7349,40 +8160,46 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
           <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-4">
           <div className="flex-1 w-full">
             <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">{incident.school}</span>
-              <span className="text-slate-300">•</span>
-              <span className="text-xs text-slate-500">{incident.date}</span>
-              {(incident.status === 'EN_SEGUIMIENTO' || incident.status === 'CERRADO') && (
+              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">{incident.school}</span>
+              <span className="text-slate-300 dark:text-slate-600">•</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{incident.date}</span>
+              {(effectiveStatus === 'EN_SEGUIMIENTO' || effectiveStatus === 'CERRADO') && (
                 <>
-                  <span className="text-slate-300">•</span>
-                  <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-tight", getStatusColor(incident.status))}>
-                    {getStatusLabel(incident.status)}
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-tight", getStatusColor(effectiveStatus))}>
+                    {getStatusLabel(effectiveStatus)}
                   </span>
                 </>
               )}
             </div>
-            <h3 className="text-lg font-bold text-slate-900 mb-1">{incident.place}</h3>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">{incident.place}</h3>
             <div className="flex flex-col gap-1">
-              <p className="text-sm text-slate-600">Alumnos: {incident.students}</p>
+              <p className="text-sm text-slate-600 dark:text-slate-300">Alumnos: {incident.students}</p>
               {incident.categories && incident.categories.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {incident.categories.map(cat => (
-                    <span key={cat} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-medium">
+                    <span key={cat} className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded-full font-medium border border-slate-200/60 dark:border-slate-700/60">
                       {cat}
                     </span>
                   ))}
                 </div>
               )}
               <div className="mt-1">
-                <p className="text-sm text-slate-800 font-bold flex items-center flex-wrap gap-1.5">
+                <p className="text-sm text-slate-800 dark:text-slate-200 font-bold flex items-center flex-wrap gap-1.5">
                   <span>Reporta: ({incident.reporterName || incident.creatorName || 'Personal Escolar'})</span>
                   {incident.reporterRole && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                       {incident.reporterRole === 'ADMIN' ? 'Administrador' : incident.reporterRole === 'DIRECTIVE' ? 'Directivo' : incident.reporterRole === 'COORDINATOR' ? 'Coordinador' : incident.reporterRole === 'TEACHER' ? 'Docente' : incident.reporterRole === 'PSYCHOLOGIST' ? 'Psicólogo' : incident.reporterRole}
                     </span>
                   )}
-                  {((incident.notifiedTeacherId === profile?.uid) || (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && incident.reporterId !== profile?.uid && incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
-                    <span className="ml-1 text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-200 shadow-xs">
+                  {((incident.notifiedTeacherId === profile?.uid) || 
+                    (incident.notifiedTeacherEmail && incident.notifiedTeacherEmail.toLowerCase() === profile?.email?.toLowerCase()) || 
+                    (incident.notifiedTeacherIds && incident.notifiedTeacherIds.includes(profile?.uid)) ||
+                    (incident.notifiedTeachers && incident.notifiedTeachers.some(t => t.uid === profile?.uid || (profile?.email && t.email?.toLowerCase() === profile?.email?.toLowerCase()))) ||
+                    (incident.coordinatorIds && incident.coordinatorIds.includes(profile?.uid))) && 
+                    incident.reporterId !== profile?.uid && 
+                    incident.reporterEmail?.toLowerCase() !== profile?.email?.toLowerCase() && (
+                    <span className="ml-1 text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full font-bold border border-blue-200 dark:border-blue-800/60 shadow-xs">
                       En Copia
                     </span>
                   )}
@@ -7391,8 +8208,8 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                   <div className={cn(
                     "inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border mt-1",
                     incident.referralStatus === 'IN_PROGRESS' 
-                      ? "bg-pink-100 border-pink-200 text-pink-700 shadow-sm" 
-                      : "bg-pink-50 border-pink-100 text-pink-600"
+                      ? "bg-pink-100 dark:bg-pink-950/60 border-pink-200 dark:border-pink-800 text-pink-700 dark:text-pink-300 shadow-sm" 
+                      : "bg-pink-50 dark:bg-pink-950/40 border-pink-100 dark:border-pink-900/60 text-pink-600 dark:text-pink-300"
                   )}>
                     <Brain className={cn("w-3.5 h-3.5", incident.referralStatus === 'IN_PROGRESS' ? "animate-pulse" : "")} />
                     <span className="text-xs font-bold uppercase tracking-wide">
@@ -7403,7 +8220,7 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
               </div>
             </div>
           </div>
-          <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start w-full sm:w-auto gap-3 border-t sm:border-t-0 pt-3 sm:pt-0 mt-3 sm:mt-0 border-slate-100">
+          <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start w-full sm:w-auto gap-3 border-t sm:border-t-0 pt-3 sm:pt-0 mt-3 sm:mt-0 border-slate-100 dark:border-slate-800">
             <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2">
               {incident.referralStatus === 'IN_PROGRESS' && (
                 <div className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold whitespace-nowrap bg-pink-500 text-white shadow-sm">
@@ -7412,20 +8229,22 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                 </div>
               )}
               <div className={cn(
-                "flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold whitespace-nowrap", 
-                (!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') ? 'text-amber-600 bg-amber-50' : getStatusColor(incident.status)
+                "flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold whitespace-nowrap border", 
+                (!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') 
+                  ? 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border border-amber-200/60 dark:border-amber-800/60' 
+                  : getStatusColor(effectiveStatus)
               )}>
                 {(!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') 
                   ? <AlertCircle className="w-3 h-3" /> 
-                  : (incident.status === 'RECIBIDO' || incident.status === 'EN_SEGUIMIENTO' || incident.status === 'CERRADO' || incident.isReceived ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />)
+                  : (effectiveStatus === 'RECIBIDO' || effectiveStatus === 'EN_SEGUIMIENTO' || effectiveStatus === 'CERRADO' ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />)
                 }
                 {(!incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE') 
                   ? 'Pendiente' 
-                  : (incident.isReceived && role === 'COORDINATOR' && incident.status === 'PENDIENTE' ? 'Recibido' : getStatusLabel(incident.status))
+                  : getStatusLabel(effectiveStatus)
                 }
               </div>
               {incident.readAt && (
-                <div className="text-[10px] text-slate-400 font-medium mt-1 text-right">
+                <div className="text-[10px] text-slate-400 dark:text-slate-400 font-medium mt-1 text-right">
                   <p>Leído el:</p>
                   <p>{format(incident.readAt, "dd/MM/yyyy HH:mm")}</p>
                 </div>
@@ -7599,18 +8418,36 @@ const IncidentCard: React.FC<IncidentCardProps> = ({ incident, profile, coordina
                   </div>
                 )}
 
-                {incident.notifiedTeacherId && (
+                {(incident.notifiedTeacherId || (incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0) || (incident.notifiedTeachers && incident.notifiedTeachers.length > 0)) && (
                   <div>
-                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">Docente Notificado (Copia)</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase mb-1">
+                      {((incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 1) || (incident.notifiedTeachers && incident.notifiedTeachers.length > 1))
+                        ? 'Docentes Notificados (Copia)'
+                        : 'Docente Notificado (Copia)'}
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {(() => {
-                        const teacher = teachers.find(t => t.uid === incident.notifiedTeacherId);
-                        return (
-                          <span className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm flex items-center gap-1">
-                            <UserIcon className="w-3 h-3" />
-                            {teacher?.name || incident.notifiedTeacherName || 'Docente notificado'}
+                        const list: { uid: string; name: string }[] = [];
+                        if (incident.notifiedTeachers && incident.notifiedTeachers.length > 0) {
+                          incident.notifiedTeachers.forEach(t => {
+                            list.push({ uid: t.uid, name: t.name || t.email });
+                          });
+                        } else if (incident.notifiedTeacherIds && incident.notifiedTeacherIds.length > 0) {
+                          incident.notifiedTeacherIds.forEach(id => {
+                            const found = teachers.find(t => t.uid === id);
+                            list.push({ uid: id, name: found?.name || id });
+                          });
+                        } else if (incident.notifiedTeacherId) {
+                          const found = teachers.find(t => t.uid === incident.notifiedTeacherId);
+                          list.push({ uid: incident.notifiedTeacherId, name: found?.name || incident.notifiedTeacherName || 'Docente notificado' });
+                        }
+
+                        return list.map((item, idx) => (
+                          <span key={item.uid || idx} className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm flex items-center gap-1.5">
+                            <UserIcon className="w-3 h-3 text-indigo-500" />
+                            {item.name}
                           </span>
-                        );
+                        ));
                       })()}
                     </div>
                   </div>
@@ -7812,6 +8649,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
     followUp: '',
     coordinatorIds: [] as string[],
     notifiedTeacherId: '',
+    notifiedTeacherIds: [] as string[],
     school: 'Campus Victoria',
     categories: [] as string[],
     suggestReferral: false,
@@ -7940,7 +8778,13 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       const allSelectedCoords = coordinators.filter(c => formData.coordinatorIds.includes(c.uid));
       const coordNames = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.name).join(', ') : (selectedCoord?.name || '');
       const coordEmails = allSelectedCoords.length > 0 ? allSelectedCoords.map(c => c.email).join(', ') : (selectedCoord?.email || '');
-      const selectedTeacher = teachers.find(t => t.uid === formData.notifiedTeacherId);
+
+      const selectedTeacherIds = (formData.notifiedTeacherIds && formData.notifiedTeacherIds.length > 0)
+        ? formData.notifiedTeacherIds
+        : (formData.notifiedTeacherId ? [formData.notifiedTeacherId] : []);
+      const selectedTeachers = teachers.filter(t => selectedTeacherIds.includes(t.uid));
+      const teacherNames = selectedTeachers.map(t => t.name).join(', ');
+      const teacherEmails = selectedTeachers.map(t => t.email).join(', ');
 
       const creatorDisplayName = (profile.name && profile.name.trim()) || profile.email || 'Personal Escolar';
 
@@ -7950,8 +8794,15 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         coordinatorName: coordNames,
         coordinatorEmail: coordEmails,
         coordinatorIds: formData.coordinatorIds,
-        notifiedTeacherName: selectedTeacher?.name || '',
-        notifiedTeacherEmail: selectedTeacher?.email || '',
+        notifiedTeacherId: selectedTeacherIds[0] || '',
+        notifiedTeacherIds: selectedTeacherIds,
+        notifiedTeacherName: teacherNames,
+        notifiedTeacherEmail: teacherEmails,
+        notifiedTeachers: selectedTeachers.map(t => ({
+          uid: t.uid,
+          name: t.name,
+          email: t.email
+        })),
         date: format(now, "dd/MM/yyyy HH:mm"),
         reporterName: creatorDisplayName,
         reporterId: profile.uid,
@@ -8005,16 +8856,23 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
         });
       }
 
-      // Dedicated notification for the teacher added in copy (if not the creator)
-      if (formData.notifiedTeacherId && formData.notifiedTeacherId !== profile.uid) {
+      // Dedicated notification for all teachers added in copy (if not the creator)
+      const teachersToNotifyInCopy = selectedTeacherIds.filter(tId => tId && tId !== profile.uid);
+      if (teachersToNotifyInCopy.length > 0) {
         const creatorRoleLabel = profile.role === 'ADMIN' ? 'el administrador' : profile.role === 'DIRECTIVE' ? 'el directivo' : profile.role === 'COORDINATOR' ? 'el coordinador' : 'el docente';
         await sendNotification(
-          formData.notifiedTeacherId,
+          teachersToNotifyInCopy,
           'Copia de Incidencia Registrada',
           `Has sido agregado/a en copia en el reporte de incidencia en "${formData.place}" por ${creatorRoleLabel} ${creatorDisplayName}.`,
           docRef.id,
           true,
-          { skipEmail: true, creatorUid: profile.uid, creatorEmail: profile.email }
+          { 
+            skipEmail: false, 
+            creatorUid: profile.uid, 
+            creatorEmail: profile.email,
+            eventId: `incident_copy_${docRef.id}`,
+            detailsHtml: `<strong>Lugar:</strong> ${formData.place}<br/><strong>Alumnos:</strong> ${formData.students}<br/><strong>Descripción:</strong> ${formData.description}`
+          }
         );
       }
 
@@ -8022,7 +8880,14 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
       if (formData.suggestReferral) {
         const refId = `ref_inc_${docRef.id}`;
         const targetCoord = coordinators.find(c => formData.coordinatorIds.includes(c.uid) || formData.coordinatorIds.includes(c.email)) || coordinators[0];
-        const targetPsych = psychologists[0];
+        
+        // Determinar el psicólogo asignado al docente reportante
+        const repTeacher = teachers.find(t => t.uid === profile.uid || t.email?.toLowerCase() === profile.email?.toLowerCase());
+        const assignedPsychId = repTeacher?.assignedPsychologistId || (profile as any)?.assignedPsychologistId;
+        const assignedPsychEmail = repTeacher?.assignedPsychologistEmail || (profile as any)?.assignedPsychologistEmail;
+        const targetPsych = (assignedPsychId || assignedPsychEmail)
+          ? psychologists.find(p => p.uid === assignedPsychId || p.email?.toLowerCase() === assignedPsychEmail?.toLowerCase())
+          : (psychologists.length > 0 ? psychologists[0] : null);
 
         const refDoc: Referral = {
           id: refId,
@@ -8050,10 +8915,10 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           console.error("Error creating auto referral document:", refErr);
         }
 
-        // Target uids excluding the creator
+        // Notificar ÚNICAMENTE al coordinador y al psicólogo asignado (evitando duplicar a todos los psicólogos)
         const notifyUids: string[] = [];
         if (targetCoord?.uid && targetCoord.uid !== profile.uid) notifyUids.push(targetCoord.uid);
-        psychologists.forEach(p => { if (p.uid && p.uid !== profile.uid) notifyUids.push(p.uid); });
+        if (targetPsych?.uid && targetPsych.uid !== profile.uid) notifyUids.push(targetPsych.uid);
 
         await sendNotification(
           notifyUids,
@@ -8064,6 +8929,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
           { 
             referralId: refId, 
             type: 'referral',
+            eventId: `referral_create_${refId}`,
             creatorUid: profile.uid,
             creatorEmail: profile.email,
             isCreationNotification: true
@@ -8072,16 +8938,12 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
 
         const emailRecipients = new Set<string>();
         if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
-        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
+        if (targetPsych?.email) emailRecipients.add(targetPsych.email.toLowerCase());
         directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
         admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
 
         // Exclude the reporting user from receiving email
         if (profile.email) emailRecipients.delete(profile.email.toLowerCase());
-        if (targetCoord?.email) emailRecipients.add(targetCoord.email.toLowerCase());
-        psychologists.forEach(p => { if (p.email) emailRecipients.add(p.email.toLowerCase()); });
-        directives.forEach(d => { if (d.email) emailRecipients.add(d.email.toLowerCase()); });
-        admins.forEach(a => { if (a.email) emailRecipients.add(a.email.toLowerCase()); });
 
         const filteredEmailRecipients = Array.from(emailRecipients).filter(e => !isSuperAdminEmail(e));
 
@@ -8442,7 +9304,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                           title="Clic para remover copia"
                         >
                           <UserIcon className="w-3.5 h-3.5" />
-                          <span>Copia ({userRole}): {coord?.name || id}</span>
+                          <span>Copia (Coordinador): {coord?.name || id}</span>
                           <X className="w-3.5 h-3.5 ml-1 opacity-80 group-hover:opacity-100" />
                         </div>
                       );
@@ -8453,7 +9315,7 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                 )}
 
                 <div className="pt-1">
-                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador o Directivo (Opcional):</label>
+                  <label className="text-xs font-bold text-slate-500 block mb-1">Copia a otro Coordinador (Opcional):</label>
                   <select
                     value=""
                     onChange={(e) => {
@@ -8464,54 +9326,103 @@ const IncidentForm = ({ profile, coordinators, teachers, psychologists, directiv
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="">-- Selecciona destinatario para Copia (Directivo o Coordinador) --</option>
+                    <option value="">-- Selecciona otro Coordinador en Copia (Opcional) --</option>
                     
-                    <optgroup label="Coordinadores">
-                      {filteredCoordinators.map((c) => (
-                        <option key={c.uid} value={c.uid} disabled={formData.coordinatorIds.includes(c.uid)}>
-                          Coordinador: {c.name} ({c.email})
-                        </option>
-                      ))}
-                    </optgroup>
-
-                    {directives.length > 0 && (
-                      <optgroup label="Directivos">
-                        {directives.map((d) => (
-                          <option key={d.uid} value={d.uid} disabled={formData.coordinatorIds.includes(d.uid)}>
-                            Directivo: {d.name} ({d.email})
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
+                    {filteredCoordinators.map((c) => (
+                      <option key={c.uid} value={c.uid} disabled={formData.coordinatorIds.includes(c.uid)}>
+                        Coordinador: {c.name} ({c.email})
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
             </InputGroup>
 
-            <InputGroup label="Copiar a Docente (Opcional)">
-              <select
-                value={formData.notifiedTeacherId}
-                onChange={(e) => setFormData({ ...formData, notifiedTeacherId: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-              >
-                <option value="">
-                  {activeIncidentLevel ? `Selecciona docente opcional (${activeIncidentLevel})...` : 'Selecciona docente opcional...'}
-                </option>
-                {filteredTeachersForCopy.length > 0 ? (
-                  filteredTeachersForCopy.map((t) => {
-                    const tLvl = getUserEducationLevel(t, coordinators);
-                    return (
-                      <option key={t.uid} value={t.uid}>
-                        {t.name}{tLvl && !activeIncidentLevel ? ` (${tLvl})` : ''}
-                      </option>
-                    );
-                  })
-                ) : activeIncidentLevel ? (
-                  <option disabled value="">
-                    No hay docentes registrados en nivel {activeIncidentLevel}
+            <InputGroup label="Copiar a Docente(s) (Opcional)">
+              <div className="space-y-2">
+                {/* List of currently selected teachers in copy */}
+                {formData.notifiedTeacherIds && formData.notifiedTeacherIds.length > 0 && (
+                  <div className="flex flex-wrap gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                    {formData.notifiedTeacherIds.map((tId) => {
+                      const teacher = teachers.find(t => t.uid === tId);
+                      const tLvl = teacher ? getUserEducationLevel(teacher, coordinators) : '';
+                      return (
+                        <span
+                          key={tId}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-semibold text-slate-800 shadow-xs"
+                        >
+                          <UserIcon className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+                          <span>{teacher?.name || tId}</span>
+                          {tLvl && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 uppercase">
+                              {tLvl}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = formData.notifiedTeacherIds.filter(id => id !== tId);
+                              setFormData({
+                                ...formData,
+                                notifiedTeacherIds: updated,
+                                notifiedTeacherId: updated[0] || ''
+                              });
+                            }}
+                            className="text-slate-400 hover:text-red-600 p-0.5 rounded hover:bg-slate-100 transition-colors ml-1 cursor-pointer"
+                            title="Quitar docente de copia"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Dropdown to add another teacher to copy */}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const uid = e.target.value;
+                    if (!uid) return;
+                    if (!formData.notifiedTeacherIds.includes(uid)) {
+                      const updated = [...formData.notifiedTeacherIds, uid];
+                      setFormData({
+                        ...formData,
+                        notifiedTeacherIds: updated,
+                        notifiedTeacherId: updated[0] || ''
+                      });
+                    }
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all cursor-pointer text-slate-700 font-medium text-sm"
+                >
+                  <option value="">
+                    {formData.notifiedTeacherIds && formData.notifiedTeacherIds.length > 0
+                      ? '+ Agregar a otro docente en copia...'
+                      : activeIncidentLevel 
+                        ? `Selecciona docente opcional (${activeIncidentLevel})...` 
+                        : 'Selecciona docente opcional...'}
                   </option>
-                ) : null}
-              </select>
+                  {filteredTeachersForCopy.length > 0 ? (
+                    filteredTeachersForCopy.map((t) => {
+                      const isAlreadySelected = formData.notifiedTeacherIds?.includes(t.uid);
+                      const tLvl = getUserEducationLevel(t, coordinators);
+                      return (
+                        <option key={t.uid} value={t.uid} disabled={isAlreadySelected}>
+                          {isAlreadySelected ? '✓ ' : ''}{t.name}{tLvl && !activeIncidentLevel ? ` (${tLvl})` : ''}{isAlreadySelected ? ' (Ya agregado)' : ''}
+                        </option>
+                      );
+                    })
+                  ) : activeIncidentLevel ? (
+                    <option disabled value="">
+                      No hay docentes registrados en nivel {activeIncidentLevel}
+                    </option>
+                  ) : null}
+                </select>
+                <p className="text-[11px] text-slate-500">
+                  Puedes seleccionar uno o varios docentes para que reciban copia de esta incidencia y puedan darle seguimiento.
+                </p>
+              </div>
             </InputGroup>
           </div>
 
@@ -8711,17 +9622,47 @@ const TaskManager = ({
 
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showCongratulationModal, setShowCongratulationModal] = useState(false);
+  const [showComunicadoModal, setShowComunicadoModal] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [reactivateTargetTask, setReactivateTargetTask] = useState<Task | null>(null);
+  const [editTaskData, setEditTaskData] = useState({
+    title: '',
+    description: '',
+    dueDate: '',
+    directiveFeedback: '',
+  });
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+
+  useBackHandler(showAssignModal, () => setShowAssignModal(false), 'task-assign-modal');
+  useBackHandler(showCongratulationModal, () => setShowCongratulationModal(false), 'task-congratulation-modal');
+  useBackHandler(showComunicadoModal, () => setShowComunicadoModal(false), 'task-comunicado-modal');
+  useBackHandler(Boolean(editingTask), () => setEditingTask(null), 'task-edit-modal');
+  useBackHandler(Boolean(selectedTask), () => setSelectedTask(null), 'task-details-modal');
+  useBackHandler(Boolean(reactivateTargetTask), () => setReactivateTargetTask(null), 'task-reactivate-dialog');
   const [evidenceText, setEvidenceText] = useState('');
   const [evidenceFile, setEvidenceFile] = useState('');
   const [directiveFeedback, setDirectiveFeedback] = useState('');
-  const [taskFilter, setTaskFilter] = useState<'ALL' | 'ASIGNADA' | 'RECIBIDA' | 'REALIZADA' | 'COMPLETADA' | 'INCUMPLIDA'>('ALL');
+  const [taskFilter, setTaskFilter] = useState<'ALL' | 'COMUNICADOS' | 'ASIGNADA' | 'RECIBIDA' | 'REALIZADA' | 'COMPLETADA' | 'INCUMPLIDA'>('ALL');
+
+  const isTaskComunicado = (task: Task) => {
+    return Boolean(
+      task.isComunicado ||
+      task.taskType === 'COMUNICADO' ||
+      task.title?.startsWith('📢') ||
+      task.title?.includes('🚨 [URGENTE]') ||
+      task.title?.includes('⚡ [IMPORTANTE]') ||
+      task.title?.toLowerCase().includes('comunicado')
+    );
+  };
 
   const isTaskOverdue = (task: Task) => {
+    if (isTaskComunicado(task)) return false;
     if (task.status === 'COMPLETADA') return false;
+    // Si una tarea ya está en estatus de realizada y se llega la fecha límite, cuenta como completada
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate) return false;
     if (!task.dueDate) return false;
     if (task.title.includes('🎉') || task.title.toLowerCase().includes('felicitac') || task.title.toLowerCase().includes('reconocimiento')) return false;
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
     return todayStr > task.dueDate;
   };
 
@@ -8743,7 +9684,9 @@ const TaskManager = ({
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
     tasks.forEach(async (task) => {
-      if (task.status !== 'COMPLETADA' && task.dueDate) {
+      // Auto-completion of 'REALIZADA' on deadline is handled globally in App.tsx
+
+      if (task.status !== 'COMPLETADA' && task.status !== 'REALIZADA' && task.dueDate) {
         const isDueOrOverdue = todayStr >= task.dueDate;
         if (isDueOrOverdue && !task.overdueReminderSent) {
           try {
@@ -8761,7 +9704,17 @@ const TaskManager = ({
               ? `La tarea "${task.title}" con fecha límite ${task.dueDate} se encuentra INCUMPLIDA y requiere tu atención inmediata.`
               : `Hoy vence la fecha límite (${task.dueDate}) para la tarea "${task.title}". Por favor sube tu evidencia a la brevedad.`;
 
-            await sendNotification(task.assignedToEmail, subject, message);
+            await sendNotification(
+              task.assignedToEmail,
+              subject,
+              message,
+              undefined,
+              true,
+              {
+                taskId: task.id,
+                eventId: `task_reminder_${task.id}_${todayStr}`
+              }
+            );
 
             if (systemSettings.emailNotificationsEnabled && task.assignedToEmail) {
               try {
@@ -8802,9 +9755,478 @@ const TaskManager = ({
   }, [tasks, profile, systemSettings]);
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
-  const isDirectiveOrAdmin = profile.role === 'DIRECTIVE' || profile.role === 'ADMIN' || profile.role === 'COORDINATOR' || isSuperAdmin;
+  const normRole = normalizeUserRole(profile.role);
+  const isDirective = normRole === 'DIRECTIVE';
+  const isAdmin = normRole === 'ADMIN';
+  const isCoordinator = normRole === 'COORDINATOR';
+  const isDirectiveOrAdmin = isDirective || isAdmin || isCoordinator || isSuperAdmin;
+  const canSendComunicados = Boolean(isCoordinator || isDirective || isAdmin || isSuperAdmin);
   const canDeleteRecords = canCreateTask || canSendCongratulations || isDirectiveOrAdmin || isSuperAdmin;
   const assignableUsers = [...coordinators, ...teachers, ...psychologists];
+
+  // Docentes asignados al coordinador actual
+  const myAssignedTeachers = useMemo(() => {
+    const myUid = (profile.uid || '').trim();
+    const myEmail = (profile.email || '').toLowerCase().trim();
+    const myName = (profile.name || '').toLowerCase().trim();
+
+    return teachers.filter(t => {
+      const cId = (t.assignedCoordinatorId || '').trim();
+      const cEmail = (t.assignedCoordinatorEmail || '').toLowerCase().trim();
+      const cName = (t.assignedCoordinatorName || '').toLowerCase().trim();
+
+      const sId = (t.secondaryCoordinatorId || '').trim();
+      const sEmail = (t.secondaryCoordinatorEmail || '').toLowerCase().trim();
+      const sName = (t.secondaryCoordinatorName || '').toLowerCase().trim();
+
+      const isPrimary = (myUid && cId === myUid) || (myEmail && cEmail === myEmail) || (myName && cName === myName);
+      const isSecondary = (myUid && sId === myUid) || (myEmail && sEmail === myEmail) || (myName && sName === myName);
+
+      return isPrimary || isSecondary;
+    });
+  }, [teachers, profile]);
+
+  const adminAndDirectiveUsers = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    [...admins, ...directives].forEach(u => {
+      if (u.email && !map.has(u.email.toLowerCase())) {
+        map.set(u.email.toLowerCase(), u);
+      }
+    });
+    return Array.from(map.values());
+  }, [admins, directives]);
+
+  const allStaffUsers = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    [...teachers, ...coordinators, ...directives, ...admins, ...psychologists].forEach(u => {
+      if (u.email && !map.has(u.email.toLowerCase())) {
+        map.set(u.email.toLowerCase(), u);
+      }
+    });
+    return Array.from(map.values());
+  }, [teachers, coordinators, directives, admins, psychologists]);
+
+  const defaultComunicadoTarget = isCoordinator ? 'MY_ASSIGNED_TEACHERS' : 'ALL_STAFF';
+  const [comunicadoFormData, setComunicadoFormData] = useState({
+    title: '',
+    content: '',
+    attachmentUrl: '',
+    priority: 'NORMAL' as 'NORMAL' | 'IMPORTANTE' | 'URGENTE',
+    targetType: defaultComunicadoTarget,
+    selectedEmails: [] as string[],
+    requireAcknowledgment: true,
+  });
+
+  const getRecipientsForComunicado = (targetType: string, selectedEmails: string[]): UserProfile[] => {
+    if (targetType === 'SPECIFIC' || targetType === 'SPECIFIC_TEACHERS' || targetType === 'SPECIFIC_COORDINATORS') {
+      const emailSet = new Set(selectedEmails.map(e => e.toLowerCase()));
+      return allStaffUsers.filter(u => u.email && emailSet.has(u.email.toLowerCase()));
+    }
+    if (targetType === 'MY_ASSIGNED_TEACHERS') {
+      return myAssignedTeachers;
+    }
+    if (targetType === 'ALL_TEACHERS') {
+      return teachers;
+    }
+    if (targetType === 'OTHER_COORDINATORS') {
+      return coordinators.filter(c => c.email?.toLowerCase() !== profile.email?.toLowerCase());
+    }
+    if (targetType === 'ALL_COORDINATORS') {
+      return coordinators;
+    }
+    if (targetType === 'ADMINS_DIRECTIVES') {
+      return adminAndDirectiveUsers.filter(u => u.email?.toLowerCase() !== profile.email?.toLowerCase());
+    }
+    if (targetType === 'ALL_STAFF') {
+      return allStaffUsers.filter(u => u.email?.toLowerCase() !== profile.email?.toLowerCase());
+    }
+    return [];
+  };
+
+  const handleStartEditTask = (task: Task) => {
+    setEditingTask(task);
+    setEditTaskData({
+      title: task.title,
+      description: task.description,
+      dueDate: task.dueDate || '',
+      directiveFeedback: task.directiveFeedback || '',
+    });
+  };
+
+  const handleSaveEditTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    if (!editTaskData.title.trim()) {
+      showSystemPopup("Campo requerido", "Por favor ingresa un título para la tarea.", "info");
+      return;
+    }
+
+    try {
+      const isCompleted = editingTask.status === 'COMPLETADA' || (editingTask.status === 'REALIZADA' && isTaskOverdue(editingTask));
+      const newStatus: TaskStatus = isCompleted ? 'ASIGNADA' : editingTask.status;
+
+      const updates: any = {
+        title: editTaskData.title.trim(),
+        description: editTaskData.description.trim(),
+        dueDate: editTaskData.dueDate,
+        status: newStatus,
+        autoCompleted: false,
+        reactivatedAt: Date.now(),
+        reactivatedByEmail: profile.email.toLowerCase(),
+        reactivatedByName: profile.name,
+      };
+
+      if (editTaskData.directiveFeedback.trim()) {
+        updates.directiveFeedback = editTaskData.directiveFeedback.trim();
+      }
+
+      await updateDoc(doc(db, 'tasks', editingTask.id), updates);
+
+      const notifTitle = isCompleted 
+        ? `🔄 Tarea Activada: ${editTaskData.title.trim()}`
+        : `✏️ Tarea Actualizada: ${editTaskData.title.trim()}`;
+
+      const notifMsg = isCompleted
+        ? `${profile.name} ha reactivado la tarea "${editTaskData.title.trim()}". Ahora puedes ingresar y modificar tu evidencia de cumplimiento.`
+        : `${profile.name} ha modificado los datos de la tarea "${editTaskData.title.trim()}".`;
+
+      await sendNotification(
+        editingTask.assignedToEmail,
+        notifTitle,
+        notifMsg,
+        undefined,
+        false,
+        {
+          taskId: editingTask.id,
+          type: 'task_reactivated',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        isCompleted ? 'Reactivó tarea completada' : 'Modificó datos de tarea',
+        `Modificado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${editTaskData.title} | Asignado a: ${editingTask.assignedToName} | Nuevo estatus: ${newStatus}`,
+        { module: 'Tareas / Felicitaciones', recordId: editingTask.id }
+      );
+
+      if (selectedTask?.id === editingTask.id) {
+        setSelectedTask(prev => prev ? { ...prev, ...updates } : null);
+      }
+
+      setEditingTask(null);
+      showSystemPopup(
+        isCompleted ? "Tarea Activada" : "Tarea Actualizada",
+        isCompleted 
+          ? "La tarea ha sido activada y sus datos fueron actualizados. El docente asignado ahora puede volver a editar y subir su evidencia."
+          : "Los datos de la tarea han sido actualizados correctamente.",
+        "success"
+      );
+    } catch (err) {
+      console.error("Error updating task data:", err);
+      showSystemPopup("Error", "Ocurrió un error al actualizar los datos de la tarea.", "error");
+    }
+  };
+
+  const handleOpenReactivateOptions = (task: Task) => {
+    setReactivateTargetTask(task);
+  };
+
+  const handleSoloActivar = async (task: Task) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        status: 'ASIGNADA',
+        autoCompleted: false,
+        reactivatedAt: Date.now(),
+        reactivatedByEmail: profile.email.toLowerCase(),
+        reactivatedByName: profile.name,
+      });
+
+      await sendNotification(
+        task.assignedToEmail,
+        `🔄 Tarea Activada: ${task.title}`,
+        `${profile.name} ha reactivado la tarea "${task.title}". Ahora puedes editarla nuevamente y cargar tu evidencia actualizada.`,
+        undefined,
+        false,
+        {
+          taskId: task.id,
+          type: 'task_reactivated',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        'Reactivó tarea completada (sin modificar datos)',
+        `Activada por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado a: ${task.assignedToName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask({
+          ...selectedTask,
+          status: 'ASIGNADA',
+          autoCompleted: false,
+          reactivatedAt: Date.now()
+        });
+      }
+
+      setReactivateTargetTask(null);
+      showSystemPopup(
+        "Tarea Activada",
+        `La tarea "${task.title}" ha sido activada en estatus ASIGNADA. El docente (${task.assignedToName}) ya puede editar y cargar su evidencia nuevamente.`,
+        "success"
+      );
+    } catch (err) {
+      console.error("Error solo activando tarea:", err);
+      showSystemPopup("Error", "No se pudo activar la tarea.", "error");
+    }
+  };
+
+  const handleActivarYModificar = async (task: Task) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        status: 'ASIGNADA',
+        autoCompleted: false,
+        reactivatedAt: Date.now(),
+        reactivatedByEmail: profile.email.toLowerCase(),
+        reactivatedByName: profile.name,
+      });
+
+      await sendNotification(
+        task.assignedToEmail,
+        `🔄 Tarea Activada: ${task.title}`,
+        `${profile.name} ha reactivado la tarea "${task.title}". Ahora puedes editarla nuevamente y cargar tu evidencia actualizada.`,
+        undefined,
+        false,
+        {
+          taskId: task.id,
+          type: 'task_reactivated',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        'Reactivó tarea completada',
+        `Reactivado por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado a: ${task.assignedToName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask({
+          ...selectedTask,
+          status: 'ASIGNADA',
+          autoCompleted: false,
+          reactivatedAt: Date.now()
+        });
+      }
+
+      setReactivateTargetTask(null);
+
+      handleStartEditTask({
+        ...task,
+        status: 'ASIGNADA',
+        autoCompleted: false
+      });
+    } catch (err) {
+      console.error("Error reactivating and editing task:", err);
+      showSystemPopup("Error", "No se pudo reactivar la tarea.", "error");
+    }
+  };
+
+  const handleCloseTaskAsCompleted = async (task: Task) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        status: 'COMPLETADA',
+        completedAt: Date.now(),
+        closedByEmail: profile.email.toLowerCase(),
+        closedByName: profile.name,
+      });
+
+      await sendNotification(
+        task.assignedToEmail,
+        `✅ Tarea Cerrada como Completada: ${task.title}`,
+        `${profile.name} ha cerrado la tarea "${task.title}" con el estatus de COMPLETADA.`,
+        undefined,
+        false,
+        {
+          taskId: task.id,
+          type: 'task_completed',
+          creatorUid: profile.uid,
+          creatorEmail: profile.email
+        }
+      );
+
+      await addLog(
+        'Cerró tarea con estatus completada',
+        `Cerrada por: ${profile.name} (${profile.role} - ${profile.email}) | Tarea: ${task.title} | Asignado a: ${task.assignedToName}`,
+        { module: 'Tareas / Felicitaciones', recordId: task.id }
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask(prev => prev ? {
+          ...prev,
+          status: 'COMPLETADA',
+          completedAt: Date.now()
+        } : null);
+      }
+
+      if (editingTask?.id === task.id) {
+        setEditingTask(null);
+      }
+
+      if (reactivateTargetTask?.id === task.id) {
+        setReactivateTargetTask(null);
+      }
+
+      showSystemPopup(
+        "Tarea Completada",
+        `La tarea "${task.title}" ha sido cerrada con el estatus de COMPLETADA exitosamente.`,
+        "success"
+      );
+    } catch (err) {
+      console.error("Error closing task as completed:", err);
+      showSystemPopup("Error", "No se pudo cerrar la tarea como completada.", "error");
+    }
+  };
+
+  const handleReactivateTask = async (task: Task) => {
+    handleOpenReactivateOptions(task);
+  };
+
+  const handleSendComunicado = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!comunicadoFormData.title.trim()) {
+      showSystemPopup("Campo requerido", "Por favor ingresa el título o asunto del comunicado.", "info");
+      return;
+    }
+    if (!comunicadoFormData.content.trim()) {
+      showSystemPopup("Campo requerido", "Por favor escribe el contenido o información del comunicado.", "info");
+      return;
+    }
+
+    const recipientsToNotify = getRecipientsForComunicado(comunicadoFormData.targetType, comunicadoFormData.selectedEmails);
+
+    if (recipientsToNotify.length === 0) {
+      showSystemPopup("Sin destinatarios", "No se encontraron destinatarios con la opción seleccionada. Por favor selecciona al menos una persona o grupo.", "info");
+      return;
+    }
+
+    const priorityPrefix = comunicadoFormData.priority === 'URGENTE' 
+      ? '🚨 [URGENTE]' 
+      : comunicadoFormData.priority === 'IMPORTANTE' 
+      ? '⚡ [IMPORTANTE]' 
+      : '📢';
+
+    const fullTitle = `${priorityPrefix} ${comunicadoFormData.title.trim()}`;
+
+    try {
+      for (const rec of recipientsToNotify) {
+        const isSelf = rec.email?.toLowerCase() === profile.email?.toLowerCase() || (rec.uid && rec.uid === profile.uid);
+
+        const comunicadoTaskDoc: Omit<Task, 'id'> = {
+          title: fullTitle,
+          description: comunicadoFormData.content.trim(),
+          dueDate: '',
+          assignedToEmail: rec.email.toLowerCase(),
+          assignedToName: rec.name,
+          assignedToRole: rec.role,
+          createdByEmail: profile.email.toLowerCase(),
+          createdByName: profile.name,
+          createdByRole: profile.role,
+          createdAt: Date.now(),
+          status: 'ASIGNADA',
+          taskType: 'COMUNICADO',
+          isComunicado: true,
+          priority: comunicadoFormData.priority,
+          evidenceFiles: comunicadoFormData.attachmentUrl.trim() ? [comunicadoFormData.attachmentUrl.trim()] : [],
+          requireAcknowledgment: comunicadoFormData.requireAcknowledgment,
+        };
+
+        const newTaskRef = await addDoc(collection(db, 'tasks'), comunicadoTaskDoc);
+
+        if (!isSelf) {
+          await sendNotification(
+            rec.email,
+            `📢 Nuevo Comunicado: ${comunicadoFormData.title.trim()}`,
+            `${profile.name} (${profile.role}) ha publicado un comunicado: "${comunicadoFormData.title.trim()}". Ingresa a Tareas para consultarlo.`,
+            '',
+            false,
+            {
+              type: 'comunicado',
+              taskId: newTaskRef.id,
+              creatorUid: profile.uid,
+              creatorEmail: profile.email,
+              isCreationNotification: true,
+              priority: comunicadoFormData.priority
+            }
+          );
+
+          if (systemSettings.emailNotificationsEnabled && rec.email) {
+            try {
+              await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: rec.email,
+                  subject: `📢 Comunicado Escolar: ${comunicadoFormData.title.trim()}`,
+                  html: `
+                    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #c7d2fe; border-radius: 14px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                      <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 22px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 19px; font-weight: 800;">${fullTitle}</h1>
+                        <p style="color: #c7d2fe; margin: 6px 0 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase;">DASHBOARD DUNOR - COMUNICADO OFICIAL</p>
+                      </div>
+                      <div style="padding: 24px;">
+                        <p style="font-size: 15px; color: #334155; margin-top: 0;">Estimado/a <strong>${rec.name}</strong>,</p>
+                        <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+                          Se ha publicado el siguiente comunicado institucional para su conocimiento y atención:
+                        </p>
+                        <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 18px; border-radius: 8px; margin: 20px 0;">
+                          <h3 style="margin: 0 0 8px 0; color: #1e293b; font-size: 16px; font-weight: 700;">${comunicadoFormData.title.trim()}</h3>
+                          <div style="font-size: 14px; color: #334155; line-height: 1.7; white-space: pre-line;">${comunicadoFormData.content.trim()}</div>
+                          ${comunicadoFormData.attachmentUrl.trim() ? `<p style="margin: 10px 0 0 0; font-size: 13px;"><a href="${comunicadoFormData.attachmentUrl.trim()}" target="_blank" style="color: #4f46e5; font-weight: bold; text-decoration: underline;">Ver Enlace / Archivo Adjunto</a></p>` : ''}
+                        </div>
+                        <p style="font-size: 12px; color: #64748b; font-weight: 600; margin: 16px 0 0 0;">
+                          Emitido por: <strong>${profile.name}</strong> (${profile.role})
+                        </p>
+                        <p style="font-size: 12px; color: #94a3b8; margin: 14px 0 0 0; text-align: center;">
+                          Ingresa a la sección de Tareas en la plataforma DUNOR para consultar y confirmar de enterado.
+                        </p>
+                      </div>
+                    </div>
+                  `
+                })
+              });
+            } catch (emailErr) {
+              console.error("Comunicado email error:", emailErr);
+            }
+          }
+        }
+      }
+
+      await addLog(
+        'Emitió comunicado oficial',
+        `Creado y emitido por: ${profile.name} (${profile.role} - ${profile.email}) | Asunto: ${comunicadoFormData.title} | Destinatarios (${recipientsToNotify.length}): ${recipientsToNotify.map(r => `${r.name} (${r.role})`).join(', ')}`,
+        { module: 'Tareas / Comunicados' }
+      );
+
+      setShowComunicadoModal(false);
+      setComunicadoFormData({
+        title: '',
+        content: '',
+        attachmentUrl: '',
+        priority: 'NORMAL',
+        targetType: defaultComunicadoTarget,
+        selectedEmails: [],
+        requireAcknowledgment: true,
+      });
+      showSystemPopup("Comunicado Emitido", `El comunicado ha sido enviado a ${recipientsToNotify.length} persona(s) y registrado en Tareas correctamente.`, "success");
+    } catch (err) {
+      console.error("Error sending comunicado:", err);
+      showSystemPopup("Error", "Ocurrió un error al emitir el comunicado.", "error");
+    }
+  };
 
   const handleDeleteTask = (taskToDelete: Task, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -9135,95 +10557,298 @@ const TaskManager = ({
     }
   };
 
-  const filteredTasks = tasks.filter(t => {
+  const isCreatorOrAdminOfTask = (task: Task) => {
+    return Boolean(
+      (task.createdByEmail && profile?.email && task.createdByEmail.toLowerCase() === profile.email.toLowerCase()) ||
+      isSuperAdmin ||
+      isAdmin
+    );
+  };
+
+  const isAdministrator = Boolean(isSuperAdmin || isAdmin);
+
+  const visibleTasks = useMemo(() => {
+    if (isAdministrator) return tasks;
+    const myEmailLower = (profile?.email || '').toLowerCase().trim();
+    const myUid = profile?.uid;
+    const myNameLower = (profile?.name || '').toLowerCase().trim();
+    return tasks.filter(t => {
+      const assignedEmail = (t.assignedToEmail || '').toLowerCase().trim();
+      const createdEmail = (t.createdByEmail || '').toLowerCase().trim();
+      const assignedName = (t.assignedToName || '').toLowerCase().trim();
+      const createdName = (t.createdByName || '').toLowerCase().trim();
+
+      const isAssigned = (assignedEmail && assignedEmail === myEmailLower) || 
+                         (myUid && (t.assignedToEmail === myUid || (t as any).assignedToId === myUid)) || 
+                         (myNameLower && assignedName === myNameLower);
+                         
+      const isCreator = (createdEmail && createdEmail === myEmailLower) || 
+                        (myUid && (t.createdByEmail === myUid || (t as any).createdById === myUid)) || 
+                        (myNameLower && createdName === myNameLower);
+
+      return isAssigned || isCreator;
+    });
+  }, [tasks, isAdministrator, profile]);
+
+  const filteredTasks = visibleTasks.map(t => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (t.status === 'REALIZADA' && t.dueDate && todayStr >= t.dueDate && !isTaskComunicado(t)) {
+      return { ...t, status: 'COMPLETADA' as TaskStatus };
+    }
+    return t;
+  }).filter(t => {
     if (taskFilter === 'ALL') return true;
+    if (taskFilter === 'COMUNICADOS') return isTaskComunicado(t);
     if (taskFilter === 'INCUMPLIDA') return isTaskOverdue(t);
     return t.status === taskFilter;
   });
 
+  const statusCounts = useMemo(() => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const mapped = visibleTasks.map(t => {
+      if (t.status === 'REALIZADA' && t.dueDate && todayStr >= t.dueDate && !isTaskComunicado(t)) {
+        return { ...t, status: 'COMPLETADA' as TaskStatus };
+      }
+      return t;
+    });
+
+    const counts: Record<string, number> = {
+      ALL: mapped.length,
+      COMUNICADOS: mapped.filter(t => isTaskComunicado(t)).length,
+      RECIBIDA: mapped.filter(t => t.status === 'RECIBIDA').length,
+      ASIGNADA: mapped.filter(t => t.status === 'ASIGNADA').length,
+      REALIZADA: mapped.filter(t => t.status === 'REALIZADA').length,
+      COMPLETADA: mapped.filter(t => t.status === 'COMPLETADA').length,
+      INCUMPLIDA: mapped.filter(t => isTaskOverdue(t)).length,
+    };
+    return counts;
+  }, [visibleTasks]);
+
   const getStatusBadge = (task: Task) => {
+    if (isTaskComunicado(task)) {
+      if (task.status === 'COMPLETADA') {
+        return (
+          <span className="bg-sky-100 dark:bg-sky-950/80 text-sky-900 dark:text-sky-200 text-xs font-bold px-2.5 py-1 rounded-full border border-sky-300 dark:border-sky-800 flex items-center gap-1 shadow-2xs">
+            <CheckCircle2 className="w-3 h-3 text-sky-600 dark:text-sky-400" />
+            Comunicado (Confirmado)
+          </span>
+        );
+      }
+      return (
+        <span className="bg-sky-100 dark:bg-sky-950/80 text-sky-900 dark:text-sky-200 text-xs font-bold px-2.5 py-1 rounded-full border border-sky-300 dark:border-sky-800 flex items-center gap-1 shadow-2xs">
+          <Megaphone className="w-3 h-3 text-sky-600 dark:text-sky-400" />
+          Comunicado
+        </span>
+      );
+    }
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const isAutoCompleted = task.status === 'REALIZADA' && task.dueDate && todayStr >= task.dueDate;
+    if (isAutoCompleted || task.status === 'COMPLETADA') {
+      return (
+        <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+          <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+          {isAutoCompleted ? 'Completada (Auto)' : 'Completada'}
+        </span>
+      );
+    }
     if (isTaskOverdue(task)) {
       return (
-        <span className="bg-red-100 dark:bg-red-950/80 text-red-800 dark:text-red-200 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 flex items-center gap-1 shadow-sm">
+        <span className="bg-red-100 dark:bg-red-950/80 text-red-900 dark:text-red-200 text-xs font-bold px-2.5 py-1 rounded-full border border-red-300 dark:border-red-800 flex items-center gap-1 shadow-sm">
           <AlertTriangle className="w-3.5 h-3.5 text-red-600 dark:text-red-400 flex-shrink-0" /> Incumplida
         </span>
       );
     }
     switch (task.status) {
       case 'RECIBIDA':
-        return <span className="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800 flex items-center gap-1"><Eye className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Recibida</span>;
+        return <span className="bg-blue-100 dark:bg-blue-950/80 text-blue-900 dark:text-blue-200 text-xs font-bold px-2.5 py-1 rounded-full border border-blue-300 dark:border-blue-800 flex items-center gap-1"><Eye className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Recibida</span>;
       case 'ASIGNADA':
-        return <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-800 flex items-center gap-1"><Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Re-asignada</span>;
+        return <span className="bg-amber-100 dark:bg-amber-950/80 text-amber-950 dark:text-amber-200 text-xs font-bold px-2.5 py-1 rounded-full border border-amber-300 dark:border-amber-800 flex items-center gap-1"><Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Re-asignada</span>;
       case 'REALIZADA':
-        return <span className="bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-200 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-200 dark:border-purple-800 flex items-center gap-1"><FileText className="w-3 h-3 text-purple-600 dark:text-purple-400" /> Realizada</span>;
-      case 'COMPLETADA':
-        return <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> Completada</span>;
+        return <span className="bg-purple-100 dark:bg-purple-950/80 text-purple-900 dark:text-purple-200 text-xs font-bold px-2.5 py-1 rounded-full border border-purple-300 dark:border-purple-800 flex items-center gap-1"><FileText className="w-3 h-3 text-purple-600 dark:text-purple-400" /> Realizada</span>;
       default:
         return null;
     }
   };
 
+  const statusFilterTabs = [
+    {
+      id: 'ALL' as const,
+      label: 'Todas',
+      icon: ClipboardList,
+      activeColor: 'bg-indigo-600 text-white shadow-sm border-indigo-600',
+      inactiveColor: 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-600',
+    },
+    {
+      id: 'COMUNICADOS' as const,
+      label: 'Comunicados',
+      icon: Megaphone,
+      activeColor: 'bg-sky-600 text-white shadow-sm border-sky-600',
+      inactiveColor: 'bg-sky-50 dark:bg-sky-950/40 text-sky-900 dark:text-sky-200 border-sky-200 dark:border-sky-800 hover:bg-sky-100/80 dark:hover:bg-sky-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-sky-100 dark:bg-sky-900 text-sky-900 dark:text-sky-200 border border-sky-200 dark:border-sky-700',
+    },
+    {
+      id: 'RECIBIDA' as const,
+      label: 'Recibida',
+      icon: Eye,
+      activeColor: 'bg-blue-600 text-white shadow-sm border-blue-600',
+      inactiveColor: 'bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800 hover:bg-blue-100/80 dark:hover:bg-blue-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-200 border border-blue-200 dark:border-blue-700',
+    },
+    {
+      id: 'ASIGNADA' as const,
+      label: 'Re-asignada',
+      icon: Clock,
+      activeColor: 'bg-amber-500 text-slate-950 font-black shadow-sm border-amber-500',
+      inactiveColor: 'bg-amber-50 dark:bg-amber-950/40 text-amber-950 dark:text-amber-200 border-amber-300 dark:border-amber-700 hover:bg-amber-100/80 dark:hover:bg-amber-900/60',
+      activeBadge: 'bg-slate-950/20 text-slate-950 font-black',
+      inactiveBadge: 'bg-amber-100 dark:bg-amber-900 text-amber-950 dark:text-amber-100 border border-amber-300 dark:border-amber-700',
+    },
+    {
+      id: 'REALIZADA' as const,
+      label: 'Realizada',
+      icon: FileText,
+      activeColor: 'bg-purple-600 text-white shadow-sm border-purple-600',
+      inactiveColor: 'bg-purple-50 dark:bg-purple-950/40 text-purple-900 dark:text-purple-200 border-purple-200 dark:border-purple-800 hover:bg-purple-100/80 dark:hover:bg-purple-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-purple-100 dark:bg-purple-900 text-purple-900 dark:text-purple-200 border border-purple-200 dark:border-purple-700',
+    },
+    {
+      id: 'COMPLETADA' as const,
+      label: 'Completada',
+      icon: CheckCircle2,
+      activeColor: 'bg-emerald-600 text-white shadow-sm border-emerald-600',
+      inactiveColor: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-emerald-100 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-700',
+    },
+    {
+      id: 'INCUMPLIDA' as const,
+      label: 'Incumplidas',
+      icon: AlertTriangle,
+      activeColor: 'bg-red-600 text-white shadow-sm border-red-600',
+      inactiveColor: 'bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-200 border-red-200 dark:border-red-800 hover:bg-red-100/80 dark:hover:bg-red-900/60',
+      activeBadge: 'bg-white/25 text-white',
+      inactiveBadge: 'bg-red-100 dark:bg-red-900 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-700',
+    },
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Gestión de Tareas</h1>
-          <p className="text-slate-500 dark:text-slate-400">
+      {/* Top Header & Aesthetic Action Controls */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="p-2 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-xl">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Gestión de Tareas</h1>
+            {visibleTasks.length > 0 && (
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                {visibleTasks.length} {visibleTasks.length === 1 ? 'registro' : 'registros'}
+              </span>
+            )}
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 pl-0 sm:pl-9.5">
             {isDirectiveOrAdmin
-              ? 'Asigna, supervisa y revisa tareas y compromisos del personal'
-              : 'Consulta tus tareas asignadas y envía evidencias de cumplimiento'}
+              ? 'Asigna tareas, emite comunicados y supervisa el cumplimiento del personal'
+              : 'Consulta tus tareas asignadas, comunicados y envía evidencias de cumplimiento'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+
+        {/* Unified Aesthetic Action Menu */}
+        <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100/90 dark:bg-slate-800/80 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 shadow-2xs w-full lg:w-auto justify-start sm:justify-end">
+          {canSendComunicados && (
+            <button
+              type="button"
+              onClick={() => setShowComunicadoModal(true)}
+              className="flex items-center gap-2 bg-white dark:bg-slate-900 hover:bg-sky-50 dark:hover:bg-sky-950/60 text-sky-950 dark:text-sky-200 border border-slate-200 dark:border-slate-700 hover:border-sky-300 dark:hover:border-sky-700 px-3.5 py-2 rounded-xl transition-all font-bold text-xs sm:text-sm cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 group"
+              title="Publicar un comunicado o información para el personal o docentes"
+            >
+              <div className="w-6 h-6 rounded-lg bg-sky-100 dark:bg-sky-900/70 text-sky-600 dark:text-sky-300 flex items-center justify-center transition-colors group-hover:bg-sky-600 group-hover:text-white">
+                <Megaphone className="w-3.5 h-3.5" />
+              </div>
+              <span>Comunicados</span>
+            </button>
+          )}
           {canSendCongratulations && (
             <button
+              type="button"
               onClick={() => setShowCongratulationModal(true)}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl shadow-md transition-all font-bold text-sm cursor-pointer"
+              className="flex items-center gap-2 bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 text-emerald-950 dark:text-emerald-200 border border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 px-3.5 py-2 rounded-xl transition-all font-bold text-xs sm:text-sm cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 group"
+              title="Enviar felicitación o reconocimiento al personal"
             >
-              <Award className="w-4 h-4" />
+              <div className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-900/70 text-emerald-600 dark:text-emerald-300 flex items-center justify-center transition-colors group-hover:bg-emerald-600 group-hover:text-white">
+                <Award className="w-3.5 h-3.5" />
+              </div>
               <span>Enviar Felicitación</span>
             </button>
           )}
           {canCreateTask && (
             <button
+              type="button"
               onClick={() => setShowAssignModal(true)}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-md transition-all font-bold text-sm cursor-pointer"
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl shadow-sm hover:shadow-md hover:shadow-indigo-500/20 transition-all font-bold text-xs sm:text-sm cursor-pointer active:scale-95"
             >
-              <Plus className="w-4 h-4" />
+              <div className="w-6 h-6 rounded-lg bg-white/20 text-white flex items-center justify-center">
+                <Plus className="w-4 h-4" />
+              </div>
               <span>Asignar Tarea</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1 border-b border-slate-200 dark:border-slate-800">
-        {(['ALL', 'RECIBIDA', 'ASIGNADA', 'REALIZADA', 'COMPLETADA', 'INCUMPLIDA'] as const).map(st => (
-          <button
-            key={st}
-            onClick={() => setTaskFilter(st)}
-            className={cn(
-              "px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer",
-              taskFilter === st
-                ? st === 'INCUMPLIDA' ? "bg-red-600 text-white shadow-sm" : "bg-indigo-600 text-white shadow-sm"
-                : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
-            )}
-          >
-            {st === 'ALL' ? 'Todas' : st === 'ASIGNADA' ? 'Re-asignada' : st === 'RECIBIDA' ? 'Recibida' : st === 'REALIZADA' ? 'Realizada' : st === 'COMPLETADA' ? 'Completada' : '⚠️ Incumplidas'}
-          </button>
-        ))}
+      {/* Filter Tabs Bar with Status Badges (Globos) */}
+      <div className="bg-slate-100/90 dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto shadow-2xs">
+        {statusFilterTabs.map(tab => {
+          const count = statusCounts[tab.id] || 0;
+          const isSelected = taskFilter === tab.id;
+          const TabIcon = tab.icon;
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setTaskFilter(tab.id)}
+              className={cn(
+                "px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 cursor-pointer border",
+                isSelected ? tab.activeColor : tab.inactiveColor
+              )}
+            >
+              <TabIcon className="w-3.5 h-3.5" />
+              <span>{tab.label}</span>
+              {count > 0 && (
+                <span
+                  className={cn(
+                    "px-2 py-0.5 text-[10px] font-black rounded-full min-w-[18px] text-center leading-tight transition-all shadow-2xs",
+                    isSelected ? tab.activeBadge : tab.inactiveBadge
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Task List */}
       {filteredTasks.length === 0 ? (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 p-12 text-center text-slate-400 dark:text-slate-500">
           <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-20" />
-          <p className="text-sm font-medium">No hay tareas en esta categoría.</p>
+          <p className="text-sm font-medium">No hay registros en esta categoría.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {filteredTasks.map((t) => {
             const overdue = isTaskOverdue(t);
+            const isComunicadoItem = isTaskComunicado(t);
+            const canReactivate = t.status === 'COMPLETADA' && !isComunicadoItem && isCreatorOrAdminOfTask(t);
+
             return (
               <div
                 key={t.id}
@@ -9232,6 +10857,8 @@ const TaskManager = ({
                   "rounded-2xl border p-5 transition-all cursor-pointer space-y-3",
                   overdue
                     ? "bg-red-50/40 dark:bg-red-950/30 border-red-200 dark:border-red-900/60 border-l-4 border-l-red-500 hover:border-red-300 dark:hover:border-red-700 hover:shadow-md"
+                    : isComunicadoItem
+                    ? "bg-sky-50/20 dark:bg-sky-950/20 border-sky-200 dark:border-sky-900/60 border-l-4 border-l-sky-500 hover:border-sky-300 dark:hover:border-sky-700 hover:shadow-md"
                     : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md"
                 )}
               >
@@ -9248,18 +10875,56 @@ const TaskManager = ({
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-500 dark:text-slate-400 font-medium">
                       <span>Para: <strong className="text-slate-800 dark:text-slate-200">{t.assignedToName}</strong> ({t.assignedToRole})</span>
                       <span>De: <strong className="text-slate-800 dark:text-slate-200">{t.createdByName}</strong> ({t.createdByRole})</span>
-                      {t.dueDate ? (
-                        <span className={cn("font-bold px-1.5 py-0.5 rounded", overdue ? "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300" : "text-red-600 dark:text-red-400")}>
+                      {isComunicadoItem ? (
+                        <span className="font-bold px-2 py-0.5 rounded-md bg-sky-100 dark:bg-sky-950 text-sky-900 dark:text-sky-200 border border-sky-200 dark:border-sky-800 text-xs flex items-center gap-1">
+                          📢 Comunicado Oficial
+                        </span>
+                      ) : t.dueDate ? (
+                        <span className={cn("font-bold px-2 py-0.5 rounded-md text-xs border", overdue ? "bg-red-100 dark:bg-red-950 text-red-900 dark:text-red-200 border-red-200 dark:border-red-800" : "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/60")}>
                           Límite: {t.dueDate}
                         </span>
                       ) : (
-                        <span className="font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-1">
+                        <span className="font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800 text-xs flex items-center gap-1">
                           🎉 Reconocimiento
                         </span>
                       )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {canReactivate && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleReactivateTask(t);
+                        }}
+                        title="Activar tarea para permitir que el docente edite nuevamente o modificar datos"
+                        className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Activar</span>
+                      </button>
+                    )}
+                    {t.status !== 'COMPLETADA' && !isComunicadoItem && isCreatorOrAdminOfTask(t) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          showSystemPopup(
+                            "Cerrar Tarea",
+                            `¿Deseas cerrar la tarea "${t.title}" con el estatus de COMPLETADA?`,
+                            "confirm",
+                            () => handleCloseTaskAsCompleted(t),
+                            "Cerrar como Completada"
+                          );
+                        }}
+                        title="Cerrar tarea con estatus de completada"
+                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Cerrar</span>
+                      </button>
+                    )}
                     <div>{getStatusBadge(t)}</div>
                     {(canDeleteRecords || t.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
                       <button
@@ -9554,6 +11219,48 @@ const TaskManager = ({
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Asignada a <strong className="text-slate-800 dark:text-slate-200">{selectedTask.assignedToName}</strong> por {selectedTask.createdByName}</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {isCreatorOrAdminOfTask(selectedTask) && !isTaskComunicado(selectedTask) && (
+                    selectedTask.status === 'COMPLETADA' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleReactivateTask(selectedTask)}
+                        className="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-indigo-200 dark:border-indigo-800 cursor-pointer shadow-2xs"
+                        title="Opciones para activar tarea"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Activar Tarea</span>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditTask(selectedTask)}
+                          className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-slate-200 dark:border-slate-700 cursor-pointer"
+                          title="Modificar datos de la tarea"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Modificar Datos</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            showSystemPopup(
+                              "Cerrar Tarea",
+                              `¿Deseas cerrar la tarea "${selectedTask.title}" con el estatus de COMPLETADA?`,
+                              "confirm",
+                              () => handleCloseTaskAsCompleted(selectedTask),
+                              "Cerrar como Completada"
+                            );
+                          }}
+                          className="px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold border border-emerald-200 dark:border-emerald-800 cursor-pointer shadow-2xs"
+                          title="Cerrar esta tarea y marcarla con estatus COMPLETADA"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>Cerrar como Completada</span>
+                        </button>
+                      </div>
+                    )
+                  )}
                   {(canDeleteRecords || selectedTask.createdByEmail?.toLowerCase() === profile?.email?.toLowerCase()) && (
                     <button
                       type="button"
@@ -9584,7 +11291,9 @@ const TaskManager = ({
                 </div>
 
                 <div className="flex items-center gap-6 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 p-3 rounded-xl border border-slate-100 dark:border-slate-700/80">
-                  {selectedTask.dueDate ? (
+                  {isTaskComunicado(selectedTask) ? (
+                    <span>Tipo: <strong className="text-sky-700 dark:text-sky-400 font-bold">📢 Comunicado Oficial (Sin fecha de plazo)</strong></span>
+                  ) : selectedTask.dueDate ? (
                     <span>Fecha Límite: <strong className="text-red-600 dark:text-red-400 font-bold">{selectedTask.dueDate}</strong></span>
                   ) : (
                     <span>Tipo: <strong className="text-emerald-700 dark:text-emerald-400 font-bold">🎉 Reconocimiento / Felicitación (Sin Límite)</strong></span>
@@ -9624,14 +11333,66 @@ const TaskManager = ({
                   </div>
                 )}
 
-                {/* Form to Submit Evidence for Assigned User */}
-                {selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() &&
-                  (selectedTask.status === 'RECIBIDA' || selectedTask.status === 'ASIGNADA') && (
+                {/* Comunicado acknowledgment / confirmation */}
+                {isTaskComunicado(selectedTask) && (
+                  <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
+                    {selectedTask.status === 'COMPLETADA' ? (
+                      <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-xl p-3.5 text-xs text-emerald-800 dark:text-emerald-200 font-bold flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                        <span>Comunicado marcado como leído y confirmado de enterado.</span>
+                      </div>
+                    ) : selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() ? (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await updateDoc(doc(db, 'tasks', selectedTask.id), {
+                              status: 'COMPLETADA',
+                              readAt: Date.now(),
+                            });
+                            await sendNotification(
+                              selectedTask.createdByEmail,
+                              `✅ Comunicado Leído: ${selectedTask.title}`,
+                              `${profile.name} ha confirmado de enterado/leído el comunicado "${selectedTask.title}".`
+                            );
+                            setSelectedTask({
+                              ...selectedTask,
+                              status: 'COMPLETADA',
+                              readAt: Date.now()
+                            });
+                            showSystemPopup("Confirmado", "Has confirmado de enterado el comunicado.", "success");
+                          } catch (err) {
+                            console.error("Error confirming comunicado:", err);
+                          }
+                        }}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        <span>Confirmar de Enterado / Marcar como Leído</span>
+                      </button>
+                    ) : (
+                      <div className="bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 rounded-xl p-3 text-xs text-sky-800 dark:text-sky-300 font-medium flex items-center gap-2">
+                        <Megaphone className="w-4 h-4 text-sky-600 dark:text-sky-400 flex-shrink-0" />
+                        <span>Estado: <strong>{selectedTask.readAt ? 'Visto por el destinatario (Pendiente de confirmación)' : 'Pendiente de lectura y confirmación por el destinatario'}</strong></span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Form to Submit / Edit Evidence for Assigned User */}
+                {!isTaskComunicado(selectedTask) && selectedTask.assignedToEmail.toLowerCase() === profile.email.toLowerCase() &&
+                  (selectedTask.status === 'RECIBIDA' || selectedTask.status === 'ASIGNADA' || selectedTask.status === 'REALIZADA') && (
                   <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
                     <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
                       <Send className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      Subir / Compartir Evidencia de Cumplimiento
+                      {selectedTask.evidenceText ? "Modificar / Actualizar Evidencia de Cumplimiento" : "Subir / Compartir Evidencia de Cumplimiento"}
                     </h4>
+                    {selectedTask.reactivatedAt && (
+                      <div className="bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 rounded-xl p-3 text-xs text-indigo-800 dark:text-indigo-300 font-semibold flex items-center gap-2">
+                        <RefreshCw className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                        <span>Esta tarea fue activada por {selectedTask.reactivatedByName || 'el creador'}. Ahora puedes editar nuevamente tus datos y reenviar tu evidencia.</span>
+                      </div>
+                    )}
                     <InputGroup label="Detalles de la Evidencia" required>
                       <textarea
                         rows={3}
@@ -9654,13 +11415,13 @@ const TaskManager = ({
                       onClick={() => handleSubmitEvidence(selectedTask)}
                       className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-sm cursor-pointer"
                     >
-                      Enviar Evidencia al Directivo (Estatus: Realizada)
+                      {selectedTask.evidenceText ? "Actualizar y Reenviar Evidencia (Estatus: Realizada)" : "Enviar Evidencia al Directivo (Estatus: Realizada)"}
                     </button>
                   </div>
                 )}
 
                 {/* Directive Review Options for REALIZADA status */}
-                {isDirectiveOrAdmin && selectedTask.status === 'REALIZADA' && (
+                {isDirectiveOrAdmin && selectedTask.status === 'REALIZADA' && !isTaskComunicado(selectedTask) && (
                   <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
                     <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">Revisión de Evidencia por Dirección</h4>
                     <InputGroup label="Observaciones (si requiere corrección)">
@@ -9688,6 +11449,396 @@ const TaskManager = ({
                     </div>
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Emitir Comunicado */}
+      <AnimatePresence>
+        {showComunicadoModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowComunicadoModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-3 bg-sky-100 dark:bg-sky-950/80 text-sky-600 dark:text-sky-400 rounded-xl">
+                  <Megaphone className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Emitir Comunicado</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {isCoordinator
+                      ? 'Informa a tus docentes asignados, otros docentes, coordinadores o directivos'
+                      : 'Emisión de comunicados institucionales globales, por rol o específicos'}
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleSendComunicado} className="space-y-4">
+                <InputGroup label="Prioridad del Comunicado" required>
+                  <select
+                    value={comunicadoFormData.priority}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, priority: e.target.value as any })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="NORMAL">Normal (Informativo)</option>
+                    <option value="IMPORTANTE">⚡ Importante</option>
+                    <option value="URGENTE">🚨 Urgente</option>
+                  </select>
+                </InputGroup>
+
+                <InputGroup label="Destinatarios del Comunicado" required>
+                  <select
+                    value={comunicadoFormData.targetType}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, targetType: e.target.value, selectedEmails: [] })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-sky-500 mb-2"
+                  >
+                    {isCoordinator ? (
+                      <>
+                        <option value="MY_ASSIGNED_TEACHERS">👥 Mis Docentes Asignados ({myAssignedTeachers.length})</option>
+                        <option value="ALL_TEACHERS">👨‍🏫 Todos los Docentes ({teachers.length})</option>
+                        <option value="OTHER_COORDINATORS">🤝 Otros Coordinadores ({coordinators.filter(c => c.email?.toLowerCase() !== profile.email?.toLowerCase()).length})</option>
+                        <option value="ADMINS_DIRECTIVES">🏛️ Administradores y Directivos ({adminAndDirectiveUsers.length})</option>
+                        <option value="SPECIFIC">🎯 Seleccionar Personas Específicas...</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="ALL_STAFF">🌐 Global: Todo el Personal ({allStaffUsers.length})</option>
+                        <option value="ALL_TEACHERS">👨‍🏫 Por Rol: Todos los Docentes ({teachers.length})</option>
+                        <option value="ALL_COORDINATORS">🤝 Por Rol: Todos los Coordinadores ({coordinators.length})</option>
+                        <option value="ADMINS_DIRECTIVES">🏛️ Por Rol: Directivos y Administradores ({adminAndDirectiveUsers.length})</option>
+                        <option value="SPECIFIC_TEACHERS">🎯 Específico: Seleccionar Docente(s)...</option>
+                        <option value="SPECIFIC_COORDINATORS">🎯 Específico: Seleccionar Coordinador(es)...</option>
+                        <option value="SPECIFIC">🎯 Específico: Seleccionar Personas...</option>
+                      </>
+                    )}
+                  </select>
+                </InputGroup>
+
+                {/* Feedback info when target is MY_ASSIGNED_TEACHERS */}
+                {comunicadoFormData.targetType === 'MY_ASSIGNED_TEACHERS' && (
+                  <div className="bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 rounded-xl p-3 text-xs text-sky-900 dark:text-sky-200">
+                    {myAssignedTeachers.length > 0 ? (
+                      <div>
+                        <strong>Docentes asignados ({myAssignedTeachers.length}):</strong>{' '}
+                        <span>{myAssignedTeachers.map(t => t.name).join(', ')}</span>
+                      </div>
+                    ) : (
+                      <span className="text-amber-700 dark:text-amber-300 font-semibold">
+                        Aún no tienes docentes asignados directamente en el sistema. Puedes elegir "Todos los Docentes" o "Seleccionar Personas Específicas".
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Specific Picker when SPECIFIC, SPECIFIC_TEACHERS, or SPECIFIC_COORDINATORS */}
+                {(comunicadoFormData.targetType === 'SPECIFIC' || 
+                  comunicadoFormData.targetType === 'SPECIFIC_TEACHERS' || 
+                  comunicadoFormData.targetType === 'SPECIFIC_COORDINATORS') && (
+                  <InputGroup label="Seleccionar Personas" required={comunicadoFormData.selectedEmails.length === 0}>
+                    <div className="space-y-3">
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const email = e.target.value;
+                          if (email && !comunicadoFormData.selectedEmails.includes(email)) {
+                            setComunicadoFormData({ ...comunicadoFormData, selectedEmails: [...comunicadoFormData.selectedEmails, email] });
+                          }
+                        }}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="">-- Elige persona para agregar --</option>
+                        {(comunicadoFormData.targetType === 'SPECIFIC' || comunicadoFormData.targetType === 'SPECIFIC_TEACHERS') && (
+                          <optgroup label="Docentes">
+                            {teachers.map(t => (
+                              <option key={t.email} value={t.email} disabled={comunicadoFormData.selectedEmails.includes(t.email)}>
+                                {t.name} ({t.role})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {(comunicadoFormData.targetType === 'SPECIFIC' || comunicadoFormData.targetType === 'SPECIFIC_COORDINATORS') && (
+                          <optgroup label="Coordinadores">
+                            {coordinators.map(c => (
+                              <option key={c.email} value={c.email} disabled={comunicadoFormData.selectedEmails.includes(c.email)}>
+                                {c.name} ({c.role})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {comunicadoFormData.targetType === 'SPECIFIC' && (
+                          <>
+                            <optgroup label="Directivos y Administradores">
+                              {adminAndDirectiveUsers.map(u => (
+                                <option key={u.email} value={u.email} disabled={comunicadoFormData.selectedEmails.includes(u.email)}>
+                                  {u.name} ({u.role})
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Psicólogos">
+                              {psychologists.map(p => (
+                                <option key={p.email} value={p.email} disabled={comunicadoFormData.selectedEmails.includes(p.email)}>
+                                  {p.name} ({p.role})
+                                </option>
+                              ))}
+                            </optgroup>
+                          </>
+                        )}
+                      </select>
+
+                      <div className="flex flex-wrap gap-2">
+                        {comunicadoFormData.selectedEmails.map((email) => {
+                          const person = allStaffUsers.find(u => u.email?.toLowerCase() === email.toLowerCase());
+                          return (
+                            <div 
+                              key={email}
+                              onClick={() => {
+                                setComunicadoFormData({
+                                  ...comunicadoFormData,
+                                  selectedEmails: comunicadoFormData.selectedEmails.filter(e => e.toLowerCase() !== email.toLowerCase())
+                                });
+                              }}
+                              className="flex items-center gap-2 bg-sky-50 dark:bg-sky-950/80 text-sky-800 dark:text-sky-200 px-3 py-1.5 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 dark:hover:bg-red-950 hover:text-red-700 dark:hover:text-red-300 border border-sky-100 dark:border-sky-800 transition-all group"
+                            >
+                              <UserIcon className="w-3.5 h-3.5" />
+                              <span>{person?.name || email}</span>
+                              <X className="w-3.5 h-3.5 ml-1 text-sky-400 group-hover:text-red-500" />
+                            </div>
+                          );
+                        })}
+                        {comunicadoFormData.selectedEmails.length === 0 && (
+                          <span className="text-xs text-slate-400 dark:text-slate-500 italic px-1">Sin destinatarios específicos seleccionados.</span>
+                        )}
+                      </div>
+                    </div>
+                  </InputGroup>
+                )}
+
+                <InputGroup label="Título o Asunto del Comunicado" required>
+                  <input
+                    required
+                    type="text"
+                    value={comunicadoFormData.title}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, title: e.target.value })}
+                    placeholder="Ej. Aviso sobre entrega de planeaciones / Reunión académica"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-sky-500"
+                  />
+                </InputGroup>
+
+                <InputGroup label="Contenido / Información del Comunicado" required>
+                  <textarea
+                    required
+                    rows={5}
+                    value={comunicadoFormData.content}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, content: e.target.value })}
+                    placeholder="Escribe las indicaciones, información o detalles que deseas comunicar..."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500"
+                  />
+                </InputGroup>
+
+                <InputGroup label="Enlace / Documento Adjunto (Opcional)">
+                  <input
+                    type="url"
+                    value={comunicadoFormData.attachmentUrl}
+                    onChange={(e) => setComunicadoFormData({ ...comunicadoFormData, attachmentUrl: e.target.value })}
+                    placeholder="https://drive.google.com/... o enlace de archivo"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500"
+                  />
+                </InputGroup>
+
+                <div className="flex gap-3 pt-4">
+                  <button type="button" onClick={() => setShowComunicadoModal(false)} className="flex-1 py-2.5 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">Cancelar</button>
+                  <button type="submit" className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-sky-100 dark:shadow-none cursor-pointer flex items-center justify-center gap-2">
+                    <Send className="w-4 h-4" />
+                    <span>Emitir Comunicado</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Editar y Reactivar Tarea */}
+      <AnimatePresence>
+        {editingTask && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingTask(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-3 bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <Edit3 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Modificar Datos de Tarea</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Asignada a <strong className="text-slate-800 dark:text-slate-200">{editingTask.assignedToName}</strong>
+                  </p>
+                </div>
+              </div>
+
+              {editingTask.status === 'COMPLETADA' && (
+                <div className="mb-4 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 rounded-xl p-3.5 text-xs text-indigo-900 dark:text-indigo-200 flex items-start gap-2.5">
+                  <RefreshCw className="w-4 h-4 text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <strong>Activación de tarea completada:</strong> Al guardar, la tarea volverá a estatus <strong>ASIGNADA</strong> y el docente asignado ({editingTask.assignedToName}) podrá volver a editar y cargar evidencia nuevamente.
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveEditTask} className="space-y-4">
+                <InputGroup label="Título de la Tarea" required>
+                  <input
+                    required
+                    type="text"
+                    value={editTaskData.title}
+                    onChange={(e) => setEditTaskData({ ...editTaskData, title: e.target.value })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                  />
+                </InputGroup>
+
+                <InputGroup label="Descripción / Instrucciones" required>
+                  <textarea
+                    required
+                    rows={4}
+                    value={editTaskData.description}
+                    onChange={(e) => setEditTaskData({ ...editTaskData, description: e.target.value })}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </InputGroup>
+
+                {!isTaskComunicado(editingTask) && (
+                  <InputGroup label="Fecha Límite">
+                    <input
+                      type="date"
+                      value={editTaskData.dueDate}
+                      onChange={(e) => setEditTaskData({ ...editTaskData, dueDate: e.target.value })}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </InputGroup>
+                )}
+
+                <InputGroup label="Observaciones o Indicaciones para el Docente (Opcional)">
+                  <textarea
+                    rows={2}
+                    value={editTaskData.directiveFeedback}
+                    onChange={(e) => setEditTaskData({ ...editTaskData, directiveFeedback: e.target.value })}
+                    placeholder="Instrucciones o motivo de modificación..."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                </InputGroup>
+
+                <div className="flex flex-wrap gap-2.5 pt-4">
+                  <button type="button" onClick={() => setEditingTask(null)} className="flex-1 min-w-[80px] py-2.5 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer text-xs">Cancelar</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      showSystemPopup(
+                        "Cerrar Tarea",
+                        `¿Deseas cerrar esta tarea directamente con el estatus de COMPLETADA?`,
+                        "confirm",
+                        () => handleCloseTaskAsCompleted(editingTask),
+                        "Cerrar como Completada"
+                      );
+                    }}
+                    className="flex-1 min-w-[150px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-1.5 text-xs"
+                    title="Cerrar con el estatus de completada"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Cerrar como Completada</span>
+                  </button>
+                  <button type="submit" className="flex-1 min-w-[150px] bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-indigo-100 dark:shadow-none cursor-pointer flex items-center justify-center gap-1.5 text-xs">
+                    <Save className="w-4 h-4" />
+                    <span>{editingTask.status === 'COMPLETADA' ? 'Guardar y Activar Tarea' : 'Guardar Cambios'}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Opciones para Activar Tarea */}
+      <AnimatePresence>
+        {reactivateTargetTask && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setReactivateTargetTask(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-6 space-y-4">
+              <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div className="p-3 bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <RefreshCw className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Opciones de Activación</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Tarea: <strong className="text-slate-800 dark:text-slate-200">{reactivateTargetTask.title}</strong></p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                Selecciona la opción deseada para esta tarea asignada a <strong>{reactivateTargetTask.assignedToName}</strong>:
+              </p>
+
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleSoloActivar(reactivateTargetTask)}
+                  className="w-full text-left p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-indigo-600 dark:text-indigo-400 group-hover:rotate-180 transition-transform duration-500" />
+                      Solo Activar (Sin modificar datos)
+                    </span>
+                    <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">Estatus: ASIGNADA</span>
+                  </div>
+                  <p className="text-[11px] text-indigo-800/80 dark:text-indigo-300/80 mt-1">
+                    Reactiva la tarea de inmediato para que el docente pueda editar y subir su evidencia nuevamente, manteniendo los datos actuales.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleActivarYModificar(reactivateTargetTask)}
+                  className="w-full text-left p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                      <Edit3 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                      Activar y Modificar Datos
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                    Reactiva la tarea y abre el formulario para cambiar instrucciones, descripción, observaciones o fecha límite.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCloseTaskAsCompleted(reactivateTargetTask)}
+                  className="w-full text-left p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/40 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/50 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950 dark:text-emerald-200 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      Cerrar con Estatus de Completada
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">Estatus: COMPLETADA</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 mt-1">
+                    Cierra la tarea y la mantiene formalmente como concluida/completada.
+                  </p>
+                </button>
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setReactivateTargetTask(null)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
               </div>
             </motion.div>
           </div>
@@ -9752,11 +11903,15 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
     message: '',
     onConfirm: () => {},
   });
+
+  useBackHandler(showAddModal, () => setShowAddModal(false), 'user-add-modal');
+  useBackHandler(confirmModal.isOpen, () => setConfirmModal(prev => ({ ...prev, isOpen: false })), 'user-confirm-modal');
+  useBackHandler(Boolean(userToEditPermissions), () => setUserToEditPermissions(null), 'user-permissions-editor');
   const [newUserRole, setNewUserRole] = useState<UserRole>(
     profile.role === 'COORDINATOR' ? 'TEACHER' : profile.role === 'DIRECTIVE' ? 'COORDINATOR' : 'TEACHER'
   );
   const [educationLevel, setEducationLevel] = useState<'Preescolar' | 'Primaria' | 'Secundaria'>('Primaria');
-  const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria'>('TODOS');
+  const [teacherLevelFilter, setTeacherLevelFilter] = useState<'TODOS' | 'Preescolar' | 'Primaria' | 'Secundaria' | 'SinNivel'>('TODOS');
   const [teacherSearchQuery, setTeacherSearchQuery] = useState('');
   const [activeUserTab, setActiveUserTab] = useState<UserRole | 'DIRECTIVE' | 'BLOQUEADO'>(
     profile.role === 'ADMIN' || isSuperAdminEmail(profile.email) 
@@ -9862,7 +12017,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
         return;
       }
 
-      const creatorName = profile?.name || (isSuperAdmin ? 'Superadministrador' : 'Administrador');
+      const creatorName = profile?.name || (isSuperAdmin ? 'Soporte' : 'Administrador');
       const creatorEmail = profile?.email || 'incidencias.dunor@gmail.com';
       const creatorRole = profile?.role || (isSuperAdmin ? 'ADMIN' : 'COORDINATOR');
 
@@ -10013,26 +12168,105 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   const canFilterTeachersByLevel = isSuperAdmin || isAdmin || isDirective;
 
+  const matchesTeacherSearch = (t: UserProfile) => {
+    if (!teacherSearchQuery.trim()) return true;
+    const q = teacherSearchQuery.toLowerCase().trim();
+    const name = (t.name || '').toLowerCase();
+    const email = (t.email || '').toLowerCase();
+    const phone = (t.phone || '').toLowerCase();
+    const coordName = (t.assignedCoordinatorName || '').toLowerCase();
+    const secCoordName = (t.secondaryCoordinatorName || '').toLowerCase();
+    const lvl = (getUserEducationLevel(t, coordinators) || '').toLowerCase();
+    return name.includes(q) || email.includes(q) || phone.includes(q) || coordName.includes(q) || secCoordName.includes(q) || lvl.includes(q);
+  };
+
   const filteredTeachers = displayedTeachers.filter(t => {
     if (canFilterTeachersByLevel && teacherLevelFilter !== 'TODOS') {
       const lvl = getUserEducationLevel(t, coordinators);
-      if (normalizeEducationLevel(lvl) !== normalizeEducationLevel(teacherLevelFilter)) {
+      if (teacherLevelFilter === 'SinNivel') {
+        if (normalizeEducationLevel(lvl)) return false;
+      } else if (normalizeEducationLevel(lvl) !== normalizeEducationLevel(teacherLevelFilter)) {
         return false;
       }
     }
-    if (teacherSearchQuery.trim()) {
-      const q = teacherSearchQuery.toLowerCase().trim();
-      const name = (t.name || '').toLowerCase();
-      const email = (t.email || '').toLowerCase();
-      const phone = (t.phone || '').toLowerCase();
-      const coordName = (t.assignedCoordinatorName || '').toLowerCase();
-      const secCoordName = (t.secondaryCoordinatorName || '').toLowerCase();
-      const lvl = getUserEducationLevel(t, coordinators).toLowerCase();
-      const matches = name.includes(q) || email.includes(q) || phone.includes(q) || coordName.includes(q) || secCoordName.includes(q) || lvl.includes(q);
-      if (!matches) return false;
-    }
-    return true;
+    return matchesTeacherSearch(t);
   });
+
+  const preescolarTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && normalizeEducationLevel(getUserEducationLevel(t, coordinators)) === 'Preescolar' && matchesTeacherSearch(t)
+  );
+  const primariaTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && normalizeEducationLevel(getUserEducationLevel(t, coordinators)) === 'Primaria' && matchesTeacherSearch(t)
+  );
+  const secundariaTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && normalizeEducationLevel(getUserEducationLevel(t, coordinators)) === 'Secundaria' && matchesTeacherSearch(t)
+  );
+  const sinNivelTeachers = displayedTeachers.filter(
+    t => !isSuperAdminEmail(t.email) && !normalizeEducationLevel(getUserEducationLevel(t, coordinators)) && matchesTeacherSearch(t)
+  );
+
+  const allTeacherLevelGroups = [
+    {
+      id: 'Preescolar',
+      levelKey: 'Preescolar' as const,
+      title: 'Docentes de Preescolar',
+      description: 'Educación Preescolar / Kínder',
+      badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800',
+      icon: Sparkles,
+      teachers: preescolarTeachers,
+      emptyText: teacherSearchQuery 
+        ? `No hay docentes de preescolar que coincidan con "${teacherSearchQuery}".` 
+        : 'No hay docentes registrados en Preescolar.'
+    },
+    {
+      id: 'Primaria',
+      levelKey: 'Primaria' as const,
+      title: 'Docentes de Primaria',
+      description: 'Educación Primaria (1° a 6° grado)',
+      badgeColor: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 border-sky-200 dark:border-sky-800',
+      icon: GraduationCap,
+      teachers: primariaTeachers,
+      emptyText: teacherSearchQuery 
+        ? `No hay docentes de primaria que coincidan con "${teacherSearchQuery}".` 
+        : 'No hay docentes registrados en Primaria.'
+    },
+    {
+      id: 'Secundaria',
+      levelKey: 'Secundaria' as const,
+      title: 'Docentes de Secundaria',
+      description: 'Educación Secundaria (1° a 3° grado)',
+      badgeColor: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 border-purple-200 dark:border-purple-800',
+      icon: School,
+      teachers: secundariaTeachers,
+      emptyText: teacherSearchQuery 
+        ? `No hay docentes de secundaria que coincidan con "${teacherSearchQuery}".` 
+        : 'No hay docentes registrados en Secundaria.'
+    },
+    ...(displayedTeachers.some(t => !isSuperAdminEmail(t.email) && !normalizeEducationLevel(getUserEducationLevel(t, coordinators))) ? [{
+      id: 'SinNivel',
+      levelKey: 'SinNivel' as const,
+      title: 'Docentes sin Nivel Asignado',
+      description: 'Selecciona el nivel educativo (Preescolar, Primaria o Secundaria) para clasificar a cada docente',
+      badgeColor: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800',
+      headerBg: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800',
+      iconColor: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800',
+      icon: AlertCircle,
+      teachers: sinNivelTeachers,
+      emptyText: teacherSearchQuery
+        ? `No hay docentes sin nivel que coincidan con "${teacherSearchQuery}".`
+        : 'No hay docentes sin nivel educativo asignado.'
+    }] : [])
+  ];
+
+  const teacherLevelGroupsToRender = teacherLevelFilter === 'TODOS'
+    ? (teacherSearchQuery ? allTeacherLevelGroups.filter(g => g.teachers.length > 0) : allTeacherLevelGroups)
+    : allTeacherLevelGroups.filter(g => g.levelKey === teacherLevelFilter);
 
   const deleteUser = async (userToDelete: UserProfile) => {
     // Rule 1: Coordinator cannot delete themselves or other coordinators
@@ -10159,7 +12393,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
             assignedCoordinatorName: coord.name,
             updatedAt: Date.now()
           };
-          if (coordLvl) {
+          if (coordLvl && !userToUpdate.educationLevel) {
             updateData.educationLevel = coordLvl;
           }
         }
@@ -10309,7 +12543,7 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
 
   const updateUserPermissions = async (userToUpdate: UserProfile, newPermissions: Partial<RolePermissions> | null) => {
     if (!isSuperAdmin) {
-      showSystemPopup("Acción no permitida", "Únicamente el Superadministrador puede modificar los permisos de usuario.", "warning");
+      showSystemPopup("Acción no permitida", "Únicamente el usuario de Soporte puede modificar los permisos de usuario.", "warning");
       return;
     }
     try {
@@ -10523,16 +12757,23 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                   <span>Nivel de Educación:</span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {(['TODOS', 'Preescolar', 'Primaria', 'Secundaria'] as const).map(lvl => {
-                    const count = lvl === 'TODOS'
-                      ? displayedTeachers.filter(u => !isSuperAdminEmail(u.email)).length
-                      : displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === normalizeEducationLevel(lvl)).length;
-                    const isActive = teacherLevelFilter === lvl;
+                  {([
+                    { id: 'TODOS', label: 'Todos los Niveles (Agrupados)', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email)).length },
+                    { id: 'Preescolar', label: 'Preescolar', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === 'Preescolar').length },
+                    { id: 'Primaria', label: 'Primaria', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === 'Primaria').length },
+                    { id: 'Secundaria', label: 'Secundaria', count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && normalizeEducationLevel(getUserEducationLevel(u, coordinators)) === 'Secundaria').length },
+                    ...(displayedTeachers.some(u => !isSuperAdminEmail(u.email) && !normalizeEducationLevel(getUserEducationLevel(u, coordinators))) ? [{
+                      id: 'SinNivel' as const,
+                      label: 'Sin Nivel',
+                      count: displayedTeachers.filter(u => !isSuperAdminEmail(u.email) && !normalizeEducationLevel(getUserEducationLevel(u, coordinators))).length
+                    }] : [])
+                  ] as const).map(item => {
+                    const isActive = teacherLevelFilter === item.id;
                     return (
                       <button
-                        key={lvl}
+                        key={item.id}
                         type="button"
-                        onClick={() => setTeacherLevelFilter(lvl)}
+                        onClick={() => setTeacherLevelFilter(item.id)}
                         className={cn(
                           "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
                           isActive
@@ -10540,12 +12781,12 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
                             : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                         )}
                       >
-                        <span>{lvl === 'TODOS' ? 'Todos los Niveles' : lvl}</span>
+                        <span>{item.label}</span>
                         <span className={cn(
                           "text-[10px] px-1.5 py-0.5 rounded-full font-bold",
                           isActive ? "bg-white/20 text-white" : "bg-white text-slate-600 border border-slate-200"
                         )}>
-                          {count}
+                          {item.count}
                         </span>
                       </button>
                     );
@@ -10586,25 +12827,88 @@ const UserManagement = ({ profile, coordinators, teachers, psychologists, direct
               )}
             </div>
 
-            <UserList 
-              title={isCoordinator ? "Docentes Asignados a mi Coordinación" : "Personal Docente"} 
-              users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
-              emptyMessage={teacherSearchQuery ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` : undefined}
-              onDelete={deleteUser} 
-              onUpdateRole={updateUserRole}
-              showPasswords={isSuperAdmin}
-              canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
-              coordinators={coordinators}
-              psychologists={psychologists}
-              onAssignCoordinator={updateAssignedCoordinator}
-              onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
-              onAssignPsychologist={updateAssignedPsychologist}
-              onUpdateEducationLevel={updateUserEducationLevel}
-              profile={profile}
-              canManageUsers={canManageUsers}
-              canAssignPsychologist={canAssignPsychologist}
-              onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
-            />
+            {/* Vista para Superadmin, Admin y Directivo: Docentes agrupados por nivel educativo */}
+            {canFilterTeachersByLevel ? (
+              <div className="space-y-8">
+                {teacherLevelGroupsToRender.length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
+                    <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                    <p className="text-sm font-medium">
+                      {teacherSearchQuery 
+                        ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` 
+                        : "No hay docentes registrados en el sistema."}
+                    </p>
+                  </div>
+                ) : (
+                  teacherLevelGroupsToRender.map((group) => (
+                    <div key={group.id} className="space-y-3">
+                      <div className={cn(
+                        "p-4 rounded-2xl border flex items-center justify-between gap-3 shadow-xs",
+                        group.headerBg
+                      )}>
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shadow-xs border", group.iconColor)}>
+                            <group.icon className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                                {group.title}
+                              </h3>
+                              <span className={cn("text-xs font-black px-2.5 py-0.5 rounded-full border shadow-2xs", group.badgeColor)}>
+                                {group.teachers.length}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">{group.description}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <UserList 
+                        title=""
+                        hideTitleHeader={true}
+                        users={group.teachers} 
+                        emptyMessage={group.emptyText}
+                        onDelete={deleteUser} 
+                        onUpdateRole={updateUserRole}
+                        showPasswords={isSuperAdmin}
+                        canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
+                        coordinators={coordinators}
+                        psychologists={psychologists}
+                        onAssignCoordinator={updateAssignedCoordinator}
+                        onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
+                        onAssignPsychologist={updateAssignedPsychologist}
+                        onUpdateEducationLevel={updateUserEducationLevel}
+                        profile={profile}
+                        canManageUsers={canManageUsers}
+                        canAssignPsychologist={canAssignPsychologist}
+                        onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : (
+              <UserList 
+                title="Docentes Asignados a mi Coordinación" 
+                users={filteredTeachers.filter(u => !isSuperAdminEmail(u.email))} 
+                emptyMessage={teacherSearchQuery ? `No se encontraron docentes que coincidan con "${teacherSearchQuery}".` : undefined}
+                onDelete={deleteUser} 
+                onUpdateRole={updateUserRole}
+                showPasswords={isSuperAdmin}
+                canChangeRole={canManageUsers && (isSuperAdmin || isAdmin)}
+                coordinators={coordinators}
+                psychologists={psychologists}
+                onAssignCoordinator={updateAssignedCoordinator}
+                onAssignSecondaryCoordinator={updateAssignedSecondaryCoordinator}
+                onAssignPsychologist={updateAssignedPsychologist}
+                onUpdateEducationLevel={updateUserEducationLevel}
+                profile={profile}
+                canManageUsers={canManageUsers}
+                canAssignPsychologist={canAssignPsychologist}
+                onEditPermissions={isSuperAdmin ? setUserToEditPermissions : undefined}
+              />
+            )}
           </div>
         )}
 
@@ -10821,6 +13125,7 @@ const UserList = ({
   canAssignPsychologist = true,
   onEditPermissions,
   emptyMessage,
+  hideTitleHeader = false,
 }: { 
   title: string, 
   users: UserProfile[], 
@@ -10840,6 +13145,7 @@ const UserList = ({
   canAssignPsychologist?: boolean,
   onEditPermissions?: (user: UserProfile) => void,
   emptyMessage?: string,
+  hideTitleHeader?: boolean,
 }) => {
   const isCoordinator = profile.role === 'COORDINATOR';
   const isSuperAdmin = isSuperAdminEmail(profile?.email);
@@ -10848,18 +13154,23 @@ const UserList = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          {title}
-          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
-            {users.length}
-          </span>
-        </h3>
-      </div>
+      {!hideTitleHeader && title && (
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            {title}
+            <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-100">
+              {users.length}
+            </span>
+          </h3>
+        </div>
+      )}
 
       {users.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
-          <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
+        <div className={cn(
+          "bg-white rounded-2xl border border-dashed border-slate-200 text-center text-slate-400",
+          hideTitleHeader ? "p-8" : "p-12"
+        )}>
+          <UserIcon className={cn("mx-auto opacity-20", hideTitleHeader ? "w-8 h-8 mb-2" : "w-12 h-12 mb-3")} />
           <p className="text-sm font-medium">{emptyMessage || "No hay usuarios registrados en esta categoría."}</p>
         </div>
       ) : (
@@ -10912,7 +13223,7 @@ const UserList = ({
                     {!u.createdByName && !u.createdBy && u.role === 'ADMIN' && (
                       <div className="flex items-center gap-1.5 text-slate-400 text-[11px] mt-1">
                         <UserCheck className="w-3 h-3 text-slate-400" />
-                        <span>Registrado por: <strong className="text-slate-600 font-semibold">Sistema / Superadministrador Inicial</strong></span>
+                        <span>Registrado por: <strong className="text-slate-600 font-semibold">Sistema / Soporte Inicial</strong></span>
                       </div>
                     )}
 
